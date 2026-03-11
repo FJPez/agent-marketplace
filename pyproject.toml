@@ -20,20 +20,20 @@ dependencies = [
 [dependency-groups]
 dev = [
     "httpx>=0.28.1,<1.0.0",
-    "mypy>=1.17.0,<2.0.0",
     "pytest>=8.4.1,<9.0.0",
     "pytest-asyncio>=1.2.0,<2.0.0",
     "ruff>=0.12.12,<1.0.0",
+    "ty>=0.0.21,<0.1.0",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
-[tool.mypy]
-python_version = "3.12"
-files = ["app"]
-strict = true
-warn_unused_configs = true
+[tool.ty.src]
+include = ["app", "tests"]
+
+[tool.ty.terminal]
+error-on-warning = true
 
 [tool.pytest.ini_options]
 addopts = "-ra"

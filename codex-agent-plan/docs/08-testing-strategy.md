@@ -91,7 +91,7 @@ Every branch should pass:
 
 - Ruff check
 - format check
-- mypy
+- ty
 - relevant tests
 
 Integration branch should also run a core e2e smoke suite.

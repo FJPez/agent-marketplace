@@ -11,10 +11,10 @@ from app.main import create_app
 def test_create_app_starts_with_lifespan_state() -> None:
     app = create_app()
 
-    with TestClient(app) as client:
-        assert client.app.title == "Agent Marketplace Backend"
-        assert client.app.debug is False
-        state = get_app_state(client.app)
+    with TestClient(app):
+        assert app.title == "Agent Marketplace Backend"
+        assert app.debug is False
+        state = get_app_state(app)
 
         assert state.settings.env is AppEnv.DEV
         assert state.settings.title == "Agent Marketplace Backend"

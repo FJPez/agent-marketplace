@@ -26,7 +26,7 @@ Create the repository bootstrap for a FastAPI backend using uv and Python 3.12. 
 - health route
 - pytest baseline
 - Ruff config
-- mypy config
+- ty config
 - basic CI for lint/type/test
 - initial folder structure from the bootstrap contract
 
@@ -46,7 +46,7 @@ Create the repository bootstrap for a FastAPI backend using uv and Python 3.12. 
 - Keep route handlers thin.
 - Add a health route that can be used in smoke tests.
 - Set up Ruff with the required rule families.
-- Set up mypy for `app`.
+- Set up ty for `app` and `tests`.
 - Set up pytest and basic test discovery.
 - Set up CI to run lint, type checks, and tests.
 
@@ -62,7 +62,7 @@ Preferred commit split:
 
 1. uv and project metadata
 2. FastAPI app skeleton and folder structure
-3. Ruff and mypy config
+3. Ruff and ty config
 4. pytest and health route tests
 5. CI
 
@@ -75,7 +75,7 @@ Keep commits small and reviewable.
 - health route works
 - tests run
 - Ruff runs cleanly
-- mypy runs on `app`
+- ty runs on `app` and `tests`
 - CI config is present
 
 ## Report back with

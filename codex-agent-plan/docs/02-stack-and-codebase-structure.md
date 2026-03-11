@@ -12,7 +12,7 @@
 - httpx
 - uv
 - Ruff
-- mypy
+- ty
 
 ## Why this stack
 
