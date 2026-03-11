@@ -4,6 +4,7 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect
+from tests.integration.db.support import require_test_database_url
 
 from app.core.config import Settings
 from app.db.session import create_engine
@@ -15,12 +16,16 @@ DOMAIN_TABLES = {"accounts", "provider_profiles", "consumer_profiles"}
 def get_alembic_config() -> Config:
     config = Config(PROJECT_ROOT / "alembic.ini")
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", Settings().database_url)
+    config.set_main_option(
+        "sqlalchemy.url",
+        require_test_database_url(Settings().database_url),
+    )
     return config
 
 
 async def get_table_names() -> set[str]:
-    engine = create_engine(Settings())
+    settings = Settings(database_url=require_test_database_url(Settings().database_url))
+    engine = create_engine(settings)
     try:
         async with engine.connect() as connection:
             return await connection.run_sync(

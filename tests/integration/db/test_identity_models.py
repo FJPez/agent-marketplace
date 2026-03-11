@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 from alembic import command
+from tests.integration.db.support import require_test_database_url
 from tests.integration.db.test_migrations import get_alembic_config
 
 from app.core.config import Settings
@@ -14,7 +15,8 @@ async def test_identity_models_persist_through_async_session() -> None:
     config = get_alembic_config()
     await asyncio.to_thread(command.upgrade, config, "head")
 
-    engine = create_engine(Settings())
+    settings = Settings(database_url=require_test_database_url(Settings().database_url))
+    engine = create_engine(settings)
     session_factory = create_session_factory(engine)
 
     try:
