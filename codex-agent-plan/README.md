@@ -32,7 +32,7 @@ Then read the docs most relevant to the assigned branch.
   - uv usage
   - Python version
   - folder structure
-  - Ruff and mypy expectations
+  - Ruff and ty expectations
   - CI and test command expectations
 
 ### Product and architecture

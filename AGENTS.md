@@ -38,7 +38,7 @@ For any task, read in this order:
 - pytest
 - httpx
 - Ruff
-- mypy
+- ty
 
 ## Repository structure rules
 
@@ -187,7 +187,7 @@ Expected selective ignores:
 
 Any broader ignore set should be justified in the branch.
 
-Use mypy on application code.
+Use ty on application code and tests.
 Run `uv run ruff format .` regularly while working and again before each commit to avoid format-only CI failures.
 Run `uv run ruff check .` after formatting so lint verification is based on the formatted tree.
 

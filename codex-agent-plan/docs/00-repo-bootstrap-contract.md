@@ -15,7 +15,7 @@ This document defines the repository-level conventions that coding agents must f
 - pytest
 - httpx
 - Ruff
-- mypy
+- ty
 
 ## Environment and dependency management
 
@@ -40,7 +40,7 @@ uv sync
 uv run pytest
 uv run ruff check .
 uv run ruff format .
-uv run mypy app
+uv run ty check
 uv run alembic upgrade head
 uv run fastapi dev app/main.py
 ```
@@ -222,9 +222,9 @@ Suggested ignore list to start with:
 
 Broader ignores should be justified in the relevant branch.
 
-## mypy expectations
+## ty expectations
 
-Run mypy against `app`.
+Run ty against `app` and `tests`.
 
 Prefer:
 
@@ -256,7 +256,7 @@ Minimum CI jobs:
 
 1. Ruff check
 2. Ruff format check
-3. mypy
+3. ty
 4. pytest
 
 CI should:
@@ -279,7 +279,7 @@ The first bootstrap branch should include:
 - Alembic setup
 - pytest setup
 - Ruff config
-- mypy config
+- ty config
 - one health endpoint
 - CI for lint/type/test
 
@@ -292,7 +292,7 @@ Preferred split:
 1. project metadata and uv setup
 2. app skeleton and config
 3. database and Alembic setup
-4. tooling config for Ruff and mypy
+4. tooling config for Ruff and ty
 5. tests and health route
 6. CI
 

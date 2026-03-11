@@ -74,7 +74,7 @@ Not included in the MVP:
 - httpx
 - uv
 - Ruff
-- mypy
+- ty
 
 ## Repository structure
 
@@ -147,7 +147,7 @@ uv run pytest
 ```bash
 uv run ruff check .
 uv run ruff format .
-uv run mypy app
+uv run ty check
 ```
 
 ### Run migrations

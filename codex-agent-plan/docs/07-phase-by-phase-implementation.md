@@ -18,7 +18,7 @@ Deliver:
 - Alembic
 - pytest
 - Ruff
-- mypy
+- ty
 - CI
 
 ## Phase 1, parallel

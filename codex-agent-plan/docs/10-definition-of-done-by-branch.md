@@ -12,7 +12,7 @@
 - health route
 - pytest setup
 - Ruff config
-- mypy config
+- ty config
 - CI for lint/type/test
 
 ### Required tests
