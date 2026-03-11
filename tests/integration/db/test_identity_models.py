@@ -19,8 +19,8 @@ async def test_identity_models_persist_through_async_session(
         account_id = account.id
         session.add_all(
             [
-                ProviderProfile(account_id=account_id),
-                ConsumerProfile(account_id=account_id),
+                ProviderProfile(account_id=account_id, display_name="Provider"),
+                ConsumerProfile(account_id=account_id, display_name="Consumer"),
             ],
         )
 
@@ -32,3 +32,5 @@ async def test_identity_models_persist_through_async_session(
     assert persisted_account is not None
     assert provider_profile is not None
     assert consumer_profile is not None
+    assert provider_profile.display_name == "Provider"
+    assert consumer_profile.display_name == "Consumer"

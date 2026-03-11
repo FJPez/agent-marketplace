@@ -3,13 +3,17 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.schemas.common import Id, RequestHash, Timestamp
+from app.schemas.common import DisplayName, Id, RequestHash, Timestamp
 
 
 class CommonModel(BaseModel):
     id: Id
     created_at: Timestamp
     request_hash: RequestHash
+
+
+class DisplayNameModel(BaseModel):
+    display_name: DisplayName
 
 
 def test_common_aliases_accept_valid_values() -> None:
@@ -24,6 +28,12 @@ def test_common_aliases_accept_valid_values() -> None:
     assert model.id == 1
     assert model.created_at == datetime(2026, 3, 11, 12, 30, tzinfo=UTC)
     assert model.request_hash == "a" * 64
+
+
+def test_display_name_alias_strips_surrounding_whitespace() -> None:
+    model = DisplayNameModel.model_validate({"display_name": "  Alpha Agent  "})
+
+    assert model.display_name == "Alpha Agent"
 
 
 @pytest.mark.parametrize(
@@ -95,3 +105,18 @@ def test_common_aliases_reject_invalid_values(
         CommonModel.model_validate(payload)
 
     assert exc_info.value.errors()[0]["loc"] == (field_name,)
+
+
+@pytest.mark.parametrize(
+    "display_name",
+    [
+        "",
+        "   ",
+        "x" * 256,
+    ],
+)
+def test_display_name_alias_rejects_invalid_values(display_name: str) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        DisplayNameModel.model_validate({"display_name": display_name})
+
+    assert exc_info.value.errors()[0]["loc"] == ("display_name",)
