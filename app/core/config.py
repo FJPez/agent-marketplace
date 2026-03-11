@@ -1,6 +1,13 @@
+from enum import StrEnum
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class AppEnv(StrEnum):
+    DEV = "dev"
+    TEST = "test"
+    PROD = "prod"
 
 
 class Settings(BaseSettings):
@@ -11,6 +18,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    env: AppEnv = AppEnv.DEV
     title: str = "Agent Marketplace Backend"
     debug: bool = False
 
