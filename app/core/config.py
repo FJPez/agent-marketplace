@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     env: AppEnv = AppEnv.DEV
     title: str = "Agent Marketplace Backend"
     debug: bool = False
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
 
 
 @lru_cache

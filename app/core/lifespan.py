@@ -3,16 +3,19 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.types import Lifespan
 
 from app.core.config import Settings
+from app.db.session import create_engine, create_session_factory
 
 
 @dataclass(slots=True)
 class AppState:
     settings: Settings
     stack: AsyncExitStack
-    db_engine: object | None = None
+    db_engine: AsyncEngine | None = None
+    db_session_factory: async_sessionmaker[AsyncSession] | None = None
     http_client: object | None = None
     telemetry: object | None = None
 
@@ -26,8 +29,9 @@ def get_app_state(app: FastAPI) -> AppState:
 
 
 async def _init_app_state(state: AppState) -> None:
-    # Future shared resources should be entered via this stack.
-    _ = state
+    state.db_engine = create_engine(state.settings)
+    state.db_session_factory = create_session_factory(state.db_engine)
+    state.stack.push_async_callback(state.db_engine.dispose)
 
 
 def create_lifespan(settings: Settings) -> Lifespan[FastAPI]:
