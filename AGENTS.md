@@ -210,6 +210,7 @@ Commits should be:
 - coherent
 - reviewable
 - ordered logically
+- made incrementally as the work progresses, not all at the end
 
 Prefer 3 to 6 commits for a medium branch rather than one large dump.
 
