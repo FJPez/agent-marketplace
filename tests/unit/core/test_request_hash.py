@@ -21,9 +21,7 @@ def test_hash_request_body_changes_when_array_order_changes() -> None:
 
 def test_hash_request_body_handles_unicode_text() -> None:
     payload = {"message": "naïve café"}
-    expected_hash = (
-        "cf55682842bb3e48563a4138e3a193026e7e91ebaf9e0bbffeb20a9c6df5e5cb"
-    )
+    expected_hash = "cf55682842bb3e48563a4138e3a193026e7e91ebaf9e0bbffeb20a9c6df5e5cb"
 
     assert hash_request_body(payload) == expected_hash
 
