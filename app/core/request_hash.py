@@ -3,10 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 
-type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
-
-def hash_request_body(body: JsonValue) -> str:
+def hash_request_body(body: object) -> str:
+    """Hash a parsed JSON-compatible request body using canonical JSON encoding."""
     try:
         payload = json.dumps(
             body,

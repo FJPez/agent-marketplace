@@ -26,6 +26,15 @@ def test_hash_request_body_handles_unicode_text() -> None:
     assert hash_request_body(payload) == expected_hash
 
 
+def test_hash_request_body_accepts_typed_mapping_payload() -> None:
+    payload: dict[str, object] = {"message": "hello"}
+
+    assert (
+        hash_request_body(payload)
+        == "9b2d43affbf49a367028df2e1414f84c0e099ac98c3d54a8a80157fd7771af25"
+    )
+
+
 @pytest.mark.parametrize(
     "payload",
     [

@@ -53,6 +53,38 @@ def test_common_aliases_accept_valid_values() -> None:
             },
             "request_hash",
         ),
+        (
+            {
+                "id": True,
+                "created_at": "2026-03-11T12:30:00Z",
+                "request_hash": "a" * 64,
+            },
+            "id",
+        ),
+        (
+            {
+                "id": False,
+                "created_at": "2026-03-11T12:30:00Z",
+                "request_hash": "a" * 64,
+            },
+            "id",
+        ),
+        (
+            {
+                "id": "1",
+                "created_at": "2026-03-11T12:30:00Z",
+                "request_hash": "a" * 64,
+            },
+            "id",
+        ),
+        (
+            {
+                "id": 1.0,
+                "created_at": "2026-03-11T12:30:00Z",
+                "request_hash": "a" * 64,
+            },
+            "id",
+        ),
     ],
 )
 def test_common_aliases_reject_invalid_values(
