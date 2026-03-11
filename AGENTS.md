@@ -22,7 +22,7 @@ For any task, read in this order:
 3. `codex-agent-plan/README.md`
 4. `codex-agent-plan/docs/00-repo-bootstrap-contract.md`
 5. `codex-agent-plan/docs/10-definition-of-done-by-branch.md`
-6. The branch-specific prompt in `PROMPTS/` if one exists
+6. The branch-specific prompt in `codex-agent-plan/PROMPTS/` if one exists
 7. Any branch-specific docs referenced by the prompt
 
 ## Stack baseline
@@ -58,12 +58,12 @@ app/
   integrations/
     x402/
     provider_gateway/
-  tests/
-    unit/
-    integration/
-    api/
-      routes/
-    e2e/
+tests/
+  unit/
+  integration/
+  api/
+    routes/
+  e2e/
 alembic/
 ```
 

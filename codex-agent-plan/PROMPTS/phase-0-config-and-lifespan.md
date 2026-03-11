@@ -4,9 +4,11 @@
 
 - `AGENTS.md`
 - `README.md`
+- `codex-agent-plan/README.md`
 - `codex-agent-plan/docs/00-repo-bootstrap-contract.md`
 - `codex-agent-plan/docs/02-stack-and-codebase-structure.md`
 - `codex-agent-plan/docs/10-definition-of-done-by-branch.md`
+- `codex-agent-plan/PROMPTS/phase-0-config-and-lifespan.md`
 
 ## Branch
 

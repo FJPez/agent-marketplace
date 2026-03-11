@@ -16,9 +16,10 @@ The documents are targeted at coding agents and are designed to support branch-s
 Read these in order:
 
 1. `AGENTS.md`
-2. `docs/00-repo-bootstrap-contract.md`
-3. `docs/01-overview-and-goals.md`
-4. `docs/10-definition-of-done-by-branch.md`
+2. `README.md`
+3. `docs/00-repo-bootstrap-contract.md`
+4. `docs/01-overview-and-goals.md`
+5. `docs/10-definition-of-done-by-branch.md`
 
 Then read the docs most relevant to the assigned branch.
 

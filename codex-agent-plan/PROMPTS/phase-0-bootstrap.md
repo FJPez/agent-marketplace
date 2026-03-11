@@ -2,10 +2,12 @@
 
 ## Read first
 
-- `AGENTS.md`
-- `README.md`
-- `docs/00-repo-bootstrap-contract.md`
-- `docs/10-definition-of-done-by-branch.md`
+- AGENTS.md
+- README.md
+- codex-agent-plan/README.md
+- codex-agent-plan/docs/00-repo-bootstrap-contract.md
+- codex-agent-plan/docs/10-definition-of-done-by-branch.md
+- codex-agent-plan/PROMPTS/phase-0-bootstrap.md
 
 ## Branch
 
@@ -40,7 +42,7 @@ Create the repository bootstrap for a FastAPI backend using uv and Python 3.12. 
 
 ## Required implementation details
 
-- Use the folder structure from `docs/00-repo-bootstrap-contract.md`.
+- Use the folder structure from `codex-agent-plan/docs/00-repo-bootstrap-contract.md`.
 - Keep route handlers thin.
 - Add a health route that can be used in smoke tests.
 - Set up Ruff with the required rule families.
