@@ -7,6 +7,20 @@
 - `PATCH /v1/providers/me`
 - `POST /v1/consumers`
 
+### Identity route behaviour
+
+- `POST /v1/providers`
+  - without `X-Account-Id`: bootstrap a new account and create a provider profile
+  - with valid `X-Account-Id`: create a provider profile for the authenticated account
+- `GET /v1/providers/me`
+  - requires `X-Account-Id`
+- `PATCH /v1/providers/me`
+  - requires `X-Account-Id`
+- `POST /v1/consumers`
+  - without `X-Account-Id`: bootstrap a new account and create a consumer profile
+  - with valid `X-Account-Id`: create a consumer profile for the authenticated account
+- identity profile responses include `account_id`, `display_name`, and `created_at`
+
 ## Provider management routes
 
 - `POST /v1/provider/services`
@@ -80,3 +94,6 @@
 - Public APIs must not leak upstream base URLs or upstream credentials.
 - Response models must be explicit.
 - Error responses should follow a consistent project-wide format.
+- protected identity routes use `X-Account-Id` as the current actor header
+- request correlation uses `X-Request-ID`
+- responses echo `X-Request-ID` on success and unhandled `500` responses
