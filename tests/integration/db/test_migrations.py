@@ -5,7 +5,7 @@ from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 DOMAIN_TABLES = {"accounts", "provider_profiles", "consumer_profiles"}
- 
+
 
 async def get_table_names(db_engine: AsyncEngine) -> set[str]:
     async with db_engine.connect() as connection:

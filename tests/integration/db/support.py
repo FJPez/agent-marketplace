@@ -27,8 +27,12 @@ def get_test_database_url(database_url: str | None = None) -> str:
 
 def get_admin_database_url(database_url: str | None = None) -> str:
     resolved_database_url = database_url or Settings().database_url
-    return make_url(resolved_database_url).set(database="postgres").render_as_string(
-        hide_password=False,
+    return (
+        make_url(resolved_database_url)
+        .set(database="postgres")
+        .render_as_string(
+            hide_password=False,
+        )
     )
 
 
