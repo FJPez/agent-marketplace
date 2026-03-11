@@ -16,8 +16,8 @@ def _unauthorized(detail: str) -> HTTPException:
 
 
 async def get_current_actor(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
     x_account_id: Annotated[str | None, Header(alias=X_ACCOUNT_ID_HEADER)] = None,
-    session: Annotated[AsyncSession, Depends(get_db_session)] = None,
 ) -> ActorContext:
     if x_account_id is None:
         detail = f"{X_ACCOUNT_ID_HEADER} header is required"
