@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps.auth import CurrentActor
+from app.api.deps.auth import CurrentActor, OptionalCurrentActor
 from app.db.session import get_db_session
 from app.schemas.provider import (
     ProviderProfileCreateRequest,
@@ -42,7 +42,7 @@ def _raise_validation_error(detail: str) -> HTTPException:
 )
 async def create_provider_profile(
     request: ProviderProfileCreateRequest,
-    actor: CurrentActor,
+    actor: OptionalCurrentActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProviderProfileResponse:
     service = ProviderIdentityService(session)

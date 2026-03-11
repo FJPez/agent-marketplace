@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps.auth import CurrentActor
+from app.api.deps.auth import OptionalCurrentActor
 from app.db.session import get_db_session
 from app.schemas.consumer import ConsumerProfileCreateRequest, ConsumerProfileResponse
 from app.services.consumer_identity_service import ConsumerIdentityService
@@ -23,7 +23,7 @@ def _raise_conflict(detail: str) -> HTTPException:
 )
 async def create_consumer_profile(
     request: ConsumerProfileCreateRequest,
-    actor: CurrentActor,
+    actor: OptionalCurrentActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ConsumerProfileResponse:
     service = ConsumerIdentityService(session)

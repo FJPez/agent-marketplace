@@ -4,7 +4,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-from app.db.models import ProviderProfile
+from app.db.models import Account, ProviderProfile
+from app.repositories.account_repo import AccountRepository
 from app.repositories.provider_profile_repo import ProviderProfileRepository
 from app.schemas.provider import (
     ProviderProfileCreateRequest,
@@ -30,31 +31,42 @@ class ProviderProfileStore(Protocol):
     ) -> ProviderProfile: ...
 
 
+class AccountStore(Protocol):
+    async def create(self) -> Account: ...
+
+
 class ProviderIdentityService:
     def __init__(
         self,
         session: AsyncSession,
         *,
+        account_repo: AccountStore | None = None,
         provider_profile_repo: ProviderProfileStore | None = None,
     ) -> None:
         self._session = session
+        self._account_repo = account_repo or AccountRepository(session)
         self._provider_profile_repo = provider_profile_repo or ProviderProfileRepository(
             session,
         )
 
     async def create_profile(
         self,
-        actor: ActorContext,
+        actor: ActorContext | None,
         request: ProviderProfileCreateRequest,
     ) -> ProviderProfile:
-        existing_profile = await self._provider_profile_repo.get_by_account_id(
-            actor.account_id,
-        )
-        if existing_profile is not None:
-            raise IdentityConflictError("provider profile already exists")
+        resolved_actor = actor
+        if resolved_actor is None:
+            account = await self._account_repo.create()
+            resolved_actor = ActorContext(account_id=account.id)
+        else:
+            existing_profile = await self._provider_profile_repo.get_by_account_id(
+                resolved_actor.account_id,
+            )
+            if existing_profile is not None:
+                raise IdentityConflictError("provider profile already exists")
 
         profile = self._provider_profile_repo.add(
-            account_id=actor.account_id,
+            account_id=resolved_actor.account_id,
             display_name=request.display_name,
         )
 

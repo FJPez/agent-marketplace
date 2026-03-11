@@ -4,7 +4,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-from app.db.models import ConsumerProfile
+from app.db.models import Account, ConsumerProfile
+from app.repositories.account_repo import AccountRepository
 from app.repositories.consumer_profile_repo import ConsumerProfileRepository
 from app.schemas.consumer import ConsumerProfileCreateRequest
 from app.services.identity_errors import IdentityConflictError
@@ -16,31 +17,42 @@ class ConsumerProfileStore(Protocol):
     def add(self, *, account_id: int, display_name: str) -> ConsumerProfile: ...
 
 
+class AccountStore(Protocol):
+    async def create(self) -> Account: ...
+
+
 class ConsumerIdentityService:
     def __init__(
         self,
         session: AsyncSession,
         *,
+        account_repo: AccountStore | None = None,
         consumer_profile_repo: ConsumerProfileStore | None = None,
     ) -> None:
         self._session = session
+        self._account_repo = account_repo or AccountRepository(session)
         self._consumer_profile_repo = consumer_profile_repo or ConsumerProfileRepository(
             session,
         )
 
     async def create_profile(
         self,
-        actor: ActorContext,
+        actor: ActorContext | None,
         request: ConsumerProfileCreateRequest,
     ) -> ConsumerProfile:
-        existing_profile = await self._consumer_profile_repo.get_by_account_id(
-            actor.account_id,
-        )
-        if existing_profile is not None:
-            raise IdentityConflictError("consumer profile already exists")
+        resolved_actor = actor
+        if resolved_actor is None:
+            account = await self._account_repo.create()
+            resolved_actor = ActorContext(account_id=account.id)
+        else:
+            existing_profile = await self._consumer_profile_repo.get_by_account_id(
+                resolved_actor.account_id,
+            )
+            if existing_profile is not None:
+                raise IdentityConflictError("consumer profile already exists")
 
         profile = self._consumer_profile_repo.add(
-            account_id=actor.account_id,
+            account_id=resolved_actor.account_id,
             display_name=request.display_name,
         )
 

@@ -19,6 +19,15 @@ async def _create_account(
         return account.id
 
 
+async def _account_exists(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+) -> bool:
+    async with db_session_factory() as session:
+        return await session.get(Account, account_id) is not None
+
+
 async def _seed_provider_profile(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -115,6 +124,59 @@ async def test_create_provider_profile_returns_created_profile(
     assert response.json()["account_id"] == account_id
     assert response.json()["display_name"] == "Alpha Provider"
     assert response.json()["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_create_provider_profile_bootstraps_account_without_header(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    response = await async_client.post(
+        "/v1/providers",
+        json={"display_name": "Bootstrap Provider"},
+    )
+
+    assert response.status_code == 201
+    account_id = response.json()["account_id"]
+    assert account_id > 0
+    assert response.json()["display_name"] == "Bootstrap Provider"
+    assert response.json()["created_at"]
+    assert await _account_exists(
+        db_session_factory,
+        account_id=account_id,
+    )
+
+
+@pytest.mark.parametrize("header_value", ["", "abc", "0", "-9"])
+@pytest.mark.asyncio
+async def test_create_provider_profile_rejects_invalid_account_id_header(
+    async_client: AsyncClient,
+    header_value: str,
+) -> None:
+    response = await async_client.post(
+        "/v1/providers",
+        headers={"X-Account-Id": header_value},
+        json={"display_name": "Alpha Provider"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "X-Account-Id must be a positive integer",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_provider_profile_rejects_unknown_account(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.post(
+        "/v1/providers",
+        headers={"X-Account-Id": "999"},
+        json={"display_name": "Alpha Provider"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "authenticated account does not exist"}
 
 
 @pytest.mark.asyncio
@@ -278,6 +340,59 @@ async def test_create_consumer_profile_returns_created_profile(
     assert response.json()["account_id"] == account_id
     assert response.json()["display_name"] == "Consumer One"
     assert response.json()["created_at"]
+
+
+@pytest.mark.asyncio
+async def test_create_consumer_profile_bootstraps_account_without_header(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    response = await async_client.post(
+        "/v1/consumers",
+        json={"display_name": "Bootstrap Consumer"},
+    )
+
+    assert response.status_code == 201
+    account_id = response.json()["account_id"]
+    assert account_id > 0
+    assert response.json()["display_name"] == "Bootstrap Consumer"
+    assert response.json()["created_at"]
+    assert await _account_exists(
+        db_session_factory,
+        account_id=account_id,
+    )
+
+
+@pytest.mark.parametrize("header_value", ["", "abc", "0", "-9"])
+@pytest.mark.asyncio
+async def test_create_consumer_profile_rejects_invalid_account_id_header(
+    async_client: AsyncClient,
+    header_value: str,
+) -> None:
+    response = await async_client.post(
+        "/v1/consumers",
+        headers={"X-Account-Id": header_value},
+        json={"display_name": "Consumer One"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "detail": "X-Account-Id must be a positive integer",
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_consumer_profile_rejects_unknown_account(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.post(
+        "/v1/consumers",
+        headers={"X-Account-Id": "999"},
+        json={"display_name": "Consumer One"},
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "authenticated account does not exist"}
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from app.core.actor import ActorContext
-from app.db.models import ProviderProfile
+from app.db.models import Account, ProviderProfile
 from app.schemas.provider import (
     ProviderProfileCreateRequest,
     ProviderProfileUpdateRequest,
@@ -36,6 +36,19 @@ class FakeSession:
         self.refreshed.append(instance)
 
 
+class FakeAccountRepository:
+    def __init__(self, *, next_account_id: int = 101) -> None:
+        self.created = 0
+        self.next_account_id = next_account_id
+
+    async def create(self) -> Account:
+        self.created += 1
+        return Account(
+            id=self.next_account_id,
+            created_at=datetime(2026, 3, 11, tzinfo=UTC),
+        )
+
+
 class FakeProviderProfileRepository:
     def __init__(self, profile: ProviderProfile | None = None) -> None:
         self._profile = profile
@@ -63,6 +76,50 @@ class FakeProviderProfileRepository:
 
 
 @pytest.mark.asyncio
+async def test_create_profile_bootstraps_account_when_actor_missing() -> None:
+    session = FakeSession()
+    account_repo = FakeAccountRepository(next_account_id=202)
+    service = ProviderIdentityService(
+        cast("AsyncSession", session),
+        account_repo=account_repo,
+        provider_profile_repo=FakeProviderProfileRepository(),
+    )
+
+    profile = await service.create_profile(
+        None,
+        ProviderProfileCreateRequest(display_name="Bootstrap Provider"),
+    )
+
+    assert profile.account_id == 202
+    assert profile.display_name == "Bootstrap Provider"
+    assert account_repo.created == 1
+    assert session.commits == 1
+    assert session.refreshed == [profile]
+
+
+@pytest.mark.asyncio
+async def test_create_profile_uses_existing_actor_without_creating_account() -> None:
+    session = FakeSession()
+    account_repo = FakeAccountRepository(next_account_id=303)
+    service = ProviderIdentityService(
+        cast("AsyncSession", session),
+        account_repo=account_repo,
+        provider_profile_repo=FakeProviderProfileRepository(),
+    )
+
+    profile = await service.create_profile(
+        ActorContext(account_id=77),
+        ProviderProfileCreateRequest(display_name="Existing Account Provider"),
+    )
+
+    assert profile.account_id == 77
+    assert profile.display_name == "Existing Account Provider"
+    assert account_repo.created == 0
+    assert session.commits == 1
+    assert session.refreshed == [profile]
+
+
+@pytest.mark.asyncio
 async def test_create_profile_raises_conflict_when_profile_exists() -> None:
     session = FakeSession()
     repo = FakeProviderProfileRepository(
@@ -74,6 +131,7 @@ async def test_create_profile_raises_conflict_when_profile_exists() -> None:
     )
     service = ProviderIdentityService(
         cast("AsyncSession", session),
+        account_repo=FakeAccountRepository(),
         provider_profile_repo=repo,
     )
 

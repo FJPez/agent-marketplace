@@ -8,6 +8,12 @@ class AccountRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def create(self) -> Account:
+        account = Account()
+        self._session.add(account)
+        await self._session.flush()
+        return account
+
     async def exists(self, account_id: int) -> bool:
         statement = select(Account.id).where(Account.id == account_id).limit(1)
         result = await self._session.scalar(statement)
