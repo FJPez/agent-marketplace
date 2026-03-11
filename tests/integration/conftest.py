@@ -17,7 +17,7 @@ from tests.integration.db.support import (
 from app.core.config import Settings, get_settings
 from app.db.session import create_engine, create_session_factory
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(scope="session", autouse=True)
