@@ -188,6 +188,8 @@ Expected selective ignores:
 Any broader ignore set should be justified in the branch.
 
 Use mypy on application code.
+Run `uv run ruff format .` regularly while working and again before each commit to avoid format-only CI failures.
+Run `uv run ruff check .` after formatting so lint verification is based on the formatted tree.
 
 ## Testing rules
 
@@ -228,6 +230,8 @@ Avoid mixing these in one commit:
 - tooling changes with domain logic
 - migrations with unrelated refactors
 - route changes with large formatting-only noise
+
+Before creating a commit, run the branch verification needed for the touched files, including `uv run ruff format .` and `uv run ruff check .`.
 
 ## Integration branch rules
 
