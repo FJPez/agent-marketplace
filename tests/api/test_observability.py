@@ -1,5 +1,6 @@
 import logging
 import uuid
+from dataclasses import dataclass
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,56 @@ from app.core.logging import (
     STATUS_CODE_FIELD,
 )
 from app.main import create_app
+
+
+def _get_str_field(record: logging.LogRecord, field_name: str) -> str:
+    value = getattr(record, field_name, None)
+    if not isinstance(value, str):
+        msg = f"log record field {field_name!r} must be a str"
+        raise AssertionError(msg)
+    return value
+
+
+def _get_int_field(record: logging.LogRecord, field_name: str) -> int:
+    value = getattr(record, field_name, None)
+    if not isinstance(value, int):
+        msg = f"log record field {field_name!r} must be an int"
+        raise AssertionError(msg)
+    return value
+
+
+@dataclass(slots=True)
+class RequestCompletedLog:
+    request_id: str
+    method: str
+    path: str
+    status_code: int
+    duration_ms: int
+
+    @classmethod
+    def from_record(cls, record: logging.LogRecord) -> "RequestCompletedLog":
+        return cls(
+            request_id=_get_str_field(record, REQUEST_ID_FIELD),
+            method=_get_str_field(record, METHOD_FIELD),
+            path=_get_str_field(record, PATH_FIELD),
+            status_code=_get_int_field(record, STATUS_CODE_FIELD),
+            duration_ms=_get_int_field(record, DURATION_MS_FIELD),
+        )
+
+
+@dataclass(slots=True)
+class RequestFailedLog:
+    request_id: str
+    method: str
+    path: str
+
+    @classmethod
+    def from_record(cls, record: logging.LogRecord) -> "RequestFailedLog":
+        return cls(
+            request_id=_get_str_field(record, REQUEST_ID_FIELD),
+            method=_get_str_field(record, METHOD_FIELD),
+            path=_get_str_field(record, PATH_FIELD),
+        )
 
 
 def test_health_echoes_provided_request_id(client: TestClient) -> None:
@@ -41,14 +92,12 @@ def test_health_logs_request_context(
     assert response.status_code == 200
 
     record = next(record for record in caplog.records if record.name == "app.core.observability")
-    assert record.__dict__[REQUEST_ID_FIELD] == "request-123"
-    assert record.__dict__[METHOD_FIELD] == "GET"
-    assert record.__dict__[PATH_FIELD] == "/health"
-    assert record.__dict__[STATUS_CODE_FIELD] == 200
-
-    duration_ms = record.__dict__[DURATION_MS_FIELD]
-    assert isinstance(duration_ms, int)
-    assert duration_ms >= 0
+    request_log = RequestCompletedLog.from_record(record)
+    assert request_log.request_id == "request-123"
+    assert request_log.method == "GET"
+    assert request_log.path == "/health"
+    assert request_log.status_code == 200
+    assert request_log.duration_ms >= 0
 
 
 def test_failing_request_logs_exception_context(
@@ -71,6 +120,7 @@ def test_failing_request_logs_exception_context(
     assert response.headers[REQUEST_ID_HEADER] == "request-123"
 
     record = next(record for record in caplog.records if record.name == "app.core.observability")
-    assert record.__dict__[REQUEST_ID_FIELD] == "request-123"
-    assert record.__dict__[METHOD_FIELD] == "GET"
-    assert record.__dict__[PATH_FIELD] == "/boom"
+    error_log = RequestFailedLog.from_record(record)
+    assert error_log.request_id == "request-123"
+    assert error_log.method == "GET"
+    assert error_log.path == "/boom"
