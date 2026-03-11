@@ -4,7 +4,14 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.logging import REQUEST_ID_HEADER
+from app.core.logging import (
+    DURATION_MS_FIELD,
+    METHOD_FIELD,
+    PATH_FIELD,
+    REQUEST_ID_FIELD,
+    REQUEST_ID_HEADER,
+    STATUS_CODE_FIELD,
+)
 from app.main import create_app
 
 
@@ -34,11 +41,14 @@ def test_health_logs_request_context(
     assert response.status_code == 200
 
     record = next(record for record in caplog.records if record.name == "app.core.observability")
-    assert record.request_id == "request-123"
-    assert record.method == "GET"
-    assert record.path == "/health"
-    assert record.status_code == 200
-    assert record.duration_ms >= 0
+    assert record.__dict__[REQUEST_ID_FIELD] == "request-123"
+    assert record.__dict__[METHOD_FIELD] == "GET"
+    assert record.__dict__[PATH_FIELD] == "/health"
+    assert record.__dict__[STATUS_CODE_FIELD] == 200
+
+    duration_ms = record.__dict__[DURATION_MS_FIELD]
+    assert isinstance(duration_ms, int)
+    assert duration_ms >= 0
 
 
 def test_failing_request_logs_exception_context(
@@ -61,6 +71,6 @@ def test_failing_request_logs_exception_context(
     assert response.headers[REQUEST_ID_HEADER] == "request-123"
 
     record = next(record for record in caplog.records if record.name == "app.core.observability")
-    assert record.request_id == "request-123"
-    assert record.method == "GET"
-    assert record.path == "/boom"
+    assert record.__dict__[REQUEST_ID_FIELD] == "request-123"
+    assert record.__dict__[METHOD_FIELD] == "GET"
+    assert record.__dict__[PATH_FIELD] == "/boom"
