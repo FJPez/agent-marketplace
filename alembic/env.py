@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 config.set_main_option("sqlalchemy.url", Settings().database_url)
 target_metadata = Base.metadata
