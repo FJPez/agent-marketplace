@@ -22,6 +22,3 @@ class ServiceTag(Base):
     tag: Mapped[str] = mapped_column(String(64), primary_key=True)
 
     service: Mapped[Service] = relationship(back_populates="tags")
-
-
-__all__ = ["ServiceTag"]

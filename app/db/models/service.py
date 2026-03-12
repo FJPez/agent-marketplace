@@ -56,6 +56,3 @@ class Service(Base):
         back_populates="service",
         cascade="all, delete-orphan",
     )
-
-
-__all__ = ["Service"]

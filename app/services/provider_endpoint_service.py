@@ -122,7 +122,7 @@ class ProviderEndpointService:
     ) -> None:
         endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
         self._ensure_draft(endpoint.service)
-        self._upstream_repo.upsert(
+        await self._upstream_repo.upsert(
             endpoint,
             base_url=str(request.base_url),
             path=request.path,

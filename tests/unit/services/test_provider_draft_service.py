@@ -170,7 +170,7 @@ class FakeUpstreamRepo:
     def __init__(self) -> None:
         self.calls = 0
 
-    def upsert(self, endpoint: ServiceEndpoint, **kwargs: object) -> object:
+    async def upsert(self, endpoint: ServiceEndpoint, **kwargs: object) -> object:
         self.calls += 1
         endpoint.upstream = ProviderUpstream(
             endpoint_id=endpoint.id,

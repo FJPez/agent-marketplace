@@ -36,6 +36,3 @@ class ProviderUpstream(Base):
     )
 
     endpoint: Mapped[ServiceEndpoint] = relationship(back_populates="upstream")
-
-
-__all__ = ["ProviderUpstream"]

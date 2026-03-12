@@ -69,6 +69,3 @@ class ServiceEndpoint(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-
-
-__all__ = ["ServiceEndpoint"]
