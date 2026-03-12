@@ -1,5 +1,17 @@
 from app.db.models.account import Account
 from app.db.models.consumer_profile import ConsumerProfile
 from app.db.models.provider_profile import ProviderProfile
+from app.db.models.provider_upstream import ProviderUpstream
+from app.db.models.service import Service
+from app.db.models.service_endpoint import ServiceEndpoint
+from app.db.models.service_tag import ServiceTag
 
-__all__ = ["Account", "ConsumerProfile", "ProviderProfile"]
+__all__ = [
+    "Account",
+    "ConsumerProfile",
+    "ProviderProfile",
+    "ProviderUpstream",
+    "Service",
+    "ServiceEndpoint",
+    "ServiceTag",
+]
