@@ -1,10 +1,8 @@
-from typing import TypedDict, cast
-
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.repositories.provider_profile_repo import ProviderProfileRepository
@@ -22,17 +20,6 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
-
-
-class _EndpointUpdateFields(TypedDict, total=False):
-    name: str
-    summary: str | None
-    description: str | None
-    access_mode: AccessMode
-    request_schema: dict[str, object]
-    response_schema: dict[str, object]
-    timeout_seconds: int
-    is_enabled: bool
 
 
 class ProviderEndpointService:
@@ -103,22 +90,21 @@ class ProviderEndpointService:
 
         endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
         self._ensure_draft(endpoint.service)
-        update_fields = cast("_EndpointUpdateFields", raw_update_fields)
-        if "name" in update_fields and update_fields["name"] is None:
+        if "name" in raw_update_fields and raw_update_fields["name"] is None:
             raise ProviderServiceValidationError("name cannot be null")
-        if "access_mode" in update_fields and update_fields["access_mode"] is None:
+        if "access_mode" in raw_update_fields and raw_update_fields["access_mode"] is None:
             raise ProviderServiceValidationError("access_mode cannot be null")
-        if "request_schema" in update_fields and update_fields["request_schema"] is None:
+        if "request_schema" in raw_update_fields and raw_update_fields["request_schema"] is None:
             raise ProviderServiceValidationError("request_schema cannot be null")
-        if "response_schema" in update_fields and update_fields["response_schema"] is None:
+        if "response_schema" in raw_update_fields and raw_update_fields["response_schema"] is None:
             raise ProviderServiceValidationError("response_schema cannot be null")
-        if "timeout_seconds" in update_fields and update_fields["timeout_seconds"] is None:
+        if "timeout_seconds" in raw_update_fields and raw_update_fields["timeout_seconds"] is None:
             raise ProviderServiceValidationError("timeout_seconds cannot be null")
-        if "is_enabled" in update_fields and update_fields["is_enabled"] is None:
+        if "is_enabled" in raw_update_fields and raw_update_fields["is_enabled"] is None:
             raise ProviderServiceValidationError("is_enabled cannot be null")
         self._endpoint_repo.update_endpoint(
             endpoint,
-            **update_fields,
+            **raw_update_fields,
         )
         await self._session.commit()
         return await self.get_endpoint(actor, endpoint_id=endpoint.id)

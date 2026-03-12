@@ -1,5 +1,4 @@
 import re
-from typing import TypedDict, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,12 +21,6 @@ from app.services.provider_service_errors import (
 )
 
 TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-
-
-class _ServiceUpdateFields(TypedDict, total=False):
-    name: str
-    summary: str
-    description: str | None
 
 
 class ProviderDraftService:
@@ -91,14 +84,13 @@ class ProviderDraftService:
 
         service = await self.get_service(actor, service_id=service_id)
         self._ensure_draft(service)
-        update_fields = cast("_ServiceUpdateFields", raw_update_fields)
-        if "name" in update_fields and update_fields["name"] is None:
+        if "name" in raw_update_fields and raw_update_fields["name"] is None:
             raise ProviderServiceValidationError("name cannot be null")
-        if "summary" in update_fields and update_fields["summary"] is None:
+        if "summary" in raw_update_fields and raw_update_fields["summary"] is None:
             raise ProviderServiceValidationError("summary cannot be null")
         self._service_repo.update_service(
             service,
-            **update_fields,
+            **raw_update_fields,
         )
         await self._session.commit()
         return await self._reload_owned_service(
