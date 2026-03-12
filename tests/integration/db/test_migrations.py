@@ -317,3 +317,16 @@ def test_migrations_upgrade_adds_moderation_actions_table(
         for constraint in check_constraints
     )
     assert any(index["column_names"] == ["service_id"] for index in indexes)
+
+
+def test_moderation_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    head_revision = script.get_revision("head")
+
+    assert head_revision is not None
+    assert head_revision.revision == "modadmin_20260312_153000"
+    assert head_revision.path.endswith(
+        "modadmin_20260312_153000_add_moderation_actions.py",
+    )
