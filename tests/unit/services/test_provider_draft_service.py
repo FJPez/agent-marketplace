@@ -8,6 +8,7 @@ from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models import ProviderProfile, ProviderUpstream, Service, ServiceEndpoint
 from app.schemas.service import (
     EndpointCreateRequest,
+    EndpointUpdateRequest,
     EndpointUpstreamRequest,
     ServiceCreateRequest,
     ServiceTagsUpdateRequest,
@@ -98,20 +99,9 @@ class FakeServiceRepo:
             return []
         return [self.service]
 
-    def update_service(
-        self,
-        service: Service,
-        *,
-        name: str | None = None,
-        summary: str | None = None,
-        description: str | None = None,
-    ) -> Service:
-        if name is not None:
-            service.name = name
-        if summary is not None:
-            service.summary = summary
-        if description is not None:
-            service.description = description
+    def update_service(self, service: Service, **kwargs: object) -> Service:
+        for field, value in kwargs.items():
+            setattr(service, field, value)
         return service
 
     async def replace_tags(self, service: Service, *, tags: list[str]) -> Service:
@@ -161,8 +151,7 @@ class FakeEndpointRepo:
 
     def update_endpoint(self, endpoint: ServiceEndpoint, **kwargs: object) -> ServiceEndpoint:
         for field, value in kwargs.items():
-            if value is not None:
-                setattr(endpoint, field, value)
+            setattr(endpoint, field, value)
         return endpoint
 
 
@@ -280,6 +269,44 @@ async def test_update_service_rejects_non_draft_mutation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_service_clears_description_when_explicit_null() -> None:
+    session = FakeSession()
+    repo = FakeServiceRepo(_draft_service())
+    service = ProviderDraftService(cast("AsyncSession", session))
+    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
+    service._service_repo = repo
+
+    updated = await service.update_service(
+        ActorContext(account_id=42),
+        service_id=101,
+        request=ServiceUpdateRequest.model_validate({"description": None}),
+    )
+
+    assert updated.description is None
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field_name", ["name", "summary"])
+async def test_update_service_rejects_explicit_null_for_non_nullable_fields(
+    field_name: str,
+) -> None:
+    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
+    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
+    service._service_repo = FakeServiceRepo(_draft_service())
+
+    with pytest.raises(
+        ProviderServiceValidationError,
+        match=f"{field_name} cannot be null",
+    ):
+        await service.update_service(
+            ActorContext(account_id=42),
+            service_id=101,
+            request=ServiceUpdateRequest.model_validate({field_name: None}),
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_service_translates_duplicate_slug_to_conflict() -> None:
     service = ProviderDraftService(cast("AsyncSession", FailingCommitSession()))
     service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
@@ -315,6 +342,23 @@ async def test_replace_tags_normalizes_and_sorts_tags() -> None:
 
 
 @pytest.mark.asyncio
+async def test_replace_tags_rejects_non_slug_token_values() -> None:
+    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
+    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
+    service._service_repo = FakeServiceRepo(_draft_service())
+
+    with pytest.raises(
+        ProviderServiceValidationError,
+        match="tags must be lowercase slug tokens",
+    ):
+        await service.replace_tags(
+            ActorContext(account_id=42),
+            service_id=101,
+            request=ServiceTagsUpdateRequest(tags=["ml ops", "foo!"]),
+        )
+
+
+@pytest.mark.asyncio
 async def test_create_endpoint_translates_duplicate_key_to_conflict() -> None:
     endpoint_service = ProviderEndpointService(
         cast("AsyncSession", FailingCommitSession()),
@@ -342,6 +386,62 @@ async def test_create_endpoint_translates_duplicate_key_to_conflict() -> None:
                 timeout_seconds=30,
                 is_enabled=True,
             ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_endpoint_clears_nullable_fields_when_explicit_null() -> None:
+    session = FakeSession()
+    endpoint = _draft_endpoint()
+    endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
+    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
+    endpoint_service._service_repo = FakeServiceRepo(_draft_service())
+    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
+    endpoint_service._upstream_repo = FakeUpstreamRepo()
+
+    updated = await endpoint_service.update_endpoint(
+        ActorContext(account_id=42),
+        endpoint_id=303,
+        request=EndpointUpdateRequest.model_validate(
+            {"summary": None, "description": None},
+        ),
+    )
+
+    assert updated.summary is None
+    assert updated.description is None
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "field_name"),
+    [
+        ({"name": None}, "name"),
+        ({"access_mode": None}, "access_mode"),
+        ({"request_schema": None}, "request_schema"),
+        ({"response_schema": None}, "response_schema"),
+        ({"timeout_seconds": None}, "timeout_seconds"),
+        ({"is_enabled": None}, "is_enabled"),
+    ],
+)
+async def test_update_endpoint_rejects_explicit_null_for_non_nullable_fields(
+    payload: dict[str, object | None],
+    field_name: str,
+) -> None:
+    endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
+    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
+    endpoint_service._service_repo = FakeServiceRepo(_draft_service())
+    endpoint_service._endpoint_repo = FakeEndpointRepo(_draft_endpoint())
+    endpoint_service._upstream_repo = FakeUpstreamRepo()
+
+    with pytest.raises(
+        ProviderServiceValidationError,
+        match=f"{field_name} cannot be null",
+    ):
+        await endpoint_service.update_endpoint(
+            ActorContext(account_id=42),
+            endpoint_id=303,
+            request=EndpointUpdateRequest.model_validate(payload),
         )
 
 

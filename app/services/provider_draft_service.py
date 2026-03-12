@@ -1,3 +1,6 @@
+import re
+from typing import TypedDict
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +20,14 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+
+TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+
+class _ServiceUpdateFields(TypedDict, total=False):
+    name: str
+    summary: str
+    description: str | None
 
 
 class ProviderDraftService:
@@ -79,13 +90,20 @@ class ProviderDraftService:
 
         service = await self.get_service(actor, service_id=service_id)
         self._ensure_draft(service)
+        update_fields: _ServiceUpdateFields = {}
+        if "name" in request.model_fields_set:
+            if request.name is None:
+                raise ProviderServiceValidationError("name cannot be null")
+            update_fields["name"] = request.name
+        if "summary" in request.model_fields_set:
+            if request.summary is None:
+                raise ProviderServiceValidationError("summary cannot be null")
+            update_fields["summary"] = request.summary
+        if "description" in request.model_fields_set:
+            update_fields["description"] = request.description
         self._service_repo.update_service(
             service,
-            name=request.name if "name" in request.model_fields_set else None,
-            summary=request.summary if "summary" in request.model_fields_set else None,
-            description=(
-                request.description if "description" in request.model_fields_set else None
-            ),
+            **update_fields,
         )
         await self._session.commit()
         return await self._reload_owned_service(
@@ -102,7 +120,7 @@ class ProviderDraftService:
     ) -> Service:
         service = await self.get_service(actor, service_id=service_id)
         self._ensure_draft(service)
-        normalized_tags = sorted({tag.strip().lower() for tag in request.tags})
+        normalized_tags = sorted({self._normalize_tag(tag) for tag in request.tags})
         await self._service_repo.replace_tags(service, tags=normalized_tags)
         await self._session.commit()
         return await self._reload_owned_service(
@@ -118,6 +136,12 @@ class ProviderDraftService:
     def _ensure_draft(self, service: Service) -> None:
         if service.lifecycle is not ServiceLifecycle.DRAFT:
             raise ProviderServiceStateError("service is not mutable outside draft")
+
+    def _normalize_tag(self, tag: str) -> str:
+        normalized_tag = tag.strip().lower()
+        if TAG_TOKEN_PATTERN.fullmatch(normalized_tag) is None:
+            raise ProviderServiceValidationError("tags must be lowercase slug tokens")
+        return normalized_tag
 
     async def _reload_owned_service(
         self,

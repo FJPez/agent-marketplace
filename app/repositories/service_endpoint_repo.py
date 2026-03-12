@@ -7,6 +7,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.core.enums import AccessMode
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.repositories._sentinel import UNSET, UnsetType
 
 
 class ServiceEndpointRepository:
@@ -67,30 +68,26 @@ class ServiceEndpointRepository:
         self,
         endpoint: ServiceEndpoint,
         *,
-        name: str | None = None,
-        summary: str | None = None,
-        description: str | None = None,
-        access_mode: AccessMode | None = None,
-        request_schema: dict[str, object] | None = None,
-        response_schema: dict[str, object] | None = None,
-        timeout_seconds: int | None = None,
-        is_enabled: bool | None = None,
+        name: str | UnsetType = UNSET,
+        summary: str | None | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
+        access_mode: AccessMode | UnsetType = UNSET,
+        request_schema: dict[str, object] | UnsetType = UNSET,
+        response_schema: dict[str, object] | UnsetType = UNSET,
+        timeout_seconds: int | UnsetType = UNSET,
+        is_enabled: bool | UnsetType = UNSET,
     ) -> ServiceEndpoint:
-        if name is not None:
-            endpoint.name = name
-        if summary is not None:
-            endpoint.summary = summary
-        if description is not None:
-            endpoint.description = description
-        if access_mode is not None:
-            endpoint.access_mode = access_mode
-        if request_schema is not None:
-            endpoint.request_schema = request_schema
-        if response_schema is not None:
-            endpoint.response_schema = response_schema
-        if timeout_seconds is not None:
-            endpoint.timeout_seconds = timeout_seconds
-        if is_enabled is not None:
-            endpoint.is_enabled = is_enabled
+        for attribute_name, value in (
+            ("name", name),
+            ("summary", summary),
+            ("description", description),
+            ("access_mode", access_mode),
+            ("request_schema", request_schema),
+            ("response_schema", response_schema),
+            ("timeout_seconds", timeout_seconds),
+            ("is_enabled", is_enabled),
+        ):
+            if value is not UNSET:
+                setattr(endpoint, attribute_name, value)
         endpoint.updated_at = datetime.now(UTC)
         return endpoint

@@ -133,6 +133,50 @@ async def test_service_repository_lists_only_owned_services_newest_first(
 
 
 @pytest.mark.asyncio
+async def test_service_repository_clears_description_when_explicit_none(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _ = migrated_database
+
+    async with db_session_factory.begin() as session:
+        provider_account_id = await _create_provider_account(
+            session,
+            display_name="Provider",
+        )
+        repo = ServiceRepository(session)
+        service = repo.add(
+            provider_account_id=provider_account_id,
+            slug="translation-service",
+            name="Translation Service",
+            summary="Summary",
+            description="Description",
+        )
+        await session.flush()
+        service_id = service.id
+
+    async with db_session_factory.begin() as session:
+        repo = ServiceRepository(session)
+        service = await repo.get_owned(
+            service_id=service_id,
+            provider_account_id=provider_account_id,
+        )
+        assert service is not None
+        repo.update_service(service, description=None)
+
+    async with db_session_factory() as session:
+        repo = ServiceRepository(session)
+        updated = await repo.get_owned(
+            service_id=service_id,
+            provider_account_id=provider_account_id,
+        )
+
+    assert updated is not None
+    assert updated.description is None
+    assert updated.name == "Translation Service"
+
+
+@pytest.mark.asyncio
 async def test_service_endpoint_repository_updates_owned_endpoint(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -198,6 +242,69 @@ async def test_service_endpoint_repository_updates_owned_endpoint(
     assert updated.access_mode is AccessMode.PAID
     assert updated.timeout_seconds == 60
     assert updated.is_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_service_endpoint_repository_clears_nullable_fields_when_explicit_none(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _ = migrated_database
+
+    async with db_session_factory.begin() as session:
+        provider_account_id = await _create_provider_account(
+            session,
+            display_name="Provider",
+        )
+        service = Service(
+            provider_account_id=provider_account_id,
+            slug="translation-service",
+            name="Translation Service",
+            summary="Summary",
+            description="Description",
+        )
+        session.add(service)
+        await session.flush()
+        endpoint_repo = ServiceEndpointRepository(session)
+        endpoint = endpoint_repo.add(
+            service_id=service.id,
+            key="translate",
+            name="Translate",
+            summary="Endpoint summary",
+            description="Endpoint description",
+            access_mode=AccessMode.FREE,
+            request_schema={"type": "object"},
+            response_schema={"type": "object"},
+            timeout_seconds=30,
+            is_enabled=True,
+        )
+        await session.flush()
+        endpoint_id = endpoint.id
+
+    async with db_session_factory.begin() as session:
+        endpoint_repo = ServiceEndpointRepository(session)
+        endpoint = await endpoint_repo.get_owned(
+            endpoint_id=endpoint_id,
+            provider_account_id=provider_account_id,
+        )
+        assert endpoint is not None
+        endpoint_repo.update_endpoint(
+            endpoint,
+            summary=None,
+            description=None,
+        )
+
+    async with db_session_factory() as session:
+        endpoint_repo = ServiceEndpointRepository(session)
+        updated = await endpoint_repo.get_owned(
+            endpoint_id=endpoint_id,
+            provider_account_id=provider_account_id,
+        )
+
+    assert updated is not None
+    assert updated.summary is None
+    assert updated.description is None
+    assert updated.name == "Translate"
 
 
 @pytest.mark.asyncio

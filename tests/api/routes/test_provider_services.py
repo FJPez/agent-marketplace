@@ -274,6 +274,59 @@ async def test_patch_provider_service_updates_draft_metadata(
 
 
 @pytest.mark.asyncio
+async def test_patch_provider_service_clears_description_on_explicit_null(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+        description="Seeded description",
+    )
+
+    patch_response = await async_client.patch(
+        f"/v1/provider/services/{service_id}",
+        headers=_auth_headers(account_id),
+        json={"description": None},
+    )
+
+    assert patch_response.status_code == 200
+    assert patch_response.json()["description"] is None
+
+    detail_response = await async_client.get(
+        f"/v1/provider/services/{service_id}",
+        headers=_auth_headers(account_id),
+    )
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_service_rejects_explicit_null_for_name(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/services/{service_id}",
+        headers=_auth_headers(account_id),
+        json={"name": None},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "name cannot be null"}
+
+
+@pytest.mark.asyncio
 async def test_replace_service_tags_normalizes_and_sorts_tags(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -293,6 +346,28 @@ async def test_replace_service_tags_normalizes_and_sorts_tags(
 
     assert response.status_code == 200
     assert response.json()["tags"] == ["nlp", "translation"]
+
+
+@pytest.mark.asyncio
+async def test_replace_service_tags_rejects_non_slug_token_values(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/tags",
+        headers=_auth_headers(account_id),
+        json={"tags": ["ml ops", "foo!"]},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "tags must be lowercase slug tokens"}
 
 
 @pytest.mark.asyncio
@@ -345,6 +420,69 @@ async def test_create_and_patch_endpoint_manage_owned_draft_endpoint(
     assert patch_response.json()["timeout_seconds"] == 90
     assert patch_response.json()["is_enabled"] is False
     assert patch_response.json()["access_mode"] == "paid"
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_endpoint_clears_nullable_fields_on_explicit_null(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    patch_response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"summary": None, "description": None},
+    )
+
+    assert patch_response.status_code == 200
+    assert patch_response.json()["summary"] is None
+    assert patch_response.json()["description"] is None
+
+    detail_response = await async_client.get(
+        f"/v1/provider/services/{service_id}",
+        headers=_auth_headers(account_id),
+    )
+
+    assert detail_response.status_code == 200
+    endpoint = detail_response.json()["endpoints"][0]
+    assert endpoint["summary"] is None
+    assert endpoint["description"] is None
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_endpoint_rejects_explicit_null_for_name(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"name": None},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "name cannot be null"}
 
 
 @pytest.mark.asyncio

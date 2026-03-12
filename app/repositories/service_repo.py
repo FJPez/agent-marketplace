@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
+from app.repositories._sentinel import UNSET, UnsetType
 
 
 def _service_with_relations() -> Select[tuple[Service]]:
@@ -72,16 +73,17 @@ class ServiceRepository:
         self,
         service: Service,
         *,
-        name: str | None = None,
-        summary: str | None = None,
-        description: str | None = None,
+        name: str | UnsetType = UNSET,
+        summary: str | UnsetType = UNSET,
+        description: str | None | UnsetType = UNSET,
     ) -> Service:
-        if name is not None:
-            service.name = name
-        if summary is not None:
-            service.summary = summary
-        if description is not None:
-            service.description = description
+        for attribute_name, value in (
+            ("name", name),
+            ("summary", summary),
+            ("description", description),
+        ):
+            if value is not UNSET:
+                setattr(service, attribute_name, value)
         service.updated_at = datetime.now(UTC)
         return service
 
