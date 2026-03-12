@@ -12,6 +12,7 @@ DOMAIN_TABLES = {
     "provider_profiles",
     "provider_upstreams",
     "service_endpoints",
+    "service_health_checks",
     "service_tags",
     "services",
 }
@@ -94,6 +95,22 @@ async def get_moderation_table_specs(
         check_constraints,
         indexes,
     )
+
+
+async def get_service_health_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[dict[str, dict[str, object]], list[dict[str, object]]]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("service_health_checks"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys(
+                "service_health_checks",
+            ),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys
 
 
 async def get_identity_column_specs(
@@ -330,3 +347,34 @@ def test_moderation_migration_uses_branch_specific_revision_id(
     assert head_revision.path.endswith(
         "modadmin_20260312_153000_add_moderation_actions.py",
     )
+
+
+def test_migrations_upgrade_creates_service_health_checks_without_service_foreign_key(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys = asyncio.run(get_service_health_table_specs(db_engine))
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert set(columns) == {
+        "id",
+        "service_id",
+        "check_name",
+        "status",
+        "summary",
+        "details",
+        "checked_at",
+    }
+    assert columns["id"]["nullable"] is False
+    assert columns["service_id"]["nullable"] is False
+    assert columns["check_name"]["nullable"] is False
+    assert columns["status"]["nullable"] is False
+    assert columns["summary"]["nullable"] is True
+    assert columns["details"]["nullable"] is True
+    assert columns["checked_at"]["nullable"] is False
+    assert foreign_keys == []
