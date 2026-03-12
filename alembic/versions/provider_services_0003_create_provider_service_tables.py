@@ -1,6 +1,6 @@
 """create provider service tables
 
-Revision ID: 0003
+Revision ID: provider_services_0003
 Revises: 0002
 Create Date: 2026-03-12 12:00:00.000000
 """
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = "0003"
+revision: str = "provider_services_0003"
 down_revision: str | None = "0002"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None

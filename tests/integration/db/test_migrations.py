@@ -1,6 +1,7 @@
 import asyncio
 
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -184,6 +185,14 @@ def test_migrations_upgrade_creates_provider_service_tables(
         "service_endpoints",
         "provider_upstreams",
     }.issubset(table_names)
+
+
+def test_migration_head_revision_is_namespaced(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+
+    assert script.get_current_head() == "provider_services_0003"
 
 
 def test_migrations_upgrade_backfills_display_name_for_existing_identity_rows(
