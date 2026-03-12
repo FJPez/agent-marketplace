@@ -2,10 +2,12 @@
 
 from app.repositories.account_repo import AccountRepository
 from app.repositories.consumer_profile_repo import ConsumerProfileRepository
+from app.repositories.moderation_action_repo import ModerationActionRepository
 from app.repositories.provider_profile_repo import ProviderProfileRepository
 
 __all__ = [
     "AccountRepository",
     "ConsumerProfileRepository",
+    "ModerationActionRepository",
     "ProviderProfileRepository",
 ]
