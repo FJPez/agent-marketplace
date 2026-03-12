@@ -1,8 +1,10 @@
+from typing import TypedDict
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-from app.core.enums import ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.repositories.provider_profile_repo import ProviderProfileRepository
@@ -20,6 +22,17 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+
+
+class _EndpointUpdateFields(TypedDict, total=False):
+    name: str
+    summary: str | None
+    description: str | None
+    access_mode: AccessMode
+    request_schema: dict[str, object]
+    response_schema: dict[str, object]
+    timeout_seconds: int
+    is_enabled: bool
 
 
 class ProviderEndpointService:
@@ -90,21 +103,38 @@ class ProviderEndpointService:
 
         endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
         self._ensure_draft(endpoint.service)
-        if "name" in raw_update_fields and raw_update_fields["name"] is None:
-            raise ProviderServiceValidationError("name cannot be null")
-        if "access_mode" in raw_update_fields and raw_update_fields["access_mode"] is None:
-            raise ProviderServiceValidationError("access_mode cannot be null")
-        if "request_schema" in raw_update_fields and raw_update_fields["request_schema"] is None:
-            raise ProviderServiceValidationError("request_schema cannot be null")
-        if "response_schema" in raw_update_fields and raw_update_fields["response_schema"] is None:
-            raise ProviderServiceValidationError("response_schema cannot be null")
-        if "timeout_seconds" in raw_update_fields and raw_update_fields["timeout_seconds"] is None:
-            raise ProviderServiceValidationError("timeout_seconds cannot be null")
-        if "is_enabled" in raw_update_fields and raw_update_fields["is_enabled"] is None:
-            raise ProviderServiceValidationError("is_enabled cannot be null")
+        update_fields: _EndpointUpdateFields = {}
+        if "name" in raw_update_fields:
+            if raw_update_fields["name"] is None:
+                raise ProviderServiceValidationError("name cannot be null")
+            update_fields["name"] = raw_update_fields["name"]
+        if "summary" in raw_update_fields:
+            update_fields["summary"] = raw_update_fields["summary"]
+        if "description" in raw_update_fields:
+            update_fields["description"] = raw_update_fields["description"]
+        if "access_mode" in raw_update_fields:
+            if raw_update_fields["access_mode"] is None:
+                raise ProviderServiceValidationError("access_mode cannot be null")
+            update_fields["access_mode"] = raw_update_fields["access_mode"]
+        if "request_schema" in raw_update_fields:
+            if raw_update_fields["request_schema"] is None:
+                raise ProviderServiceValidationError("request_schema cannot be null")
+            update_fields["request_schema"] = raw_update_fields["request_schema"]
+        if "response_schema" in raw_update_fields:
+            if raw_update_fields["response_schema"] is None:
+                raise ProviderServiceValidationError("response_schema cannot be null")
+            update_fields["response_schema"] = raw_update_fields["response_schema"]
+        if "timeout_seconds" in raw_update_fields:
+            if raw_update_fields["timeout_seconds"] is None:
+                raise ProviderServiceValidationError("timeout_seconds cannot be null")
+            update_fields["timeout_seconds"] = raw_update_fields["timeout_seconds"]
+        if "is_enabled" in raw_update_fields:
+            if raw_update_fields["is_enabled"] is None:
+                raise ProviderServiceValidationError("is_enabled cannot be null")
+            update_fields["is_enabled"] = raw_update_fields["is_enabled"]
         self._endpoint_repo.update_endpoint(
             endpoint,
-            **raw_update_fields,
+            **update_fields,
         )
         await self._session.commit()
         return await self.get_endpoint(actor, endpoint_id=endpoint.id)
