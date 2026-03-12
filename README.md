@@ -114,6 +114,13 @@ codex-agent-plan/
 - Contract-affecting changes require revision and change-token handling.
 - Paid requests are only forwarded after safe payment state.
 
+## Implemented Phase 1 Foundations
+
+- `POST /v1/providers` and `POST /v1/consumers` support anonymous bootstrap
+  creation and authenticated create-on-existing-account
+- protected provider self-service routes use `X-Account-Id`
+- request correlation uses `X-Request-ID`, and responses echo that header
+
 ## Development setup
 
 ### Requirements
@@ -141,6 +148,10 @@ uv run fastapi dev app/main.py
 ```bash
 uv run pytest
 ```
+
+When running full test suites from multiple worktrees, run them serially. The
+integration DB fixtures currently share the `agent_marketplace_test` database
+name.
 
 ### Lint and format
 

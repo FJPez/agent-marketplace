@@ -8,6 +8,11 @@
 - `provider_profiles`
 - `consumer_profiles`
 
+Identity profile notes:
+
+- `provider_profiles` includes `display_name` for provider self-service identity reads and updates
+- `consumer_profiles` includes `display_name` for consumer identity creation
+
 ### Service definition
 
 - `services`
