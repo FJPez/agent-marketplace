@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,40 +97,25 @@ class ProviderEndpointService:
         endpoint_id: int,
         request: EndpointUpdateRequest,
     ) -> ServiceEndpoint:
-        if not request.model_fields_set:
+        raw_update_fields = request.model_dump(exclude_unset=True)
+        if not raw_update_fields:
             raise ProviderServiceValidationError("at least one field must be provided")
 
         endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
         self._ensure_draft(endpoint.service)
-        update_fields: _EndpointUpdateFields = {}
-        if "name" in request.model_fields_set:
-            if request.name is None:
-                raise ProviderServiceValidationError("name cannot be null")
-            update_fields["name"] = request.name
-        if "summary" in request.model_fields_set:
-            update_fields["summary"] = request.summary
-        if "description" in request.model_fields_set:
-            update_fields["description"] = request.description
-        if "access_mode" in request.model_fields_set:
-            if request.access_mode is None:
-                raise ProviderServiceValidationError("access_mode cannot be null")
-            update_fields["access_mode"] = request.access_mode
-        if "request_schema" in request.model_fields_set:
-            if request.request_schema is None:
-                raise ProviderServiceValidationError("request_schema cannot be null")
-            update_fields["request_schema"] = request.request_schema
-        if "response_schema" in request.model_fields_set:
-            if request.response_schema is None:
-                raise ProviderServiceValidationError("response_schema cannot be null")
-            update_fields["response_schema"] = request.response_schema
-        if "timeout_seconds" in request.model_fields_set:
-            if request.timeout_seconds is None:
-                raise ProviderServiceValidationError("timeout_seconds cannot be null")
-            update_fields["timeout_seconds"] = request.timeout_seconds
-        if "is_enabled" in request.model_fields_set:
-            if request.is_enabled is None:
-                raise ProviderServiceValidationError("is_enabled cannot be null")
-            update_fields["is_enabled"] = request.is_enabled
+        update_fields = cast("_EndpointUpdateFields", raw_update_fields)
+        if "name" in update_fields and update_fields["name"] is None:
+            raise ProviderServiceValidationError("name cannot be null")
+        if "access_mode" in update_fields and update_fields["access_mode"] is None:
+            raise ProviderServiceValidationError("access_mode cannot be null")
+        if "request_schema" in update_fields and update_fields["request_schema"] is None:
+            raise ProviderServiceValidationError("request_schema cannot be null")
+        if "response_schema" in update_fields and update_fields["response_schema"] is None:
+            raise ProviderServiceValidationError("response_schema cannot be null")
+        if "timeout_seconds" in update_fields and update_fields["timeout_seconds"] is None:
+            raise ProviderServiceValidationError("timeout_seconds cannot be null")
+        if "is_enabled" in update_fields and update_fields["is_enabled"] is None:
+            raise ProviderServiceValidationError("is_enabled cannot be null")
         self._endpoint_repo.update_endpoint(
             endpoint,
             **update_fields,

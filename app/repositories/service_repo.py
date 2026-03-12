@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import TypedDict, Unpack
 
 from sqlalchemy import Select, delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +8,12 @@ from sqlalchemy.orm import selectinload
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
-from app.repositories._sentinel import UNSET, UnsetType
+
+
+class _ServiceUpdateFields(TypedDict, total=False):
+    name: str
+    summary: str
+    description: str | None
 
 
 def _service_with_relations() -> Select[tuple[Service]]:
@@ -72,18 +78,10 @@ class ServiceRepository:
     def update_service(
         self,
         service: Service,
-        *,
-        name: str | UnsetType = UNSET,
-        summary: str | UnsetType = UNSET,
-        description: str | None | UnsetType = UNSET,
+        **updates: Unpack[_ServiceUpdateFields],
     ) -> Service:
-        for attribute_name, value in (
-            ("name", name),
-            ("summary", summary),
-            ("description", description),
-        ):
-            if value is not UNSET:
-                setattr(service, attribute_name, value)
+        for attribute_name, value in updates.items():
+            setattr(service, attribute_name, value)
         service.updated_at = datetime.now(UTC)
         return service
 

@@ -1,5 +1,5 @@
 import re
-from typing import TypedDict
+from typing import TypedDict, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,22 +85,17 @@ class ProviderDraftService:
         service_id: int,
         request: ServiceUpdateRequest,
     ) -> Service:
-        if not request.model_fields_set:
+        raw_update_fields = request.model_dump(exclude_unset=True)
+        if not raw_update_fields:
             raise ProviderServiceValidationError("at least one field must be provided")
 
         service = await self.get_service(actor, service_id=service_id)
         self._ensure_draft(service)
-        update_fields: _ServiceUpdateFields = {}
-        if "name" in request.model_fields_set:
-            if request.name is None:
-                raise ProviderServiceValidationError("name cannot be null")
-            update_fields["name"] = request.name
-        if "summary" in request.model_fields_set:
-            if request.summary is None:
-                raise ProviderServiceValidationError("summary cannot be null")
-            update_fields["summary"] = request.summary
-        if "description" in request.model_fields_set:
-            update_fields["description"] = request.description
+        update_fields = cast("_ServiceUpdateFields", raw_update_fields)
+        if "name" in update_fields and update_fields["name"] is None:
+            raise ProviderServiceValidationError("name cannot be null")
+        if "summary" in update_fields and update_fields["summary"] is None:
+            raise ProviderServiceValidationError("summary cannot be null")
         self._service_repo.update_service(
             service,
             **update_fields,

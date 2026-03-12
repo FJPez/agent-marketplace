@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import TypedDict, Unpack
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,7 +8,17 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.core.enums import AccessMode
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
-from app.repositories._sentinel import UNSET, UnsetType
+
+
+class _EndpointUpdateFields(TypedDict, total=False):
+    name: str
+    summary: str | None
+    description: str | None
+    access_mode: AccessMode
+    request_schema: dict[str, object]
+    response_schema: dict[str, object]
+    timeout_seconds: int
+    is_enabled: bool
 
 
 class ServiceEndpointRepository:
@@ -67,27 +78,9 @@ class ServiceEndpointRepository:
     def update_endpoint(
         self,
         endpoint: ServiceEndpoint,
-        *,
-        name: str | UnsetType = UNSET,
-        summary: str | None | UnsetType = UNSET,
-        description: str | None | UnsetType = UNSET,
-        access_mode: AccessMode | UnsetType = UNSET,
-        request_schema: dict[str, object] | UnsetType = UNSET,
-        response_schema: dict[str, object] | UnsetType = UNSET,
-        timeout_seconds: int | UnsetType = UNSET,
-        is_enabled: bool | UnsetType = UNSET,
+        **updates: Unpack[_EndpointUpdateFields],
     ) -> ServiceEndpoint:
-        for attribute_name, value in (
-            ("name", name),
-            ("summary", summary),
-            ("description", description),
-            ("access_mode", access_mode),
-            ("request_schema", request_schema),
-            ("response_schema", response_schema),
-            ("timeout_seconds", timeout_seconds),
-            ("is_enabled", is_enabled),
-        ):
-            if value is not UNSET:
-                setattr(endpoint, attribute_name, value)
+        for attribute_name, value in updates.items():
+            setattr(endpoint, attribute_name, value)
         endpoint.updated_at = datetime.now(UTC)
         return endpoint
