@@ -78,6 +78,17 @@ Identity profile notes:
 - `feat/service-health`
   - `service_health_checks`
 
+## Phase 2 implementation notes
+
+- `services.slug` is currently globally unique.
+- `service_tags` are stored as lowercase slug tokens and replaced as a full set.
+- `service_endpoints.key` is unique per service.
+- `provider_upstreams` are stored privately and are not exposed in API response models.
+- `moderation_actions.service_id` is currently a scalar reference with no ORM relationship or DB foreign key to `services`.
+- `moderation_actions.actor_account_id` is nullable and uses `ON DELETE SET NULL`.
+- `service_health_checks.service_id` is currently a scalar reference with no ORM relationship or DB foreign key to `services`.
+- `service_health_checks.status` is constrained to `pass`, `fail`, or `error`.
+
 ## Mutability policy
 
 ### Freely mutable while draft
@@ -93,6 +104,10 @@ Allowed:
 - timeout settings
 
 Only while lifecycle is `DRAFT`.
+
+The landed Phase 2 route surface supports create/list/get/update for draft services,
+tag replacement, endpoint create/update, and upstream upsert. Delete routes are not
+part of the current draft-management surface.
 
 ### Mutable after publish only with revision and change-token bump
 

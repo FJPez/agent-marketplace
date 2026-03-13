@@ -41,11 +41,12 @@ Deliver:
 
 Deliver:
 
-- service draft CRUD
-- endpoint CRUD
-- upstream storage
-- moderation action scaffolding
-- health-check scaffolding
+- draft service create/list/get/update
+- tag replacement
+- endpoint create/update
+- hidden upstream storage with no response leakage
+- moderation action scaffolding without admin routes
+- health-check scaffolding without routes or scheduling
 
 ## Phase 3, parallel
 
@@ -73,7 +74,7 @@ Deliver:
 - request hash binding
 - expiry rules
 - health gate for publishing where needed
-- moderation enforcement hooks
+- moderation enforcement hooks and route completion
 
 ## Phase 5, mostly sequential
 

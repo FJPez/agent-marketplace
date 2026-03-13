@@ -103,19 +103,23 @@
 
 ### Deliverables
 
-- draft service CRUD
-- endpoint CRUD
+- draft service create/list/get/update
+- tag replacement
+- endpoint create/update
 - upstream storage
 - ownership checks
 
 ### Required tests
 
-- repository tests for service and endpoint persistence
-- route tests for draft CRUD
+- repository tests for service, endpoint, and upstream persistence
+- route tests for service create/list/get/update
+- route tests for tag replacement and endpoint create/update
+- patch-null semantics tests
 - no-upstream-leakage tests
 
 ### Out of scope
 
+- delete routes
 - publish flow
 - quote flow
 - invoke flow
@@ -237,14 +241,22 @@
 
 ### Deliverables
 
-- suspend, restore, delist actions
-- enforcement hooks
-- moderation audit records
+- Phase 2 skeleton
+  - suspend, restore, and delist audit records
+  - reusable service availability and transition scaffolding
+- Later completion
+  - admin route surface
+  - blocked publish/discovery/invoke enforcement
 
 ### Required tests
 
-- moderation route tests
-- blocked invoke/publish/discovery tests
+- Phase 2
+  - moderation migration tests
+  - moderation repository tests
+  - moderation service tests
+- Later completion
+  - moderation route tests
+  - blocked invoke/publish/discovery tests
 
 ### Out of scope
 
@@ -254,9 +266,25 @@
 
 ### Deliverables
 
-- health-check records
-- checker scaffolding and execution path
-- publish integration if needed
+- Phase 2 skeleton
+  - health-check records
+  - checker scaffolding and execution path
+  - latest-check read path
+- Later completion
+  - publish integration where needed
+
+### Required tests
+
+- Phase 2
+  - health persistence tests
+  - service recording and checker execution tests
+  - migration tests
+- Later completion
+  - publish blocked on failed health where applicable
+
+### Out of scope
+
+- payment logic
 
 ### Required tests
 

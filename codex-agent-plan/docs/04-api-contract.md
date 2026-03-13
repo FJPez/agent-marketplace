@@ -32,6 +32,32 @@
 - `PATCH /v1/provider/endpoints/{endpoint_id}`
 - `PUT /v1/provider/endpoints/{endpoint_id}/upstream`
 
+### Provider management route behaviour
+
+- provider management routes require `X-Account-Id` and an existing provider profile
+- `POST /v1/provider/services`
+  - creates an owned draft service
+- `GET /v1/provider/services`
+  - lists owned services newest first
+- `GET /v1/provider/services/{service_id}`
+  - returns owned service detail including tags and endpoints
+- `PATCH /v1/provider/services/{service_id}`
+  - updates owned draft metadata only
+- `POST /v1/provider/services/{service_id}/tags`
+  - replaces the full tag set for an owned draft service
+- `POST /v1/provider/services/{service_id}/endpoints`
+  - creates an owned draft endpoint
+- `PATCH /v1/provider/endpoints/{endpoint_id}`
+  - updates an owned draft endpoint
+- `PUT /v1/provider/endpoints/{endpoint_id}/upstream`
+  - upserts hidden upstream config and returns `204`
+- explicit `null`
+  - clears nullable draft fields such as service `description` and endpoint `summary` or `description`
+  - returns `422` for non-nullable fields such as `name`
+- non-draft service, tag, endpoint, and upstream mutations return `409`
+- provider responses expose `has_upstream` only and must not expose upstream payload fields
+- delete routes are not part of the landed Phase 2 provider surface
+
 ## Publish and pricing routes
 
 - `POST /v1/provider/services/{service_id}/publish`
@@ -60,10 +86,18 @@
 
 ## Admin routes
 
+Planned route surface for later phases:
+
 - `POST /v1/admin/services/{service_id}/suspend`
 - `POST /v1/admin/services/{service_id}/restore`
 - `POST /v1/admin/services/{service_id}/delist`
 - `GET /v1/admin/moderation/actions`
+
+Phase 2 only lands internal moderation scaffolding. These routes are not implemented yet.
+
+## Service health routes
+
+No explicit service-health route surface is implemented in Phase 2. Service health is currently an internal service and persistence scaffold for later publish-readiness work.
 
 ## Behavioural rules
 
