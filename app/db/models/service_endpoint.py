@@ -45,6 +45,7 @@ class ServiceEndpoint(Base):
         SqlEnum(
             AccessMode,
             name="access_mode",
+            create_constraint=True,
             native_enum=False,
             values_callable=lambda values: [value.value for value in values],
         ),

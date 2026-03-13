@@ -32,6 +32,7 @@ class Service(Base):
         SqlEnum(
             ServiceLifecycle,
             name="service_lifecycle",
+            create_constraint=True,
             native_enum=False,
             values_callable=lambda values: [value.value for value in values],
         ),

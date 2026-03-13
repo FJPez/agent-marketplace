@@ -23,12 +23,14 @@ service_lifecycle = sa.Enum(
     "suspended",
     "delisted",
     name="service_lifecycle",
+    create_constraint=True,
     native_enum=False,
 )
 access_mode = sa.Enum(
     "free",
     "paid",
     name="access_mode",
+    create_constraint=True,
     native_enum=False,
 )
 

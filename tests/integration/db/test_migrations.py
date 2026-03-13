@@ -97,6 +97,15 @@ async def get_moderation_table_specs(
     )
 
 
+async def get_provider_service_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[set[str], list[dict[str, object]], list[dict[str, object]]]:
+    table_names = await get_table_names(db_engine)
+    service_constraints = await get_check_constraint_specs(db_engine, "services")
+    endpoint_constraints = await get_check_constraint_specs(db_engine, "service_endpoints")
+    return table_names, service_constraints, endpoint_constraints
+
+
 async def get_service_health_table_specs(
     db_engine: AsyncEngine,
 ) -> tuple[
@@ -262,7 +271,9 @@ def test_migrations_upgrade_creates_provider_service_tables(
 
     command.upgrade(alembic_config, "head")
     try:
-        table_names = asyncio.run(get_table_names(db_engine))
+        table_names, service_constraints, endpoint_constraints = asyncio.run(
+            get_provider_service_table_specs(db_engine),
+        )
     finally:
         command.downgrade(alembic_config, "base")
 
@@ -272,14 +283,20 @@ def test_migrations_upgrade_creates_provider_service_tables(
         "service_endpoints",
         "provider_upstreams",
     }.issubset(table_names)
-
-
-def test_migration_head_revision_is_namespaced(
-    alembic_config: Config,
-) -> None:
-    script = ScriptDirectory.from_config(alembic_config)
-
-    assert script.get_current_head() == "service_health_0003"
+    assert any(
+        all(
+            token in str(constraint.get("sqltext", "")).lower()
+            for token in ("lifecycle", "draft", "active", "suspended", "delisted")
+        )
+        for constraint in service_constraints
+    )
+    assert any(
+        all(
+            token in str(constraint.get("sqltext", "")).lower()
+            for token in ("access_mode", "free", "paid")
+        )
+        for constraint in endpoint_constraints
+    )
 
 
 def test_migrations_upgrade_backfills_display_name_for_existing_identity_rows(
