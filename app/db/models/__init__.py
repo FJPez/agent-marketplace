@@ -5,8 +5,8 @@ from app.db.models.provider_profile import ProviderProfile
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
-from app.db.models.service_tag import ServiceTag
 from app.db.models.service_health_check import ServiceHealthCheck
+from app.db.models.service_tag import ServiceTag
 
 __all__ = [
     "Account",

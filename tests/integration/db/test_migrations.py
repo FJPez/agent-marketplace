@@ -279,7 +279,7 @@ def test_migration_head_revision_is_namespaced(
 ) -> None:
     script = ScriptDirectory.from_config(alembic_config)
 
-    assert script.get_current_head() == "modadmin_20260312_153000"
+    assert script.get_current_head() == "service_health_0003"
 
 
 def test_migrations_upgrade_backfills_display_name_for_existing_identity_rows(
@@ -349,12 +349,25 @@ def test_moderation_migration_uses_branch_specific_revision_id(
     alembic_config: Config,
 ) -> None:
     script = ScriptDirectory.from_config(alembic_config)
-    head_revision = script.get_revision("head")
+    moderation_revision = script.get_revision("modadmin_20260312_153000")
 
-    assert head_revision is not None
-    assert head_revision.revision == "modadmin_20260312_153000"
-    assert head_revision.path.endswith(
+    assert moderation_revision is not None
+    assert moderation_revision.revision == "modadmin_20260312_153000"
+    assert moderation_revision.path.endswith(
         "modadmin_20260312_153000_add_moderation_actions.py",
+    )
+
+
+def test_service_health_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    health_revision = script.get_revision("service_health_0003")
+
+    assert health_revision is not None
+    assert health_revision.revision == "service_health_0003"
+    assert health_revision.path.endswith(
+        "service_health_0003_create_service_health_checks.py",
     )
 
 
