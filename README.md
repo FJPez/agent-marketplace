@@ -121,6 +121,18 @@ codex-agent-plan/
 - protected provider self-service routes use `X-Account-Id`
 - request correlation uses `X-Request-ID`, and responses echo that header
 
+## Implemented Phase 2
+
+- provider draft management routes support service create/list/get/update
+- provider draft management supports full tag replacement
+- provider draft management supports endpoint create/update
+- provider upstream config can be stored privately via endpoint upstream upsert
+- provider responses expose `has_upstream` but do not expose upstream payloads
+- moderation action persistence and service availability scaffolding are landed as
+  internal-only building blocks
+- service-health record persistence and checker scaffolding are landed as
+  internal-only building blocks
+
 ## Development setup
 
 ### Requirements
@@ -228,22 +240,19 @@ app/integrations/x402/
 
 ## Current status
 
-This repository is currently in the early implementation phase.
+Phase 2 is merged on `integration/phase-3`.
 
-The recommended implementation order is:
+The recommended next implementation order is:
 
-1. project bootstrap
-2. config and lifespan
-3. database core
-4. shared domain primitives
-5. auth and identity
-6. provider services
-7. pricing and publish
-8. discovery
-9. quote flow
-10. invoke core
-11. x402 payment
-12. ledger and reporting
+1. revisions and change tokens
+2. pricing and publish
+3. discovery
+4. quote flow
+5. service-health completion
+6. moderation-admin completion
+7. invoke core
+8. x402 payment
+9. ledger and reporting
 
 ## Contributing
 

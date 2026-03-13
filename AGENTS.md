@@ -188,6 +188,7 @@ Expected selective ignores:
 Any broader ignore set should be justified in the branch.
 
 Use ty on application code and tests.
+Do not use `typing.cast()` unless `ty` fails without it. Prefer explicit typing, narrower code paths, or better-typed intermediates before adding a cast.
 Run `uv run ruff format .` regularly while working and again before each commit to avoid format-only CI failures.
 Run `uv run ruff check .` after formatting so lint verification is based on the formatted tree.
 

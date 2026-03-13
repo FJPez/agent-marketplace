@@ -17,3 +17,9 @@ class ServiceLifecycle(StrEnum):
 class AccessMode(StrEnum):
     FREE = "free"
     PAID = "paid"
+
+
+class ServiceHealthStatus(StrEnum):
+    PASS = "pass"
+    FAIL = "fail"
+    ERROR = "error"
