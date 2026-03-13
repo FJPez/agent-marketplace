@@ -24,7 +24,19 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
         sa.Column("service_id", sa.BigInteger(), nullable=False),
         sa.Column("check_name", sa.String(length=100), nullable=False),
-        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum(
+                "pass",
+                "fail",
+                "error",
+                name="service_health_status",
+                native_enum=False,
+                create_constraint=True,
+                length=16,
+            ),
+            nullable=False,
+        ),
         sa.Column("summary", sa.Text(), nullable=True),
         sa.Column("details", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column(

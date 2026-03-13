@@ -9,7 +9,9 @@ from app.db.base import Base
 
 SERVICE_HEALTH_STATUS_ENUM = Enum(
     ServiceHealthStatus,
+    name="service_health_status",
     native_enum=False,
+    create_constraint=True,
     values_callable=lambda enum_cls: [item.value for item in enum_cls],
     length=16,
 )

@@ -99,7 +99,11 @@ async def get_moderation_table_specs(
 
 async def get_service_health_table_specs(
     db_engine: AsyncEngine,
-) -> tuple[dict[str, dict[str, object]], list[dict[str, object]]]:
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
     async with db_engine.connect() as connection:
         columns = await connection.run_sync(
             lambda sync_conn: inspect(sync_conn).get_columns("service_health_checks"),
@@ -109,8 +113,13 @@ async def get_service_health_table_specs(
                 "service_health_checks",
             ),
         )
+        check_constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_check_constraints(
+                "service_health_checks",
+            ),
+        )
 
-    return {column["name"]: column for column in columns}, foreign_keys
+    return {column["name"]: column for column in columns}, foreign_keys, check_constraints
 
 
 async def get_identity_column_specs(
@@ -357,7 +366,9 @@ def test_migrations_upgrade_creates_service_health_checks_without_service_foreig
 
     command.upgrade(alembic_config, "head")
     try:
-        columns, foreign_keys = asyncio.run(get_service_health_table_specs(db_engine))
+        columns, foreign_keys, check_constraints = asyncio.run(
+            get_service_health_table_specs(db_engine),
+        )
     finally:
         command.downgrade(alembic_config, "base")
 
@@ -378,3 +389,12 @@ def test_migrations_upgrade_creates_service_health_checks_without_service_foreig
     assert columns["details"]["nullable"] is True
     assert columns["checked_at"]["nullable"] is False
     assert foreign_keys == []
+    matching_constraints = [
+        constraint
+        for constraint in check_constraints
+        if all(
+            token in str(constraint.get("sqltext", "")).lower()
+            for token in ("status", "pass", "fail", "error")
+        )
+    ]
+    assert matching_constraints
