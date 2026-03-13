@@ -253,7 +253,7 @@ def test_migration_head_revision_is_namespaced(
 ) -> None:
     script = ScriptDirectory.from_config(alembic_config)
 
-    assert script.get_current_head() == "provider_services_0003"
+    assert script.get_current_head() == "modadmin_20260312_153000"
 
 
 def test_migrations_upgrade_backfills_display_name_for_existing_identity_rows(
