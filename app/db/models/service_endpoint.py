@@ -23,6 +23,7 @@ from app.core.enums import AccessMode
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.db.models.pricing_model import PricingModel
     from app.db.models.provider_upstream import ProviderUpstream
     from app.db.models.service import Service
 
@@ -66,6 +67,11 @@ class ServiceEndpoint(Base):
 
     service: Mapped[Service] = relationship(back_populates="endpoints")
     upstream: Mapped[ProviderUpstream | None] = relationship(
+        back_populates="endpoint",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    pricing: Mapped[PricingModel | None] = relationship(
         back_populates="endpoint",
         cascade="all, delete-orphan",
         uselist=False,

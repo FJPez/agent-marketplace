@@ -5,6 +5,7 @@ from sqlalchemy import Select, delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.enums import ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
@@ -21,10 +22,15 @@ def _service_with_relations() -> Select[tuple[Service]]:
         select(Service)
         .options(
             selectinload(Service.tags),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)
     )
+
+
+def _service_with_relations_for_update() -> Select[tuple[Service]]:
+    return _service_with_relations().with_for_update()
 
 
 class ServiceRepository:
@@ -75,6 +81,53 @@ class ServiceRepository:
         result = await self._session.scalars(statement)
         return list(result.all())
 
+    async def list_public(self) -> list[Service]:
+        statement = (
+            _service_with_relations()
+            .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
+            .order_by(desc(Service.created_at), desc(Service.id))
+        )
+        result = await self._session.scalars(statement)
+        return list(result.all())
+
+    async def get_public(self, *, service_id_or_slug: str) -> Service | None:
+        statement = _service_with_relations().where(
+            Service.lifecycle == ServiceLifecycle.ACTIVE,
+        )
+        if service_id_or_slug.isdigit():
+            statement = statement.where(Service.id == int(service_id_or_slug))
+        else:
+            statement = statement.where(Service.slug == service_id_or_slug)
+        return await self._session.scalar(statement)
+
+    async def get_owned_for_update(
+        self,
+        *,
+        service_id: int,
+        provider_account_id: int,
+    ) -> Service | None:
+        statement = _service_with_relations_for_update().where(
+            Service.id == service_id,
+            Service.provider_account_id == provider_account_id,
+        )
+        return await self._session.scalar(statement)
+
+    async def get_owned_by_endpoint_for_update(
+        self,
+        *,
+        endpoint_id: int,
+        provider_account_id: int,
+    ) -> Service | None:
+        statement = (
+            _service_with_relations_for_update()
+            .join(Service.endpoints)
+            .where(
+                ServiceEndpoint.id == endpoint_id,
+                Service.provider_account_id == provider_account_id,
+            )
+        )
+        return await self._session.scalar(statement)
+
     def update_service(
         self,
         service: Service,
@@ -82,6 +135,11 @@ class ServiceRepository:
     ) -> Service:
         for attribute_name, value in updates.items():
             setattr(service, attribute_name, value)
+        service.updated_at = datetime.now(UTC)
+        return service
+
+    def set_lifecycle(self, service: Service, *, lifecycle: ServiceLifecycle) -> Service:
+        service.lifecycle = lifecycle
         service.updated_at = datetime.now(UTC)
         return service
 

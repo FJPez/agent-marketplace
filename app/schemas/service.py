@@ -1,11 +1,28 @@
 from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    model_validator,
+)
 
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
+
+
+def _reject_numeric_only_slug(value: str) -> str:
+    if value.isdigit():
+        msg = "value must include at least one lowercase letter"
+        raise ValueError(msg)
+    return value
+
 
 Slug = Annotated[
     str,
@@ -15,6 +32,7 @@ Slug = Annotated[
         max_length=255,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
     ),
+    AfterValidator(_reject_numeric_only_slug),
 ]
 ServiceName = Annotated[
     str,
@@ -40,6 +58,15 @@ HttpMethod = Annotated[
         min_length=3,
         max_length=16,
         pattern=r"^[A-Z]+$",
+    ),
+]
+CurrencyCode = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=3,
+        max_length=3,
+        pattern=r"^[A-Z]{3}$",
     ),
 ]
 
@@ -71,6 +98,7 @@ class EndpointCreateRequest(BaseModel):
     response_schema: SchemaObject
     timeout_seconds: Annotated[int, Field(gt=0, le=3600)]
     is_enabled: bool = True
+    pricing: "EndpointPricingRequest | None" = None
 
 
 class EndpointUpdateRequest(BaseModel):
@@ -82,6 +110,7 @@ class EndpointUpdateRequest(BaseModel):
     response_schema: SchemaObject | None = None
     timeout_seconds: Annotated[int, Field(gt=0, le=3600)] | None = None
     is_enabled: bool | None = None
+    pricing: "EndpointPricingRequest | None" = None
 
 
 class EndpointUpstreamRequest(BaseModel):
@@ -92,6 +121,51 @@ class EndpointUpstreamRequest(BaseModel):
     ]
     http_method: HttpMethod
     config: SchemaObject = Field(default_factory=dict)
+
+
+class EndpointPricingRequest(BaseModel):
+    pricing_type: PricingModelType
+    amount_minor: Annotated[int, Field(gt=0)] | None = None
+    currency: CurrencyCode | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> Self:
+        if self.pricing_type is PricingModelType.FREE:
+            if self.amount_minor is not None or self.currency is not None:
+                msg = "free pricing cannot include amount_minor or currency"
+                raise ValueError(msg)
+            return self
+
+        if self.amount_minor is None or self.currency is None:
+            msg = "fixed_per_call pricing requires amount_minor and currency"
+            raise ValueError(msg)
+        return self
+
+
+class EndpointPricingResponse(BaseModel):
+    pricing_type: PricingModelType
+    amount_minor: int | None
+    currency: str | None
+
+    @classmethod
+    def from_model(cls, pricing: PricingModel) -> Self:
+        return cls(
+            pricing_type=pricing.pricing_type,
+            amount_minor=pricing.amount_minor,
+            currency=pricing.currency,
+        )
+
+    @classmethod
+    def from_endpoint(cls, endpoint: ServiceEndpoint) -> Self | None:
+        if endpoint.pricing is not None:
+            return cls.from_model(endpoint.pricing)
+        if endpoint.access_mode is AccessMode.FREE:
+            return cls(
+                pricing_type=PricingModelType.FREE,
+                amount_minor=None,
+                currency=None,
+            )
+        return None
 
 
 class EndpointResponse(BaseModel):
@@ -107,6 +181,7 @@ class EndpointResponse(BaseModel):
     response_schema: SchemaObject
     timeout_seconds: int
     is_enabled: bool
+    pricing: EndpointPricingResponse | None
     has_upstream: bool
     created_at: Timestamp
     updated_at: Timestamp
@@ -124,6 +199,7 @@ class EndpointResponse(BaseModel):
             response_schema=endpoint.response_schema,
             timeout_seconds=endpoint.timeout_seconds,
             is_enabled=endpoint.is_enabled,
+            pricing=EndpointPricingResponse.from_endpoint(endpoint),
             has_upstream=endpoint.upstream is not None,
             created_at=endpoint.created_at,
             updated_at=endpoint.updated_at,

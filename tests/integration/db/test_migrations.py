@@ -9,9 +9,11 @@ DOMAIN_TABLES = {
     "accounts",
     "consumer_profiles",
     "moderation_actions",
+    "pricing_models",
     "provider_profiles",
     "provider_upstreams",
     "service_endpoints",
+    "service_revisions",
     "service_health_checks",
     "service_tags",
     "services",
@@ -126,6 +128,52 @@ async def get_service_health_table_specs(
             lambda sync_conn: inspect(sync_conn).get_check_constraints(
                 "service_health_checks",
             ),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys, check_constraints
+
+
+async def get_service_revision_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        service_columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("services"),
+        )
+        revision_columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("service_revisions"),
+        )
+        indexes = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_indexes("service_revisions"),
+        )
+
+    return (
+        {column["name"]: column for column in service_columns},
+        {column["name"]: column for column in revision_columns},
+        indexes,
+    )
+
+
+async def get_pricing_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("pricing_models"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys("pricing_models"),
+        )
+        check_constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_check_constraints("pricing_models"),
         )
 
     return {column["name"]: column for column in columns}, foreign_keys, check_constraints
@@ -388,6 +436,48 @@ def test_service_health_migration_uses_branch_specific_revision_id(
     )
 
 
+def test_service_revisions_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    revision = script.get_revision("service_revisions_0004")
+
+    assert revision is not None
+    assert revision.revision == "service_revisions_0004"
+    assert revision.path.endswith(
+        "service_revisions_0004_create_service_revisions.py",
+    )
+
+
+def test_migrations_upgrade_creates_service_revisions_and_current_revision_fields(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        service_columns, revision_columns, indexes = asyncio.run(
+            get_service_revision_table_specs(db_engine),
+        )
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert service_columns.keys() >= {
+        "current_revision_id",
+        "current_change_token",
+    }
+    assert revision_columns.keys() >= {
+        "id",
+        "service_id",
+        "revision_number",
+        "change_token",
+        "snapshot",
+        "created_at",
+    }
+    assert any(index["column_names"] == ["service_id"] for index in indexes)
+
+
 def test_migrations_upgrade_creates_service_health_checks_without_service_foreign_key(
     alembic_config: Config,
     db_engine: AsyncEngine,
@@ -428,3 +518,28 @@ def test_migrations_upgrade_creates_service_health_checks_without_service_foreig
         )
     ]
     assert matching_constraints
+
+
+def test_migrations_upgrade_creates_pricing_models_table(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys, check_constraints = asyncio.run(
+            get_pricing_table_specs(db_engine),
+        )
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert {"endpoint_id", "pricing_type", "amount_minor", "currency"}.issubset(columns)
+    assert any(
+        foreign_key["referred_table"] == "service_endpoints"
+        and foreign_key["constrained_columns"] == ["endpoint_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        "fixed_per_call" in str(constraint.get("sqltext")) for constraint in check_constraints
+    )

@@ -65,6 +65,7 @@ class ServiceEndpointRepository:
             .join(Service)
             .options(
                 joinedload(ServiceEndpoint.service),
+                selectinload(ServiceEndpoint.pricing),
                 selectinload(ServiceEndpoint.upstream),
             )
             .execution_options(populate_existing=True)
