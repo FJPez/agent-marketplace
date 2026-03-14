@@ -5,6 +5,7 @@ from sqlalchemy import Select, delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.enums import ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
@@ -21,6 +22,7 @@ def _service_with_relations() -> Select[tuple[Service]]:
         select(Service)
         .options(
             selectinload(Service.tags),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)
@@ -82,6 +84,11 @@ class ServiceRepository:
     ) -> Service:
         for attribute_name, value in updates.items():
             setattr(service, attribute_name, value)
+        service.updated_at = datetime.now(UTC)
+        return service
+
+    def set_lifecycle(self, service: Service, *, lifecycle: ServiceLifecycle) -> Service:
+        service.lifecycle = lifecycle
         service.updated_at = datetime.now(UTC)
         return service
 
