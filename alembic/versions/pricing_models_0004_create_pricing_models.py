@@ -1,7 +1,7 @@
 """create pricing models
 
 Revision ID: pricing_models_0004
-Revises: service_health_0003
+Revises: service_revisions_0004
 Create Date: 2026-03-14 13:00:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "pricing_models_0004"
-down_revision: str | None = "service_health_0003"
+down_revision: str | None = "service_revisions_0004"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
