@@ -23,6 +23,7 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+from app.services.publish_service import PublishService
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
 
@@ -150,6 +151,27 @@ async def replace_provider_service_tags(
         raise _to_http_exception(exc) from exc
 
     return ServiceResponse.from_model(updated)
+
+
+@router.post("/services/{service_id}/publish", response_model=ServiceResponse)
+async def publish_provider_service(
+    service_id: int,
+    actor: CurrentActor,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ServiceResponse:
+    service = PublishService(session)
+
+    try:
+        published = await service.publish_service(actor, service_id=service_id)
+    except (
+        ProviderServiceConflictError,
+        ProviderServiceNotFoundError,
+        ProviderServiceStateError,
+        ProviderServiceValidationError,
+    ) as exc:
+        raise _to_http_exception(exc) from exc
+
+    return ServiceResponse.from_model(published)
 
 
 @router.post(

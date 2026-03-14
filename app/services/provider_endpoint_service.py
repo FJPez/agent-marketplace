@@ -4,15 +4,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.repositories.pricing_model_repo import PricingModelRepository
 from app.repositories.provider_profile_repo import ProviderProfileRepository
 from app.repositories.provider_upstream_repo import ProviderUpstreamRepository
 from app.repositories.service_endpoint_repo import ServiceEndpointRepository
 from app.repositories.service_repo import ServiceRepository
 from app.schemas.service import (
     EndpointCreateRequest,
+    EndpointPricingRequest,
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
 )
@@ -42,6 +44,7 @@ class ProviderEndpointService:
         self._provider_profile_repo = ProviderProfileRepository(session)
         self._service_repo = ServiceRepository(session)
         self._endpoint_repo = ServiceEndpointRepository(session)
+        self._pricing_repo = PricingModelRepository(session)
         self._upstream_repo = ProviderUpstreamRepository()
         self._revision_service = RevisionService(session)
 
@@ -65,6 +68,12 @@ class ProviderEndpointService:
             response_schema=request.response_schema,
             timeout_seconds=request.timeout_seconds,
             is_enabled=request.is_enabled,
+        )
+        await self._session.flush()
+        await self._sync_pricing(
+            endpoint,
+            pricing=request.pricing,
+            access_mode=request.access_mode,
         )
 
         try:
@@ -138,6 +147,11 @@ class ProviderEndpointService:
             endpoint,
             **update_fields,
         )
+        await self._sync_pricing(
+            endpoint,
+            pricing=request.pricing,
+            access_mode=endpoint.access_mode,
+        )
         if endpoint.service.lifecycle is ServiceLifecycle.ACTIVE:
             service = await self._get_owned_service(
                 actor.account_id,
@@ -196,3 +210,41 @@ class ProviderEndpointService:
         if service.lifecycle in {ServiceLifecycle.DRAFT, ServiceLifecycle.ACTIVE}:
             return
         raise ProviderServiceStateError("service is not mutable outside draft")
+
+    async def _sync_pricing(
+        self,
+        endpoint: ServiceEndpoint,
+        *,
+        pricing: EndpointPricingRequest | None,
+        access_mode: AccessMode,
+    ) -> None:
+        if access_mode is AccessMode.FREE:
+            if pricing is not None and pricing.pricing_type is not PricingModelType.FREE:
+                raise ProviderServiceValidationError(
+                    "free endpoints must use free pricing",
+                )
+            self._pricing_repo.upsert_free(endpoint)
+            return
+
+        if pricing is None:
+            if (
+                endpoint.pricing is not None
+                and endpoint.pricing.pricing_type is PricingModelType.FREE
+            ):
+                await self._pricing_repo.delete_for_endpoint(endpoint)
+            return
+
+        if pricing.pricing_type is not PricingModelType.FIXED_PER_CALL:
+            raise ProviderServiceValidationError(
+                "paid endpoints must use fixed_per_call pricing",
+            )
+        if pricing.amount_minor is None or pricing.currency is None:
+            raise ProviderServiceValidationError(
+                "fixed_per_call pricing requires amount_minor and currency",
+            )
+
+        self._pricing_repo.upsert_fixed_per_call(
+            endpoint,
+            amount_minor=pricing.amount_minor,
+            currency=pricing.currency,
+        )

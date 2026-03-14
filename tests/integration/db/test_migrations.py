@@ -9,6 +9,7 @@ DOMAIN_TABLES = {
     "accounts",
     "consumer_profiles",
     "moderation_actions",
+    "pricing_models",
     "provider_profiles",
     "provider_upstreams",
     "service_endpoints",
@@ -155,6 +156,27 @@ async def get_service_revision_table_specs(
         {column["name"]: column for column in revision_columns},
         indexes,
     )
+
+
+async def get_pricing_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("pricing_models"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys("pricing_models"),
+        )
+        check_constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_check_constraints("pricing_models"),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys, check_constraints
 
 
 async def get_identity_column_specs(
@@ -496,3 +518,28 @@ def test_migrations_upgrade_creates_service_health_checks_without_service_foreig
         )
     ]
     assert matching_constraints
+
+
+def test_migrations_upgrade_creates_pricing_models_table(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys, check_constraints = asyncio.run(
+            get_pricing_table_specs(db_engine),
+        )
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert {"endpoint_id", "pricing_type", "amount_minor", "currency"}.issubset(columns)
+    assert any(
+        foreign_key["referred_table"] == "service_endpoints"
+        and foreign_key["constrained_columns"] == ["endpoint_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        "fixed_per_call" in str(constraint.get("sqltext")) for constraint in check_constraints
+    )

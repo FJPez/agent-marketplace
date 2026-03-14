@@ -39,6 +39,12 @@ class FakeSession:
     async def rollback(self) -> None:
         self.rollbacks += 1
 
+    async def flush(self) -> None:
+        pass
+
+    def add(self, _instance: object) -> None:
+        pass
+
 
 class FailingCommitSession(FakeSession):
     async def commit(self) -> None:
@@ -170,6 +176,25 @@ class FakeUpstreamRepo:
             config=cast("dict[str, object]", kwargs["config"]),
         )
         return endpoint.upstream
+
+
+class FakePricingRepo:
+    def upsert_free(self, endpoint: ServiceEndpoint) -> None:
+        _ = endpoint
+
+    def upsert_fixed_per_call(
+        self,
+        endpoint: ServiceEndpoint,
+        *,
+        amount_minor: int,
+        currency: str,
+    ) -> None:
+        _ = endpoint
+        _ = amount_minor
+        _ = currency
+
+    async def delete_for_endpoint(self, endpoint: ServiceEndpoint) -> None:
+        _ = endpoint
 
 
 class FakeRevisionService:
@@ -453,6 +478,7 @@ async def test_create_endpoint_translates_duplicate_key_to_conflict() -> None:
     endpoint_service._service_repo = FakeServiceRepo(_draft_service())
     endpoint_service._endpoint_repo = FakeEndpointRepo()
     endpoint_service._upstream_repo = FakeUpstreamRepo()
+    endpoint_service._pricing_repo = FakePricingRepo()
 
     with pytest.raises(
         ProviderServiceConflictError,
@@ -484,6 +510,7 @@ async def test_update_endpoint_clears_nullable_fields_when_explicit_null() -> No
     endpoint_service._service_repo = FakeServiceRepo(_draft_service())
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
+    endpoint_service._pricing_repo = FakePricingRepo()
 
     updated = await endpoint_service.update_endpoint(
         ActorContext(account_id=42),
@@ -508,6 +535,7 @@ async def test_update_endpoint_allows_active_material_mutation_and_records_revis
     endpoint_service._service_repo = FakeServiceRepo(_active_service())
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
+    endpoint_service._pricing_repo = FakePricingRepo()
     endpoint_service._revision_service = revision_service
 
     updated = await endpoint_service.update_endpoint(
@@ -532,6 +560,7 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
     endpoint_service._service_repo = FakeServiceRepo(_active_service())
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
+    endpoint_service._pricing_repo = FakePricingRepo()
     endpoint_service._revision_service = revision_service
 
     updated = await endpoint_service.update_endpoint(

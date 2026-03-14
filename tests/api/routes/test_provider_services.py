@@ -111,6 +111,47 @@ async def _seed_upstream(
 
 
 @pytest.mark.asyncio
+async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="pricing-service",
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/endpoints",
+        headers=_auth_headers(account_id),
+        json={
+            "key": "translate",
+            "name": "Translate",
+            "summary": "Translate text",
+            "description": "Endpoint description",
+            "access_mode": "paid",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "timeout_seconds": 45,
+            "is_enabled": True,
+            "pricing": {
+                "pricing_type": "fixed_per_call",
+                "amount_minor": 1500,
+                "currency": "USD",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["pricing"] == {
+        "pricing_type": "fixed_per_call",
+        "amount_minor": 1500,
+        "currency": "USD",
+    }
+
+
+@pytest.mark.asyncio
 async def test_provider_service_routes_require_x_account_id_header(
     async_client: AsyncClient,
 ) -> None:
@@ -675,3 +716,115 @@ async def test_patch_active_provider_endpoint_material_change_creates_revision_a
     assert service.current_revision_id is not None
     assert service.current_change_token is not None
     assert revision_count == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_service_rejects_service_without_endpoints(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="unpublishable-service",
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "service must define at least one endpoint before publish",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_service_rejects_paid_endpoint_without_pricing(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="priced-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "paid endpoint 'translate' must define fixed_per_call pricing before publish",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_service_returns_active_service_when_endpoints_are_ready(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="ready-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["lifecycle"] == "active"
+    assert response.json()["endpoints"][0]["pricing"] == {
+        "pricing_type": "free",
+        "amount_minor": None,
+        "currency": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_service_rejects_already_active_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="already-active-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "service is not publishable outside draft",
+    }
