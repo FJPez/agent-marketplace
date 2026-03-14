@@ -193,3 +193,39 @@ async def test_get_service_pricing_returns_free_pricing_without_internal_fields(
         "amount_minor": None,
         "currency": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_get_service_detail_returns_404_for_nonexistent_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    response = await async_client.get("/v1/services/does-not-exist")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_services_hides_active_service_with_no_enabled_endpoints(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="all-disabled-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="disabled-endpoint",
+        is_enabled=False,
+    )
+
+    list_response = await async_client.get("/v1/services")
+    detail_response = await async_client.get(f"/v1/services/{service_id}")
+
+    assert list_response.status_code == 200
+    assert not any(item["slug"] == "all-disabled-service" for item in list_response.json())
+    assert detail_response.status_code == 404
