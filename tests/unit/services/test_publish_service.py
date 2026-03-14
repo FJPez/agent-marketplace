@@ -104,3 +104,15 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_p
     )
 
     validate_service_for_publish(service)
+
+
+def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoints() -> None:
+    service = _build_service(
+        endpoints=[_build_endpoint(is_enabled=False)],
+    )
+
+    with pytest.raises(
+        ProviderServiceValidationError,
+        match="service must enable at least one endpoint before publish",
+    ):
+        validate_service_for_publish(service)

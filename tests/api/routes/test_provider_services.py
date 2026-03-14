@@ -725,3 +725,32 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
         "amount_minor": None,
         "currency": None,
     }
+
+
+@pytest.mark.asyncio
+async def test_publish_service_rejects_already_active_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="already-active-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "service is not publishable outside draft",
+    }
