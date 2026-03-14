@@ -12,6 +12,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.db.models.service_endpoint import ServiceEndpoint
+    from app.db.models.service_revision import ServiceRevision
     from app.db.models.service_tag import ServiceTag
 
 
@@ -39,6 +40,12 @@ class Service(Base):
         default=ServiceLifecycle.DRAFT,
         server_default=ServiceLifecycle.DRAFT.value,
     )
+    current_revision_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("service_revisions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    current_change_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
@@ -56,4 +63,10 @@ class Service(Base):
     endpoints: Mapped[list[ServiceEndpoint]] = relationship(
         back_populates="service",
         cascade="all, delete-orphan",
+    )
+    revisions: Mapped[list[ServiceRevision]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+        foreign_keys="ServiceRevision.service_id",
+        order_by="desc(ServiceRevision.revision_number)",
     )
