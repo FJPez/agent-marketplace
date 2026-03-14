@@ -3,7 +3,7 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
 from app.db.models import (
     Account,
     PricingModel,
@@ -11,6 +11,7 @@ from app.db.models import (
     ProviderUpstream,
     Service,
     ServiceEndpoint,
+    ServiceHealthCheck,
     ServiceRevision,
 )
 
@@ -126,6 +127,25 @@ async def _seed_pricing(
                 pricing_type=pricing_type,
                 amount_minor=amount_minor,
                 currency=currency,
+            ),
+        )
+
+
+async def _seed_health_check(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    service_id: int,
+    status: ServiceHealthStatus,
+    summary: str = "unhealthy",
+) -> None:
+    async with db_session_factory.begin() as session:
+        session.add(
+            ServiceHealthCheck(
+                service_id=service_id,
+                check_name="publish-readiness",
+                status=status,
+                summary=summary,
+                details={"source": "test"},
             ),
         )
 
@@ -905,6 +925,39 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
         "pricing_type": "free",
         "amount_minor": None,
         "currency": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_service_rejects_service_with_failed_latest_publish_readiness(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="health-blocked-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await _seed_health_check(
+        db_session_factory,
+        service_id=service_id,
+        status=ServiceHealthStatus.FAIL,
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "service failed latest publish-readiness health check",
     }
 
 
