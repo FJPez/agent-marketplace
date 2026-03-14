@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
+    ModerationAction,
     PricingModel,
     ProviderProfile,
     ProviderUpstream,
@@ -126,6 +127,23 @@ async def _seed_pricing(
                 pricing_type=pricing_type,
                 amount_minor=amount_minor,
                 currency=currency,
+            ),
+        )
+
+
+async def _seed_moderation_action(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    service_id: int,
+    action: str,
+) -> None:
+    async with db_session_factory.begin() as session:
+        session.add(
+            ModerationAction(
+                service_id=service_id,
+                actor_account_id=None,
+                action=action,
+                reason="policy",
             ),
         )
 
@@ -934,4 +952,39 @@ async def test_publish_service_rejects_already_active_service(
     assert response.status_code == 409
     assert response.json() == {
         "detail": "service is not publishable outside draft",
+    }
+
+
+@pytest.mark.asyncio
+async def test_publish_service_rejects_suspended_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    admin_account_id = await _create_account(db_session_factory)
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="suspended-publish-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+
+    moderation_response = await async_client.post(
+        f"/v1/admin/services/{service_id}/suspend",
+        headers=_auth_headers(admin_account_id),
+        json={"reason": "spam"},
+    )
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert moderation_response.status_code == 201
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "service is suspended",
     }

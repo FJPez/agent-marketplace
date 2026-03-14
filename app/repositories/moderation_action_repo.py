@@ -42,3 +42,8 @@ class ModerationActionRepository:
             .limit(1)
         )
         return await self._session.scalar(statement)
+
+    async def list_all(self) -> list[ModerationAction]:
+        statement = select(ModerationAction).order_by(ModerationAction.id.desc())
+        result = await self._session.scalars(statement)
+        return list(result)

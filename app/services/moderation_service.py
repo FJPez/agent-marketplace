@@ -4,20 +4,20 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-
-
-class ModerationActionRecord(Protocol):
-    service_id: int
-    actor_account_id: int | None
-    action: str
-    reason: str
+from app.db.models import ModerationAction
+from app.repositories.service_repo import ServiceRepository
 
 
 class ModerationActionStore(Protocol):
+    async def list_for_service(
+        self,
+        service_id: int,
+    ) -> list[ModerationAction]: ...
+
     async def get_latest_for_service(
         self,
         service_id: int,
-    ) -> ModerationActionRecord | None: ...
+    ) -> ModerationAction | None: ...
 
     def add(
         self,
@@ -26,7 +26,11 @@ class ModerationActionStore(Protocol):
         actor_account_id: int | None,
         action: str,
         reason: str,
-    ) -> ModerationActionRecord: ...
+    ) -> ModerationAction: ...
+
+
+class ServiceLookupStore(Protocol):
+    async def get_by_id(self, *, service_id: int) -> object | None: ...
 
 
 class ModerationActionType(StrEnum):
@@ -69,19 +73,28 @@ class ServiceUnavailableError(Exception):
         super().__init__(f"service {service_id} is {state.value}")
 
 
+class ModerationServiceNotFoundError(Exception):
+    pass
+
+
 class ModerationService:
     def __init__(
         self,
         session: AsyncSession,
         *,
         moderation_action_repo: ModerationActionStore | None = None,
+        service_repo: ServiceLookupStore | None = None,
     ) -> None:
         self._session = session
+        resolved_service_repo: ServiceLookupStore = service_repo or ServiceRepository(session)
         if moderation_action_repo is None:
             from app.repositories.moderation_action_repo import ModerationActionRepository
 
-            moderation_action_repo = ModerationActionRepository(session)
-        self._moderation_action_repo = moderation_action_repo
+            resolved_moderation_action_repo = ModerationActionRepository(session)
+        else:
+            resolved_moderation_action_repo = moderation_action_repo
+        self._service_repo = resolved_service_repo
+        self._moderation_action_repo = resolved_moderation_action_repo
 
     async def suspend_service(
         self,
@@ -89,7 +102,7 @@ class ModerationService:
         service_id: int,
         reason: str,
         actor: ActorContext | None,
-    ) -> ModerationActionRecord:
+    ) -> ModerationAction:
         return await self._record_action(
             service_id=service_id,
             reason=reason,
@@ -103,7 +116,7 @@ class ModerationService:
         service_id: int,
         reason: str,
         actor: ActorContext | None,
-    ) -> ModerationActionRecord:
+    ) -> ModerationAction:
         return await self._record_action(
             service_id=service_id,
             reason=reason,
@@ -117,7 +130,7 @@ class ModerationService:
         service_id: int,
         reason: str,
         actor: ActorContext | None,
-    ) -> ModerationActionRecord:
+    ) -> ModerationAction:
         return await self._record_action(
             service_id=service_id,
             reason=reason,
@@ -147,6 +160,15 @@ class ModerationService:
 
         raise ServiceUnavailableError(service_id=service_id, state=state)
 
+    async def ensure_service_publishable(self, service_id: int) -> None:
+        await self.ensure_service_available(service_id)
+
+    async def ensure_service_listed(self, service_id: int) -> None:
+        await self.ensure_service_available(service_id)
+
+    async def list_actions(self, *, service_id: int) -> list[ModerationAction]:
+        return await self._moderation_action_repo.list_for_service(service_id)
+
     async def _record_action(
         self,
         *,
@@ -154,7 +176,8 @@ class ModerationService:
         reason: str,
         actor: ActorContext | None,
         action: ModerationActionType,
-    ) -> ModerationActionRecord:
+    ) -> ModerationAction:
+        await self._require_service(service_id)
         state = await self.get_service_state(service_id)
         if not _is_valid_transition(state, action):
             raise InvalidModerationTransitionError(
@@ -172,6 +195,11 @@ class ModerationService:
         await self._session.commit()
         await self._session.refresh(record)
         return record
+
+    async def _require_service(self, service_id: int) -> None:
+        service = await self._service_repo.get_by_id(service_id=service_id)
+        if service is None:
+            raise ModerationServiceNotFoundError("service not found")
 
 
 def _is_valid_transition(
