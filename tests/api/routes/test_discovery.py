@@ -206,6 +206,62 @@ async def test_get_service_detail_returns_404_for_nonexistent_service(
 
 
 @pytest.mark.asyncio
+async def test_get_service_detail_treats_numeric_path_as_service_id(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    numeric_slug_service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="2",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=numeric_slug_service_id,
+        key="numeric-slug-endpoint",
+    )
+    numeric_id_service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="actual-target-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=numeric_id_service_id,
+        key="id-target-endpoint",
+    )
+
+    response = await async_client.get("/v1/services/2")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == numeric_id_service_id
+    assert response.json()["slug"] == "actual-target-service"
+
+
+@pytest.mark.asyncio
+async def test_get_service_detail_does_not_fallback_to_numeric_slug_lookup(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="99999",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="numeric-only-slug-endpoint",
+    )
+
+    response = await async_client.get("/v1/services/99999")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_list_services_hides_active_service_with_no_enabled_endpoints(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],

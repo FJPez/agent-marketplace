@@ -1,12 +1,28 @@
 from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    StringConstraints,
+    model_validator,
+)
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
+
+
+def _reject_numeric_only_slug(value: str) -> str:
+    if value.isdigit():
+        msg = "value must include at least one lowercase letter"
+        raise ValueError(msg)
+    return value
+
 
 Slug = Annotated[
     str,
@@ -16,6 +32,7 @@ Slug = Annotated[
         max_length=255,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
     ),
+    AfterValidator(_reject_numeric_only_slug),
 ]
 ServiceName = Annotated[
     str,

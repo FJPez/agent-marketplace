@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import TypedDict, Unpack
 
-from sqlalchemy import Select, delete, desc, or_, select
+from sqlalchemy import Select, delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -27,6 +27,10 @@ def _service_with_relations() -> Select[tuple[Service]]:
         )
         .execution_options(populate_existing=True)
     )
+
+
+def _service_with_relations_for_update() -> Select[tuple[Service]]:
+    return _service_with_relations().with_for_update()
 
 
 class ServiceRepository:
@@ -91,14 +95,37 @@ class ServiceRepository:
             Service.lifecycle == ServiceLifecycle.ACTIVE,
         )
         if service_id_or_slug.isdigit():
-            statement = statement.where(
-                or_(
-                    Service.id == int(service_id_or_slug),
-                    Service.slug == service_id_or_slug,
-                ),
-            )
+            statement = statement.where(Service.id == int(service_id_or_slug))
         else:
             statement = statement.where(Service.slug == service_id_or_slug)
+        return await self._session.scalar(statement)
+
+    async def get_owned_for_update(
+        self,
+        *,
+        service_id: int,
+        provider_account_id: int,
+    ) -> Service | None:
+        statement = _service_with_relations_for_update().where(
+            Service.id == service_id,
+            Service.provider_account_id == provider_account_id,
+        )
+        return await self._session.scalar(statement)
+
+    async def get_owned_by_endpoint_for_update(
+        self,
+        *,
+        endpoint_id: int,
+        provider_account_id: int,
+    ) -> Service | None:
+        statement = (
+            _service_with_relations_for_update()
+            .join(Service.endpoints)
+            .where(
+                ServiceEndpoint.id == endpoint_id,
+                Service.provider_account_id == provider_account_id,
+            )
+        )
         return await self._session.scalar(statement)
 
     def update_service(
