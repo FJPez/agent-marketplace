@@ -62,9 +62,17 @@ class FakeProviderProfileRepo:
 
 
 class FakeServiceRepo:
-    def __init__(self, service: Service | None = None) -> None:
+    def __init__(
+        self,
+        service: Service | None = None,
+        endpoint: ServiceEndpoint | None = None,
+    ) -> None:
         self.service = service
+        self.endpoint = endpoint
         self.replaced_tags: list[str] | None = None
+        if self.service is not None and self.endpoint is not None:
+            self.service.endpoints = [self.endpoint]
+            self.endpoint.service = self.service
 
     def add(
         self,
@@ -94,6 +102,29 @@ class FakeServiceRepo:
     ) -> Service | None:
         _ = service_id
         _ = provider_account_id
+        return self.service
+
+    async def get_owned_for_update(
+        self,
+        *,
+        service_id: int,
+        provider_account_id: int,
+    ) -> Service | None:
+        return await self.get_owned(
+            service_id=service_id,
+            provider_account_id=provider_account_id,
+        )
+
+    async def get_owned_by_endpoint_for_update(
+        self,
+        *,
+        endpoint_id: int,
+        provider_account_id: int,
+    ) -> Service | None:
+        _ = endpoint_id
+        _ = provider_account_id
+        if self.endpoint is not None:
+            return self.endpoint.service
         return self.service
 
     async def list_by_provider_account_id(
@@ -507,7 +538,7 @@ async def test_update_endpoint_clears_nullable_fields_when_explicit_null() -> No
     endpoint = _draft_endpoint()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
-    endpoint_service._service_repo = FakeServiceRepo(_draft_service())
+    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
     endpoint_service._pricing_repo = FakePricingRepo()
@@ -532,7 +563,7 @@ async def test_update_endpoint_allows_active_material_mutation_and_records_revis
     revision_service = FakeRevisionService(endpoint_impact=UpdateImpact.MATERIAL)
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
-    endpoint_service._service_repo = FakeServiceRepo(_active_service())
+    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
     endpoint_service._pricing_repo = FakePricingRepo()
@@ -557,7 +588,7 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
     revision_service = FakeRevisionService()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
-    endpoint_service._service_repo = FakeServiceRepo(_active_service())
+    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
     endpoint_service._pricing_repo = FakePricingRepo()
@@ -577,10 +608,11 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
 
 @pytest.mark.asyncio
 async def test_update_endpoint_rejects_suspended_mutation() -> None:
+    endpoint = _suspended_endpoint()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
-    endpoint_service._service_repo = FakeServiceRepo(_suspended_service())
-    endpoint_service._endpoint_repo = FakeEndpointRepo(_suspended_endpoint())
+    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
+    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
 
     with pytest.raises(
@@ -610,10 +642,11 @@ async def test_update_endpoint_rejects_explicit_null_for_non_nullable_fields(
     payload: dict[str, object | None],
     field_name: str,
 ) -> None:
+    endpoint = _draft_endpoint()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
-    endpoint_service._service_repo = FakeServiceRepo(_draft_service())
-    endpoint_service._endpoint_repo = FakeEndpointRepo(_draft_endpoint())
+    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
+    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
 
     with pytest.raises(
@@ -634,7 +667,7 @@ async def test_upsert_upstream_marks_endpoint_as_having_upstream() -> None:
     upstream_repo = FakeUpstreamRepo()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
-    endpoint_service._service_repo = FakeServiceRepo(_draft_service())
+    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = upstream_repo
 
