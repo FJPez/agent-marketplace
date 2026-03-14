@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import TypedDict, Unpack
 
-from sqlalchemy import Select, delete, desc, select
+from sqlalchemy import Select, delete, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -76,6 +76,30 @@ class ServiceRepository:
         )
         result = await self._session.scalars(statement)
         return list(result.all())
+
+    async def list_public(self) -> list[Service]:
+        statement = (
+            _service_with_relations()
+            .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
+            .order_by(desc(Service.created_at), desc(Service.id))
+        )
+        result = await self._session.scalars(statement)
+        return list(result.all())
+
+    async def get_public(self, *, service_id_or_slug: str) -> Service | None:
+        statement = _service_with_relations().where(
+            Service.lifecycle == ServiceLifecycle.ACTIVE,
+        )
+        if service_id_or_slug.isdigit():
+            statement = statement.where(
+                or_(
+                    Service.id == int(service_id_or_slug),
+                    Service.slug == service_id_or_slug,
+                ),
+            )
+        else:
+            statement = statement.where(Service.slug == service_id_or_slug)
+        return await self._session.scalar(statement)
 
     def update_service(
         self,
