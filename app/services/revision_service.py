@@ -64,6 +64,14 @@ class RevisionService:
     def classify_service_update(
         update_fields: Mapping[str, object],
     ) -> UpdateImpact:
+        # All fields currently exposed by ServiceUpdateRequest (name, summary,
+        # description) are descriptive-only and do not affect the service
+        # contract.  This method therefore always returns NON_MATERIAL and the
+        # update_fields argument is intentionally unused.
+        #
+        # If contract-affecting service fields (e.g. slug) ever become
+        # patchable, this method must be updated to check them against a
+        # MATERIAL_SERVICE_FIELDS set analogous to MATERIAL_ENDPOINT_FIELDS.
         _ = update_fields
         return UpdateImpact.NON_MATERIAL
 
