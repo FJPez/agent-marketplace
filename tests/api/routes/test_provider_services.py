@@ -1,5 +1,6 @@
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.enums import AccessMode, ServiceLifecycle
@@ -9,6 +10,7 @@ from app.db.models import (
     ProviderUpstream,
     Service,
     ServiceEndpoint,
+    ServiceRevision,
 )
 
 
@@ -555,7 +557,7 @@ async def test_provider_service_routes_hide_cross_owner_service_access(
 
 
 @pytest.mark.asyncio
-async def test_non_draft_service_mutations_return_conflict(
+async def test_suspended_service_mutations_return_conflict(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -563,8 +565,8 @@ async def test_non_draft_service_mutations_return_conflict(
     service_id = await _seed_service(
         db_session_factory,
         provider_account_id=account_id,
-        slug="published-service",
-        lifecycle=ServiceLifecycle.ACTIVE,
+        slug="suspended-service",
+        lifecycle=ServiceLifecycle.SUSPENDED,
     )
     endpoint_id = await _seed_endpoint(
         db_session_factory,
@@ -601,3 +603,75 @@ async def test_non_draft_service_mutations_return_conflict(
     assert tag_response.status_code == 409
     assert endpoint_response.status_code == 409
     assert upstream_response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_patch_active_provider_service_updates_non_material_metadata_without_revision(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="active-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/services/{service_id}",
+        headers=_auth_headers(account_id),
+        json={"summary": "Updated summary"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["summary"] == "Updated summary"
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+
+    assert service is not None
+    assert service.current_revision_id is None
+    assert service.current_change_token is None
+
+
+@pytest.mark.asyncio
+async def test_patch_active_provider_endpoint_material_change_creates_revision_and_token(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="active-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"timeout_seconds": 60},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["timeout_seconds"] == 60
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(
+                ServiceRevision.service_id == service_id,
+            ),
+        )
+
+    assert service is not None
+    assert service.current_revision_id is not None
+    assert service.current_change_token is not None
+    assert revision_count == 1

@@ -20,6 +20,7 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+from app.services.revision_service import RevisionService, UpdateImpact
 
 TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
@@ -35,6 +36,7 @@ class ProviderDraftService:
         self._session = session
         self._provider_profile_repo = ProviderProfileRepository(session)
         self._service_repo = ServiceRepository(session)
+        self._revision_service = RevisionService(session)
 
     async def create_service(
         self,
@@ -90,7 +92,6 @@ class ProviderDraftService:
             raise ProviderServiceValidationError("at least one field must be provided")
 
         service = await self.get_service(actor, service_id=service_id)
-        self._ensure_draft(service)
         update_fields: _ServiceUpdateFields = {}
         if "name" in raw_update_fields:
             if raw_update_fields["name"] is None:
@@ -102,10 +103,17 @@ class ProviderDraftService:
             update_fields["summary"] = raw_update_fields["summary"]
         if "description" in raw_update_fields:
             update_fields["description"] = raw_update_fields["description"]
+        impact = RevisionService.classify_service_update(update_fields)
+        self._ensure_service_update_allowed(service, impact=impact)
         self._service_repo.update_service(
             service,
             **update_fields,
         )
+        if service.lifecycle is ServiceLifecycle.ACTIVE:
+            await self._revision_service.create_revision_if_material_service_update(
+                service,
+                update_fields=update_fields,
+            )
         await self._session.commit()
         return await self._reload_owned_service(
             provider_account_id=actor.account_id,
@@ -137,6 +145,18 @@ class ProviderDraftService:
     def _ensure_draft(self, service: Service) -> None:
         if service.lifecycle is not ServiceLifecycle.DRAFT:
             raise ProviderServiceStateError("service is not mutable outside draft")
+
+    def _ensure_service_update_allowed(
+        self,
+        service: Service,
+        *,
+        impact: UpdateImpact,
+    ) -> None:
+        if service.lifecycle is ServiceLifecycle.DRAFT:
+            return
+        if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.NON_MATERIAL:
+            return
+        raise ProviderServiceStateError("service is not mutable outside draft")
 
     def _normalize_tag(self, tag: str) -> str:
         normalized_tag = tag.strip().lower()
