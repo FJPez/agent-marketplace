@@ -55,7 +55,10 @@ class ProviderEndpointService:
         service_id: int,
         request: EndpointCreateRequest,
     ) -> ServiceEndpoint:
-        service = await self._get_owned_service(actor.account_id, service_id=service_id)
+        service = await self._get_owned_service_for_update(
+            actor.account_id,
+            service_id=service_id,
+        )
         self._ensure_draft(service)
         endpoint = self._endpoint_repo.add(
             service_id=service.id,
@@ -112,37 +115,51 @@ class ProviderEndpointService:
         if not raw_update_fields:
             raise ProviderServiceValidationError("at least one field must be provided")
 
-        endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
+        service, endpoint = await self._get_owned_service_and_endpoint_for_update(
+            actor.account_id,
+            endpoint_id=endpoint_id,
+        )
         update_fields: _EndpointUpdateFields = {}
+        revision_fields: dict[str, object] = {}
         if "name" in raw_update_fields:
             if raw_update_fields["name"] is None:
                 raise ProviderServiceValidationError("name cannot be null")
             update_fields["name"] = raw_update_fields["name"]
+            revision_fields["name"] = raw_update_fields["name"]
         if "summary" in raw_update_fields:
             update_fields["summary"] = raw_update_fields["summary"]
+            revision_fields["summary"] = raw_update_fields["summary"]
         if "description" in raw_update_fields:
             update_fields["description"] = raw_update_fields["description"]
+            revision_fields["description"] = raw_update_fields["description"]
         if "access_mode" in raw_update_fields:
             if raw_update_fields["access_mode"] is None:
                 raise ProviderServiceValidationError("access_mode cannot be null")
             update_fields["access_mode"] = raw_update_fields["access_mode"]
+            revision_fields["access_mode"] = raw_update_fields["access_mode"]
         if "request_schema" in raw_update_fields:
             if raw_update_fields["request_schema"] is None:
                 raise ProviderServiceValidationError("request_schema cannot be null")
             update_fields["request_schema"] = raw_update_fields["request_schema"]
+            revision_fields["request_schema"] = raw_update_fields["request_schema"]
         if "response_schema" in raw_update_fields:
             if raw_update_fields["response_schema"] is None:
                 raise ProviderServiceValidationError("response_schema cannot be null")
             update_fields["response_schema"] = raw_update_fields["response_schema"]
+            revision_fields["response_schema"] = raw_update_fields["response_schema"]
         if "timeout_seconds" in raw_update_fields:
             if raw_update_fields["timeout_seconds"] is None:
                 raise ProviderServiceValidationError("timeout_seconds cannot be null")
             update_fields["timeout_seconds"] = raw_update_fields["timeout_seconds"]
+            revision_fields["timeout_seconds"] = raw_update_fields["timeout_seconds"]
         if "is_enabled" in raw_update_fields:
             if raw_update_fields["is_enabled"] is None:
                 raise ProviderServiceValidationError("is_enabled cannot be null")
             update_fields["is_enabled"] = raw_update_fields["is_enabled"]
-        self._ensure_endpoint_update_allowed(endpoint.service)
+            revision_fields["is_enabled"] = raw_update_fields["is_enabled"]
+        if "pricing" in raw_update_fields:
+            revision_fields["pricing"] = raw_update_fields["pricing"]
+        self._ensure_endpoint_update_allowed(service)
         self._endpoint_repo.update_endpoint(
             endpoint,
             **update_fields,
@@ -152,14 +169,11 @@ class ProviderEndpointService:
             pricing=request.pricing,
             access_mode=endpoint.access_mode,
         )
-        if endpoint.service.lifecycle is ServiceLifecycle.ACTIVE:
-            service = await self._get_owned_service(
-                actor.account_id,
-                service_id=endpoint.service_id,
-            )
+        if service.lifecycle is ServiceLifecycle.ACTIVE:
+            self._ensure_active_endpoint_pricing_valid(endpoint)
             await self._revision_service.create_revision_if_material_endpoint_update(
                 service,
-                update_fields=update_fields,
+                update_fields=revision_fields,
             )
         await self._session.commit()
         return await self.get_endpoint(actor, endpoint_id=endpoint.id)
@@ -171,8 +185,11 @@ class ProviderEndpointService:
         endpoint_id: int,
         request: EndpointUpstreamRequest,
     ) -> None:
-        endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
-        self._ensure_draft(endpoint.service)
+        service, endpoint = await self._get_owned_service_and_endpoint_for_update(
+            actor.account_id,
+            endpoint_id=endpoint_id,
+        )
+        self._ensure_draft(service)
         await self._upstream_repo.upsert(
             endpoint,
             base_url=str(request.base_url),
@@ -197,6 +214,42 @@ class ProviderEndpointService:
             raise ProviderServiceNotFoundError("service not found")
         return service
 
+    async def _get_owned_service_for_update(
+        self,
+        provider_account_id: int,
+        *,
+        service_id: int,
+    ) -> Service:
+        await self._require_provider_profile(provider_account_id)
+        service = await self._service_repo.get_owned_for_update(
+            service_id=service_id,
+            provider_account_id=provider_account_id,
+        )
+        if service is None:
+            raise ProviderServiceNotFoundError("service not found")
+        return service
+
+    async def _get_owned_service_and_endpoint_for_update(
+        self,
+        provider_account_id: int,
+        *,
+        endpoint_id: int,
+    ) -> tuple[Service, ServiceEndpoint]:
+        await self._require_provider_profile(provider_account_id)
+        service = await self._service_repo.get_owned_by_endpoint_for_update(
+            endpoint_id=endpoint_id,
+            provider_account_id=provider_account_id,
+        )
+        if service is None:
+            raise ProviderServiceNotFoundError("endpoint not found")
+        endpoint = next(
+            (candidate for candidate in service.endpoints if candidate.id == endpoint_id),
+            None,
+        )
+        if endpoint is None:
+            raise ProviderServiceNotFoundError("endpoint not found")
+        return service, endpoint
+
     async def _require_provider_profile(self, account_id: int) -> None:
         profile = await self._provider_profile_repo.get_by_account_id(account_id)
         if profile is None:
@@ -210,6 +263,20 @@ class ProviderEndpointService:
         if service.lifecycle in {ServiceLifecycle.DRAFT, ServiceLifecycle.ACTIVE}:
             return
         raise ProviderServiceStateError("service is not mutable outside draft")
+
+    def _ensure_active_endpoint_pricing_valid(self, endpoint: ServiceEndpoint) -> None:
+        if endpoint.access_mode is not AccessMode.PAID:
+            return
+        pricing = endpoint.pricing
+        if (
+            pricing is None
+            or pricing.pricing_type is not PricingModelType.FIXED_PER_CALL
+            or pricing.amount_minor is None
+            or pricing.currency is None
+        ):
+            raise ProviderServiceValidationError(
+                "active paid endpoints must define fixed_per_call pricing",
+            )
 
     async def _sync_pricing(
         self,

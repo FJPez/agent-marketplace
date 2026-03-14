@@ -3,9 +3,10 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
+    PricingModel,
     ProviderProfile,
     ProviderUpstream,
     Service,
@@ -106,6 +107,25 @@ async def _seed_upstream(
                 path="/invoke",
                 http_method="POST",
                 config={"auth": {"type": "bearer", "token_env": "TOKEN"}},
+            ),
+        )
+
+
+async def _seed_pricing(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+    pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
+    amount_minor: int | None = 1500,
+    currency: str | None = "USD",
+) -> None:
+    async with db_session_factory.begin() as session:
+        session.add(
+            PricingModel(
+                endpoint_id=endpoint_id,
+                pricing_type=pricing_type,
+                amount_minor=amount_minor,
+                currency=currency,
             ),
         )
 
@@ -716,6 +736,93 @@ async def test_patch_active_provider_endpoint_material_change_creates_revision_a
     assert service.current_revision_id is not None
     assert service.current_change_token is not None
     assert revision_count == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_active_provider_endpoint_pricing_change_creates_revision_and_token(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="active-paid-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await _seed_pricing(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        amount_minor=1500,
+        currency="USD",
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={
+            "pricing": {
+                "pricing_type": "fixed_per_call",
+                "amount_minor": 2500,
+                "currency": "GBP",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pricing"] == {
+        "pricing_type": "fixed_per_call",
+        "amount_minor": 2500,
+        "currency": "GBP",
+    }
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert service is not None
+    assert service.current_revision_id is not None
+    assert service.current_change_token is not None
+    assert revision_count == 1
+
+
+@pytest.mark.asyncio
+async def test_patch_active_provider_endpoint_rejects_paid_transition_without_pricing(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="active-free-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"access_mode": "paid"},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "active paid endpoints must define fixed_per_call pricing",
+    }
 
 
 @pytest.mark.asyncio

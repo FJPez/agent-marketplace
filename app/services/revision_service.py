@@ -4,6 +4,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from app.core.enums import AccessMode, PricingModelType
 from app.repositories.service_revision_repo import ServiceRevisionRepository
 
 if TYPE_CHECKING:
@@ -12,6 +13,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.db.models.service import Service
+    from app.db.models.service_endpoint import ServiceEndpoint
     from app.db.models.service_revision import ServiceRevision
 
 MATERIAL_ENDPOINT_FIELDS = frozenset(
@@ -19,6 +21,7 @@ MATERIAL_ENDPOINT_FIELDS = frozenset(
         "access_mode",
         "request_schema",
         "response_schema",
+        "pricing",
         "timeout_seconds",
         "is_enabled",
     },
@@ -47,11 +50,33 @@ def build_contract_snapshot(service: Service) -> dict[str, object]:
                 "access_mode": endpoint.access_mode.value,
                 "request_schema": endpoint.request_schema,
                 "response_schema": endpoint.response_schema,
+                "pricing": _build_pricing_snapshot(endpoint),
                 "timeout_seconds": endpoint.timeout_seconds,
                 "is_enabled": endpoint.is_enabled,
             }
             for endpoint in ordered_endpoints
         ],
+    }
+
+
+def _build_pricing_snapshot(endpoint: ServiceEndpoint) -> dict[str, object | None]:
+    pricing = endpoint.pricing
+    if pricing is not None:
+        return {
+            "pricing_type": pricing.pricing_type.value,
+            "amount_minor": pricing.amount_minor,
+            "currency": pricing.currency,
+        }
+    if endpoint.access_mode is AccessMode.FREE:
+        return {
+            "pricing_type": PricingModelType.FREE.value,
+            "amount_minor": None,
+            "currency": None,
+        }
+    return {
+        "pricing_type": None,
+        "amount_minor": None,
+        "currency": None,
     }
 
 

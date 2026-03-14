@@ -2,8 +2,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.core.enums import AccessMode
-from app.db.models import Account, ProviderProfile, Service, ServiceEndpoint
+from app.core.enums import AccessMode, PricingModelType
+from app.db.models import Account, PricingModel, ProviderProfile, Service, ServiceEndpoint
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
 from app.services.revision_service import RevisionService
@@ -58,6 +58,15 @@ async def test_service_revision_repository_persists_snapshot_and_updates_current
         )
         session.add(endpoint)
         await session.flush()
+        pricing = PricingModel(
+            endpoint_id=endpoint.id,
+            pricing_type=PricingModelType.FREE,
+            amount_minor=None,
+            currency=None,
+        )
+        session.add(pricing)
+        await session.flush()
+        endpoint.pricing = pricing
         set_committed_value(service, "endpoints", [endpoint])
 
         revision_service = RevisionService(session)
@@ -91,6 +100,11 @@ async def test_service_revision_repository_persists_snapshot_and_updates_current
                 "access_mode": "free",
                 "request_schema": {"type": "object"},
                 "response_schema": {"type": "object"},
+                "pricing": {
+                    "pricing_type": "free",
+                    "amount_minor": None,
+                    "currency": None,
+                },
                 "timeout_seconds": 30,
                 "is_enabled": True,
             },

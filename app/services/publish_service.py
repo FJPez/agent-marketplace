@@ -51,7 +51,7 @@ class PublishService:
         service_id: int,
     ) -> Service:
         await self._require_provider_profile(actor.account_id)
-        service = await self._service_repo.get_owned(
+        service = await self._service_repo.get_owned_for_update(
             service_id=service_id,
             provider_account_id=actor.account_id,
         )
