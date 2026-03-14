@@ -22,6 +22,7 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+from app.services.revision_service import RevisionService
 
 
 class _EndpointUpdateFields(TypedDict, total=False):
@@ -42,6 +43,7 @@ class ProviderEndpointService:
         self._service_repo = ServiceRepository(session)
         self._endpoint_repo = ServiceEndpointRepository(session)
         self._upstream_repo = ProviderUpstreamRepository()
+        self._revision_service = RevisionService(session)
 
     async def create_endpoint(
         self,
@@ -102,7 +104,6 @@ class ProviderEndpointService:
             raise ProviderServiceValidationError("at least one field must be provided")
 
         endpoint = await self.get_endpoint(actor, endpoint_id=endpoint_id)
-        self._ensure_draft(endpoint.service)
         update_fields: _EndpointUpdateFields = {}
         if "name" in raw_update_fields:
             if raw_update_fields["name"] is None:
@@ -132,10 +133,20 @@ class ProviderEndpointService:
             if raw_update_fields["is_enabled"] is None:
                 raise ProviderServiceValidationError("is_enabled cannot be null")
             update_fields["is_enabled"] = raw_update_fields["is_enabled"]
+        self._ensure_endpoint_update_allowed(endpoint.service)
         self._endpoint_repo.update_endpoint(
             endpoint,
             **update_fields,
         )
+        if endpoint.service.lifecycle is ServiceLifecycle.ACTIVE:
+            service = await self._get_owned_service(
+                actor.account_id,
+                service_id=endpoint.service_id,
+            )
+            await self._revision_service.create_revision_if_material_endpoint_update(
+                service,
+                update_fields=update_fields,
+            )
         await self._session.commit()
         return await self.get_endpoint(actor, endpoint_id=endpoint.id)
 
@@ -180,3 +191,8 @@ class ProviderEndpointService:
     def _ensure_draft(self, service: Service) -> None:
         if service.lifecycle is not ServiceLifecycle.DRAFT:
             raise ProviderServiceStateError("service is not mutable outside draft")
+
+    def _ensure_endpoint_update_allowed(self, service: Service) -> None:
+        if service.lifecycle in {ServiceLifecycle.DRAFT, ServiceLifecycle.ACTIVE}:
+            return
+        raise ProviderServiceStateError("service is not mutable outside draft")
