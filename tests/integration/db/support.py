@@ -54,8 +54,7 @@ def get_database_name(database_url: str) -> str:
 def require_test_database_url(database_url: str) -> str:
     database_name = get_database_name(database_url)
     if not (
-        database_name.endswith(TEST_DATABASE_SUFFIX)
-        or f"{TEST_DATABASE_SUFFIX}_" in database_name
+        database_name.endswith(TEST_DATABASE_SUFFIX) or f"{TEST_DATABASE_SUFFIX}_" in database_name
     ):
         msg = "database integration tests must use a dedicated *_test database"
         raise RuntimeError(msg)

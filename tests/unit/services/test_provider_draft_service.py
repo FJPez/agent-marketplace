@@ -228,6 +228,15 @@ class FakePricingRepo:
         _ = endpoint
 
 
+class FakeModerationService:
+    def __init__(self) -> None:
+        self.publishable_checks = 0
+
+    async def ensure_service_publishable(self, service_id: int) -> None:
+        _ = service_id
+        self.publishable_checks += 1
+
+
 class FakeRevisionService:
     def __init__(
         self,
@@ -240,6 +249,13 @@ class FakeRevisionService:
         self.service_update_calls = 0
         self.endpoint_update_calls = 0
         self.created_revisions = 0
+
+    def classify_endpoint_update(
+        self,
+        update_fields: dict[str, object],
+    ) -> UpdateImpact:
+        _ = update_fields
+        return self.endpoint_impact
 
     async def create_revision_if_material_service_update(
         self,
@@ -561,12 +577,14 @@ async def test_update_endpoint_allows_active_material_mutation_and_records_revis
     session = FakeSession()
     endpoint = _active_endpoint()
     revision_service = FakeRevisionService(endpoint_impact=UpdateImpact.MATERIAL)
+    moderation_service = FakeModerationService()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
     endpoint_service._pricing_repo = FakePricingRepo()
+    endpoint_service._moderation_service = moderation_service
     endpoint_service._revision_service = revision_service
 
     updated = await endpoint_service.update_endpoint(
@@ -576,6 +594,7 @@ async def test_update_endpoint_allows_active_material_mutation_and_records_revis
     )
 
     assert updated.timeout_seconds == 60
+    assert moderation_service.publishable_checks == 1
     assert revision_service.endpoint_update_calls == 1
     assert revision_service.created_revisions == 1
     assert session.commits == 1
@@ -586,12 +605,14 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
     session = FakeSession()
     endpoint = _active_endpoint()
     revision_service = FakeRevisionService()
+    moderation_service = FakeModerationService()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
     endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
     endpoint_service._pricing_repo = FakePricingRepo()
+    endpoint_service._moderation_service = moderation_service
     endpoint_service._revision_service = revision_service
 
     updated = await endpoint_service.update_endpoint(
@@ -601,6 +622,7 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
     )
 
     assert updated.summary == "Updated summary"
+    assert moderation_service.publishable_checks == 0
     assert revision_service.endpoint_update_calls == 1
     assert revision_service.created_revisions == 0
     assert session.commits == 1
