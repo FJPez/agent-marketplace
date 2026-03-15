@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     title: str = "Agent Marketplace Backend"
     debug: bool = False
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
+    quote_ttl_seconds: int = 300
 
 
 @lru_cache

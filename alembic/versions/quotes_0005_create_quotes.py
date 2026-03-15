@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("endpoint_id", sa.BigInteger(), nullable=False),
         sa.Column("endpoint_key", sa.String(length=255), nullable=False),
         sa.Column("request_hash", sa.String(length=64), nullable=False),
-        sa.Column("pricing_type", sa.String(length=14), nullable=False),
+        sa.Column("pricing_type", sa.String(length=50), nullable=False),
         sa.Column("amount_minor", sa.BigInteger(), nullable=True),
         sa.Column("currency", sa.String(length=3), nullable=True),
         sa.Column("service_revision_id", sa.BigInteger(), nullable=True),
