@@ -99,7 +99,7 @@ class ServiceHealthService:
                 extra={SERVICE_ID_FIELD: service_id, "check_name": check_name},
             )
             outcome = ServiceHealthOutcome(
-                status=ServiceHealthStatus.ERROR,
+                status=ServiceHealthStatus.FAIL,
                 summary=HEALTH_CHECK_FAILURE_SUMMARY,
                 details={"error_type": exc.__class__.__name__},
             )

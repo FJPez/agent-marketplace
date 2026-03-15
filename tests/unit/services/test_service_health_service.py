@@ -143,7 +143,7 @@ async def test_run_check_persists_successful_checker_outcome() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_check_persists_error_outcome_when_checker_raises() -> None:
+async def test_run_check_persists_failed_outcome_when_checker_raises() -> None:
     session = FakeSession()
     repo = FakeServiceHealthCheckRepository()
     service = ServiceHealthService(
@@ -157,7 +157,7 @@ async def test_run_check_persists_error_outcome_when_checker_raises() -> None:
         checker=FailingChecker(),
     )
 
-    assert check.status is ServiceHealthStatus.ERROR
+    assert check.status is ServiceHealthStatus.FAIL
     assert check.summary == HEALTH_CHECK_FAILURE_SUMMARY
     assert check.details == {"error_type": "RuntimeError"}
     assert session.commits == 1
