@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
+    ModerationAction,
     PricingModel,
     ProviderProfile,
     Quote,
@@ -97,6 +98,23 @@ async def _seed_endpoint(
         return endpoint.id
 
 
+async def _seed_moderation_action(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    service_id: int,
+    action: str,
+) -> None:
+    async with db_session_factory.begin() as session:
+        session.add(
+            ModerationAction(
+                service_id=service_id,
+                actor_account_id=None,
+                action=action,
+                reason="policy",
+            ),
+        )
+
+
 @pytest.mark.asyncio
 async def test_create_quote_returns_snapshot_for_active_public_endpoint(
     async_client: AsyncClient,
@@ -151,6 +169,7 @@ async def test_create_quote_returns_free_pricing_snapshot_for_free_endpoint(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug="free-quote-service",
+        with_revision=True,
     )
     await _seed_endpoint(
         db_session_factory,
@@ -194,6 +213,7 @@ async def test_create_quote_returns_not_found_for_missing_endpoint(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
+        with_revision=True,
     )
 
     response = await async_client.post(
@@ -215,6 +235,7 @@ async def test_create_quote_returns_not_found_for_disabled_endpoint(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
+        with_revision=True,
     )
     await _seed_endpoint(
         db_session_factory,
@@ -305,6 +326,7 @@ async def test_create_quote_works_with_authenticated_consumer(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug="auth-quote-service",
+        with_revision=True,
     )
     await _seed_endpoint(
         db_session_factory,
@@ -352,3 +374,93 @@ async def test_create_quote_returns_not_found_for_draft_service(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "service not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_quote_returns_not_found_for_suspended_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="suspended-quote-service",
+        with_revision=True,
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    response = await async_client.post(
+        f"/v1/services/{service_id}/quote",
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "service not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_quote_returns_not_found_for_delisted_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="delisted-quote-service",
+        with_revision=True,
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="delist",
+    )
+
+    response = await async_client.post(
+        f"/v1/services/{service_id}/quote",
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "service not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_quote_returns_conflict_when_service_lacks_contract_binding(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="unbound-quote-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    response = await async_client.post(
+        f"/v1/services/{service_id}/quote",
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "service contract is not quoteable"}

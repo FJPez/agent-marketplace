@@ -11,6 +11,7 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+from app.services.revision_service import RevisionService
 from app.services.service_health_service import (
     ServiceHealthCheckFailedError,
     ServiceHealthService,
@@ -50,6 +51,7 @@ class PublishService:
         self._service_repo = ServiceRepository(session)
         self._service_health_service = ServiceHealthService(session)
         self._moderation_service = ModerationService(session)
+        self._revision_service = RevisionService(session)
 
     async def publish_service(
         self,
@@ -78,6 +80,8 @@ class PublishService:
             raise ProviderServiceValidationError(
                 "service failed latest publish-readiness health check",
             ) from exc
+        if service.current_revision_id is None or service.current_change_token is None:
+            await self._revision_service.create_revision(service)
         self._service_repo.set_lifecycle(service, lifecycle=ServiceLifecycle.ACTIVE)
         await self._session.commit()
 

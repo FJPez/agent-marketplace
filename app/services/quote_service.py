@@ -8,6 +8,7 @@ from app.core.request_hash import hash_request_body
 from app.db.models import Quote, ServiceEndpoint
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.service_repo import ServiceRepository
+from app.services.moderation_service import ModerationService, ServiceUnavailableError
 
 
 class QuoteNotFoundError(Exception):
@@ -26,11 +27,16 @@ class QuoteStaleError(Exception):
     pass
 
 
+class QuoteUnavailableError(Exception):
+    pass
+
+
 class QuoteService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._quote_repo = QuoteRepository(session)
         self._service_repo = ServiceRepository(session)
+        self._moderation_service = ModerationService(session)
 
     async def create_quote(
         self,
@@ -42,6 +48,11 @@ class QuoteService:
         service = await self._service_repo.get_public(service_id_or_slug=service_id_or_slug)
         if service is None:
             raise QuoteNotFoundError("service not found")
+        await self._ensure_service_is_listed(service.id)
+        self._ensure_contract_binding(
+            service_revision_id=service.current_revision_id,
+            service_change_token=service.current_change_token,
+        )
 
         endpoint = self._get_enabled_endpoint(service.endpoints, endpoint_key=endpoint_key)
         if endpoint is None:
@@ -88,6 +99,12 @@ class QuoteService:
         service = await self._service_repo.get_public(service_id_or_slug=str(quote.service_id))
         if service is None:
             raise QuoteStaleError("quote no longer matches current service state")
+        try:
+            await self._moderation_service.ensure_service_listed(service.id)
+        except ServiceUnavailableError as exc:
+            raise QuoteStaleError("quote no longer matches current service state") from exc
+        if service.current_revision_id is None or service.current_change_token is None:
+            raise QuoteStaleError("quote no longer matches current service state")
 
         endpoint = self._get_enabled_endpoint(service.endpoints, endpoint_key=quote.endpoint_key)
         if endpoint is None:
@@ -116,3 +133,18 @@ class QuoteService:
         if endpoint.pricing is not None:
             return endpoint.pricing.pricing_type
         return PricingModelType.FREE
+
+    async def _ensure_service_is_listed(self, service_id: int) -> None:
+        try:
+            await self._moderation_service.ensure_service_listed(service_id)
+        except ServiceUnavailableError as exc:
+            raise QuoteNotFoundError("service not found") from exc
+
+    def _ensure_contract_binding(
+        self,
+        *,
+        service_revision_id: int | None,
+        service_change_token: str | None,
+    ) -> None:
+        if service_revision_id is None or service_change_token is None:
+            raise QuoteUnavailableError("service contract is not quoteable")

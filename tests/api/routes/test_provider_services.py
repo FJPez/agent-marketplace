@@ -707,6 +707,89 @@ async def test_suspended_service_mutations_return_conflict(
 
 
 @pytest.mark.asyncio
+async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    admin_account_id = await _create_account(db_session_factory, is_admin=True)
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="moderated-active-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await _seed_pricing(db_session_factory, endpoint_id=endpoint_id)
+
+    suspend_response = await async_client.post(
+        f"/v1/admin/services/{service_id}/suspend",
+        headers=_auth_headers(admin_account_id),
+        json={"reason": "policy"},
+    )
+    timeout_response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"timeout_seconds": 60},
+    )
+    pricing_response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={
+            "pricing": {
+                "pricing_type": "fixed_per_call",
+                "amount_minor": 2500,
+                "currency": "GBP",
+            },
+        },
+    )
+
+    assert suspend_response.status_code == 201
+    assert timeout_response.status_code == 409
+    assert timeout_response.json() == {"detail": "service is suspended"}
+    assert pricing_response.status_code == 409
+    assert pricing_response.json() == {"detail": "service is suspended"}
+
+
+@pytest.mark.asyncio
+async def test_suspended_service_allows_descriptive_endpoint_updates(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    admin_account_id = await _create_account(db_session_factory, is_admin=True)
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="moderated-summary-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    suspend_response = await async_client.post(
+        f"/v1/admin/services/{service_id}/suspend",
+        headers=_auth_headers(admin_account_id),
+        json={"reason": "policy"},
+    )
+    summary_response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"summary": "Updated while suspended"},
+    )
+
+    assert suspend_response.status_code == 201
+    assert summary_response.status_code == 200
+    assert summary_response.json()["summary"] == "Updated while suspended"
+
+
+@pytest.mark.asyncio
 async def test_patch_active_provider_service_updates_non_material_metadata_without_revision(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -946,6 +1029,13 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
         "amount_minor": None,
         "currency": None,
     }
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+
+    assert service is not None
+    assert service.current_revision_id is not None
+    assert service.current_change_token is not None
 
 
 @pytest.mark.asyncio

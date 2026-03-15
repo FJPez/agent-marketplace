@@ -7,12 +7,17 @@ import pytest
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.services.moderation_service import (
+    ModerationServiceState,
+    ServiceUnavailableError,
+)
 from app.services.quote_service import (
     QuoteExpiredError,
     QuoteMismatchError,
     QuoteNotFoundError,
     QuoteService,
     QuoteStaleError,
+    QuoteUnavailableError,
 )
 
 if TYPE_CHECKING:
@@ -52,6 +57,12 @@ class FakeQuoteRepository:
             return None
         return self.quote
 
+    def add(self, **_: object) -> FakeQuote:
+        if self.quote is None:
+            msg = "quote not configured"
+            raise RuntimeError(msg)
+        return self.quote
+
 
 class FakeServiceRepository:
     def __init__(self, service: Service | None) -> None:
@@ -60,6 +71,18 @@ class FakeServiceRepository:
     async def get_public(self, *, service_id_or_slug: str) -> Service | None:
         _ = service_id_or_slug
         return self.service
+
+
+class FakeModerationService:
+    def __init__(self, *, unavailable: bool = False) -> None:
+        self.unavailable = unavailable
+
+    async def ensure_service_listed(self, service_id: int) -> None:
+        if self.unavailable:
+            raise ServiceUnavailableError(
+                service_id=service_id,
+                state=ModerationServiceState.SUSPENDED,
+            )
 
 
 def _service(
@@ -127,6 +150,7 @@ async def test_validate_quote_rejects_missing_quote() -> None:
     service = QuoteService(cast("AsyncSession", FakeSession()))
     service._quote_repo = FakeQuoteRepository(None)
     service._service_repo = FakeServiceRepository(_service())
+    service._moderation_service = FakeModerationService()
 
     with pytest.raises(QuoteNotFoundError, match="quote not found"):
         await service.validate_quote(
@@ -142,6 +166,7 @@ async def test_validate_quote_rejects_expired_quote() -> None:
         _quote(expires_at=datetime(2026, 3, 14, 11, 59, tzinfo=UTC)),
     )
     service._service_repo = FakeServiceRepository(_service())
+    service._moderation_service = FakeModerationService()
 
     with pytest.raises(QuoteExpiredError, match="quote has expired"):
         await service.validate_quote(
@@ -156,6 +181,7 @@ async def test_validate_quote_rejects_payload_hash_mismatch() -> None:
     service = QuoteService(cast("AsyncSession", FakeSession()))
     service._quote_repo = FakeQuoteRepository(_quote())
     service._service_repo = FakeServiceRepository(_service())
+    service._moderation_service = FakeModerationService()
 
     with pytest.raises(QuoteMismatchError, match="request hash does not match quote"):
         await service.validate_quote(
@@ -172,6 +198,7 @@ async def test_validate_quote_rejects_stale_revision_or_change_token() -> None:
     service._service_repo = FakeServiceRepository(
         _service(revision_id=12, change_token="c" * 64),
     )
+    service._moderation_service = FakeModerationService()
 
     with pytest.raises(QuoteStaleError, match="quote no longer matches current service state"):
         await service.validate_quote(
@@ -186,6 +213,7 @@ async def test_validate_quote_rejects_missing_endpoint() -> None:
     service = QuoteService(cast("AsyncSession", FakeSession()))
     service._quote_repo = FakeQuoteRepository(_quote(endpoint_key="translate"))
     service._service_repo = FakeServiceRepository(_service(endpoint_key="summarize"))
+    service._moderation_service = FakeModerationService()
 
     with pytest.raises(QuoteStaleError, match="quote no longer matches current service state"):
         await service.validate_quote(
@@ -196,11 +224,43 @@ async def test_validate_quote_rejects_missing_endpoint() -> None:
 
 
 @pytest.mark.asyncio
+async def test_validate_quote_rejects_moderated_service() -> None:
+    service = QuoteService(cast("AsyncSession", FakeSession()))
+    service._quote_repo = FakeQuoteRepository(_quote())
+    service._service_repo = FakeServiceRepository(_service())
+    service._moderation_service = FakeModerationService(unavailable=True)
+
+    with pytest.raises(QuoteStaleError, match="quote no longer matches current service state"):
+        await service.validate_quote(
+            quote_id=1,
+            payload={"message": "hello"},
+            now=datetime(2026, 3, 14, 12, 0, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_quote_rejects_missing_contract_binding() -> None:
+    quote = _quote()
+    service = QuoteService(cast("AsyncSession", FakeSession()))
+    service._quote_repo = FakeQuoteRepository(quote)
+    service._service_repo = FakeServiceRepository(_service(revision_id=None, change_token=None))
+    service._moderation_service = FakeModerationService()
+
+    with pytest.raises(QuoteUnavailableError, match="service contract is not quoteable"):
+        await service.create_quote(
+            service_id_or_slug="quote-service",
+            endpoint_key="translate",
+            payload={"message": "hello"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_validate_quote_accepts_matching_quote() -> None:
     quote = _quote()
     service = QuoteService(cast("AsyncSession", FakeSession()))
     service._quote_repo = FakeQuoteRepository(quote)
     service._service_repo = FakeServiceRepository(_service())
+    service._moderation_service = FakeModerationService()
 
     validated = await service.validate_quote(
         quote_id=1,
