@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -14,7 +14,6 @@ from app.db.models import (
     ServiceEndpoint,
     ServiceRevision,
 )
-from app.services.quote_service import DEFAULT_QUOTE_TTL
 
 
 async def _create_provider_account(
@@ -137,7 +136,9 @@ async def test_create_quote_returns_snapshot_for_active_public_endpoint(
     assert body["service_change_token"] == "a" * 64
 
     expires_at = datetime.fromisoformat(body["expires_at"].replace("Z", "+00:00"))
-    assert before_request + DEFAULT_QUOTE_TTL <= expires_at <= after_request + DEFAULT_QUOTE_TTL
+    assert (
+        before_request + timedelta(minutes=5) <= expires_at <= after_request + timedelta(minutes=5)
+    )
 
 
 @pytest.mark.asyncio
@@ -290,4 +291,64 @@ async def test_create_quote_persists_quote_record(
     assert quote.endpoint_id == endpoint_id
     assert quote.endpoint_key == "translate"
     assert quote.expires_at > quote.created_at
-    assert quote.expires_at - quote.created_at == DEFAULT_QUOTE_TTL
+    ttl_delta = quote.expires_at - quote.created_at
+    assert timedelta(minutes=4, seconds=59) <= ttl_delta <= timedelta(minutes=5, seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_create_quote_works_with_authenticated_consumer(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="auth-quote-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    async with db_session_factory.begin() as session:
+        account = Account()
+        session.add(account)
+        await session.flush()
+        account_id = account.id
+
+    response = await async_client.post(
+        f"/v1/services/{service_id}/quote",
+        headers={"X-Account-Id": str(account_id)},
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_create_quote_returns_not_found_for_draft_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="draft-quote-service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    response = await async_client.post(
+        f"/v1/services/{service_id}/quote",
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "service not found"}
