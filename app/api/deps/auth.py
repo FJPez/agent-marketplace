@@ -15,6 +15,10 @@ def _unauthorized(detail: str) -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
 
 
+def _forbidden(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 def _parse_account_id(x_account_id: str) -> int:
     try:
         account_id = int(x_account_id)
@@ -34,10 +38,11 @@ async def _build_actor_context(
 ) -> ActorContext:
     account_id = _parse_account_id(x_account_id)
     account_repo = AccountRepository(session)
-    if not await account_repo.exists(account_id):
+    account = await account_repo.get(account_id)
+    if account is None:
         raise _unauthorized("authenticated account does not exist")
 
-    return ActorContext(account_id=account_id)
+    return ActorContext(account_id=account.id, is_admin=account.is_admin)
 
 
 async def get_optional_current_actor(
@@ -61,5 +66,14 @@ async def get_current_actor(
     return await _build_actor_context(session, x_account_id=x_account_id)
 
 
+async def get_admin_actor(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
+) -> ActorContext:
+    if not actor.is_admin:
+        raise _forbidden("admin privileges required")
+    return actor
+
+
 CurrentActor = Annotated[ActorContext, Depends(get_current_actor)]
 OptionalCurrentActor = Annotated[ActorContext | None, Depends(get_optional_current_actor)]
+AdminActor = Annotated[ActorContext, Depends(get_admin_actor)]
