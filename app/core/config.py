@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     debug: bool = False
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
     quote_ttl_seconds: int = 300
+    x402_facilitator_url: str = "https://x402.org/facilitator"
+    x402_network: str = "base-sepolia"
+    x402_network_caip2: str = "eip155:84532"
+    x402_pay_to_address: str | None = None
 
 
 @lru_cache
