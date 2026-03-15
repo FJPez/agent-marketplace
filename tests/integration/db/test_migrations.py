@@ -12,6 +12,7 @@ DOMAIN_TABLES = {
     "pricing_models",
     "provider_profiles",
     "provider_upstreams",
+    "quotes",
     "service_endpoints",
     "service_revisions",
     "service_health_checks",
@@ -177,6 +178,27 @@ async def get_pricing_table_specs(
         )
 
     return {column["name"]: column for column in columns}, foreign_keys, check_constraints
+
+
+async def get_quote_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("quotes"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys("quotes"),
+        )
+        indexes = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_indexes("quotes"),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys, indexes
 
 
 async def get_identity_column_specs(
@@ -449,6 +471,17 @@ def test_service_revisions_migration_uses_branch_specific_revision_id(
     )
 
 
+def test_quotes_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    revision = script.get_revision("quotes_0005")
+
+    assert revision is not None
+    assert revision.revision == "quotes_0005"
+    assert revision.path.endswith("quotes_0005_create_quotes.py")
+
+
 def test_migrations_upgrade_creates_service_revisions_and_current_revision_fields(
     alembic_config: Config,
     db_engine: AsyncEngine,
@@ -543,3 +576,43 @@ def test_migrations_upgrade_creates_pricing_models_table(
     assert any(
         "fixed_per_call" in str(constraint.get("sqltext")) for constraint in check_constraints
     )
+
+
+def test_migrations_upgrade_creates_quotes_table(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys, indexes = asyncio.run(get_quote_table_specs(db_engine))
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert columns.keys() >= {
+        "id",
+        "service_id",
+        "endpoint_id",
+        "endpoint_key",
+        "request_hash",
+        "pricing_type",
+        "amount_minor",
+        "currency",
+        "service_revision_id",
+        "service_change_token",
+        "expires_at",
+        "created_at",
+    }
+    assert any(
+        foreign_key["referred_table"] == "services"
+        and foreign_key["constrained_columns"] == ["service_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "service_endpoints"
+        and foreign_key["constrained_columns"] == ["endpoint_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(index["column_names"] == ["service_id"] for index in indexes)
+    assert any(index["column_names"] == ["endpoint_id"] for index in indexes)

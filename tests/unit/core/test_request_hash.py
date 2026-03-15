@@ -47,3 +47,32 @@ def test_hash_request_body_rejects_non_json_compatible_values(
 ) -> None:
     with pytest.raises(ValueError, match="JSON-compatible"):
         hash_request_body(payload)
+
+
+def test_hash_is_deterministic() -> None:
+    body = {"b": 2, "a": 1}
+    assert hash_request_body(body) == hash_request_body(body)
+
+
+def test_hash_is_key_order_independent() -> None:
+    assert hash_request_body({"a": 1, "b": 2}) == hash_request_body({"b": 2, "a": 1})
+
+
+def test_hash_is_64_char_hex() -> None:
+    result = hash_request_body({"key": "value"})
+    assert len(result) == 64
+    assert all(c in "0123456789abcdef" for c in result)
+
+
+def test_hash_rejects_non_json_serializable_input() -> None:
+    with pytest.raises(ValueError, match="request body must be JSON-compatible"):
+        hash_request_body({"func": lambda x: x})
+
+
+def test_different_payloads_produce_different_hashes() -> None:
+    assert hash_request_body({"a": 1}) != hash_request_body({"a": 2})
+
+
+def test_empty_object_is_hashable() -> None:
+    result = hash_request_body({})
+    assert len(result) == 64
