@@ -10,6 +10,10 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+from app.services.service_health_service import (
+    ServiceHealthCheckFailedError,
+    ServiceHealthService,
+)
 
 
 def validate_service_for_publish(service: Service) -> None:
@@ -43,6 +47,7 @@ class PublishService:
         self._session = session
         self._provider_profile_repo = ProviderProfileRepository(session)
         self._service_repo = ServiceRepository(session)
+        self._service_health_service = ServiceHealthService(session)
 
     async def publish_service(
         self,
@@ -61,6 +66,12 @@ class PublishService:
             raise ProviderServiceStateError("service is not publishable outside draft")
 
         validate_service_for_publish(service)
+        try:
+            await self._service_health_service.ensure_publish_ready(service_id=service.id)
+        except ServiceHealthCheckFailedError as exc:
+            raise ProviderServiceValidationError(
+                "service failed latest publish-readiness health check",
+            ) from exc
         self._service_repo.set_lifecycle(service, lifecycle=ServiceLifecycle.ACTIVE)
         await self._session.commit()
 
