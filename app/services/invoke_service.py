@@ -153,18 +153,12 @@ class InvokeService:
         resolved: ResolvedInvokeTarget,
         idempotency_key: str,
     ) -> Invocation:
-        existing = await self._invocation_repo.get_by_idempotency_key(
-            consumer_account_id=actor.account_id,
+        existing = await self.get_replayable_invocation(
+            actor,
             idempotency_key=idempotency_key,
+            request_hash=resolved.request_hash,
         )
         if existing is not None:
-            if existing.request_hash != resolved.request_hash:
-                raise InvokeConflictError("idempotency key already used for a different request")
-            if existing.status is InvocationStatus.FAILED:
-                if existing.error_message == "upstream request timed out":
-                    raise InvokeGatewayTimeoutError("upstream request timed out")
-                message = existing.error_message or "upstream request failed"
-                raise InvokeBadGatewayError(message)
             return existing
 
         invocation = self._invocation_repo.add(
@@ -235,6 +229,28 @@ class InvokeService:
     async def list_invocations(self, actor: ActorContext) -> list[Invocation]:
         await self._require_consumer_profile(actor.account_id)
         return await self._invocation_repo.list_for_consumer(consumer_account_id=actor.account_id)
+
+    async def get_replayable_invocation(
+        self,
+        actor: ActorContext,
+        *,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> Invocation | None:
+        existing = await self._invocation_repo.get_by_idempotency_key(
+            consumer_account_id=actor.account_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is None:
+            return None
+        if existing.request_hash != request_hash:
+            raise InvokeConflictError("idempotency key already used for a different request")
+        if existing.status is InvocationStatus.FAILED:
+            if existing.error_message == "upstream request timed out":
+                raise InvokeGatewayTimeoutError("upstream request timed out")
+            message = existing.error_message or "upstream request failed"
+            raise InvokeBadGatewayError(message)
+        return existing
 
     async def _require_consumer_profile(self, account_id: int) -> None:
         profile = await self._consumer_profile_repo.get_by_account_id(account_id)

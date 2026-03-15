@@ -22,6 +22,8 @@ def test_create_app_starts_with_lifespan_state() -> None:
         assert state.db_engine is not None
         assert state.db_session_factory is not None
         assert state.http_client is not None
+        assert state.facilitator_client is not None
+        assert state.x402_resource_server is not None
         assert state.telemetry is None
 
     assert not hasattr(app.state, "app_state")

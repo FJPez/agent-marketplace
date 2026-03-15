@@ -1,6 +1,7 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
@@ -16,6 +17,13 @@ from app.services.invoke_service import (
     InvokeNotFoundError,
     InvokeService,
     InvokeUnavailableError,
+)
+from app.services.payment_service import (
+    PaidInvokeSuccess,
+    PaymentRequiredChallenge,
+    PaymentService,
+    SupportsFacilitatorClient,
+    SupportsX402ResourceServer,
 )
 
 router = APIRouter(tags=["invoke"])
@@ -43,18 +51,42 @@ def _get_http_client(request: Request) -> SupportsRequest:
     return http_client
 
 
+def _get_facilitator_client(request: Request) -> SupportsFacilitatorClient:
+    facilitator_client = get_app_state(request.app).facilitator_client
+    if facilitator_client is None or not isinstance(facilitator_client, SupportsFacilitatorClient):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="facilitator client is not initialized",
+        )
+    return facilitator_client
+
+
+def _get_x402_resource_server(request: Request) -> SupportsX402ResourceServer:
+    x402_resource_server = get_app_state(request.app).x402_resource_server
+    if x402_resource_server is None or not isinstance(
+        x402_resource_server,
+        SupportsX402ResourceServer,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="x402 resource server is not initialized",
+        )
+    return x402_resource_server
+
+
 @router.post("/invoke/{service_id_or_slug}", response_model=InvocationResponse)
 async def invoke_service(
     service_id_or_slug: str,
     request: InvokeRequest,
     actor: CurrentActor,
     fastapi_request: Request,
+    response: Response,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-) -> InvocationResponse:
-    service = InvokeService(session, http_client=_get_http_client(fastapi_request))
+) -> InvocationResponse | JSONResponse:
+    invoke_service = InvokeService(session, http_client=_get_http_client(fastapi_request))
     try:
-        resolved = await service.resolve_target(
+        resolved = await invoke_service.resolve_target(
             actor,
             service_id_or_slug=service_id_or_slug,
             endpoint_key=request.endpoint_key,
@@ -62,12 +94,35 @@ async def invoke_service(
             quote_id=request.quote_id,
         )
         if resolved.endpoint.access_mode is AccessMode.PAID:
-            raise InvokeConflictError("paid invoke requires x402 payment flow")
-        invocation = await service.execute(
-            actor,
-            resolved=resolved,
-            idempotency_key=idempotency_key,
-        )
+            payment_service = PaymentService(
+                session,
+                http_client=_get_http_client(fastapi_request),
+                facilitator_client=_get_facilitator_client(fastapi_request),
+                x402_resource_server=_get_x402_resource_server(fastapi_request),
+                settings=get_app_state(fastapi_request.app).settings,
+            )
+            paid_result = await payment_service.handle_paid_invoke(
+                actor,
+                resolved=resolved,
+                idempotency_key=idempotency_key,
+                request_headers=dict(fastapi_request.headers),
+            )
+            if isinstance(paid_result, PaymentRequiredChallenge):
+                return JSONResponse(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    content=paid_result.body,
+                    headers=paid_result.headers,
+                )
+            assert isinstance(paid_result, PaidInvokeSuccess)
+            for header_name, header_value in paid_result.response_headers.items():
+                response.headers[header_name] = header_value
+            invocation = paid_result.invocation
+        else:
+            invocation = await invoke_service.execute(
+                actor,
+                resolved=resolved,
+                idempotency_key=idempotency_key,
+            )
     except (
         InvokeBadGatewayError,
         InvokeConflictError,
