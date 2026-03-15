@@ -101,8 +101,33 @@ Then read the docs most relevant to the assigned branch.
 
 ## Prompts
 
-- `PROMPTS/phase-0-bootstrap.md`
-  - first handoff prompt for the bootstrap branch
+- Phase 0
+  - `PROMPTS/phase-0-bootstrap.md`
+  - `PROMPTS/phase-0-config-and-lifespan.md`
+  - `PROMPTS/phase-0-database-core.md`
+  - `PROMPTS/phase-0-shared-domain-primitives.md`
+- Phase 1
+  - `PROMPTS/phase-1-auth-and-identity.md`
+  - `PROMPTS/phase-1-observability-and-audit-initial.md`
+- Phase 2
+  - `PROMPTS/phase-2-moderation-admin.md`
+  - `PROMPTS/phase-2-parallel-coordination.md`
+  - `PROMPTS/phase-2-provider-services.md`
+  - `PROMPTS/phase-2-service-health.md`
+- Phase 3
+  - `PROMPTS/phase-3-discovery-api.md`
+  - `PROMPTS/phase-3-parallel-coordination.md`
+  - `PROMPTS/phase-3-pricing-and-publish.md`
+  - `PROMPTS/phase-3-revisions-and-change-tokens.md`
+- Phase 4
+  - `PROMPTS/phase-4-moderation-admin-completion.md`
+  - `PROMPTS/phase-4-parallel-coordination.md`
+  - `PROMPTS/phase-4-quote-flow.md`
+  - `PROMPTS/phase-4-service-health-completion.md`
+- Phase 5
+  - `PROMPTS/phase-5-coordination.md`
+  - `PROMPTS/phase-5-invoke-core.md`
+  - `PROMPTS/phase-5-x402-payment.md`
 
 ## Suggested usage
 
