@@ -962,6 +962,38 @@ async def test_publish_service_rejects_service_with_failed_latest_publish_readin
 
 
 @pytest.mark.asyncio
+async def test_publish_succeeds_with_passing_health_check(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="healthy-publish",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="healthy-ep",
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await _seed_health_check(
+        db_session_factory,
+        service_id=service_id,
+        status=ServiceHealthStatus.PASS,
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["lifecycle"] == "active"
+
+
+@pytest.mark.asyncio
 async def test_publish_service_rejects_already_active_service(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
