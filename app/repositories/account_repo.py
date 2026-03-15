@@ -18,3 +18,6 @@ class AccountRepository:
         statement = select(Account.id).where(Account.id == account_id).limit(1)
         result = await self._session.scalar(statement)
         return result is not None
+
+    async def get(self, account_id: int) -> Account | None:
+        return await self._session.get(Account, account_id)

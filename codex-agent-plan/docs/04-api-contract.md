@@ -71,6 +71,9 @@
 - `GET /v1/services/{service_id_or_slug}/pricing`
 - optional `GET /v1/services/{service_id_or_slug}/health`
 
+For discovery routes using `{service_id_or_slug}`, an all-digit path segment is
+resolved as `service_id` only and does not fall back to slug matching.
+
 ## Quote and invoke routes
 
 - `POST /v1/services/{service_id_or_slug}/quote`

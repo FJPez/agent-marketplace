@@ -1,3 +1,4 @@
+import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from app.core.config import Settings
 
 TEST_DATABASE_SUFFIX = "_test"
 DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+RUN_ID_PATTERN = re.compile(r"[^A-Za-z0-9_]+")
 
 
 def get_test_database_url(database_url: str | None = None) -> str:
@@ -20,7 +22,9 @@ def get_test_database_url(database_url: str | None = None) -> str:
         msg = "database URL is missing a database name"
         raise RuntimeError(msg)
 
-    return url.set(database=f"{database_name}{TEST_DATABASE_SUFFIX}").render_as_string(
+    run_id = _build_test_run_id()
+
+    return url.set(database=f"{database_name}{TEST_DATABASE_SUFFIX}_{run_id}").render_as_string(
         hide_password=False,
     )
 
@@ -49,10 +53,18 @@ def get_database_name(database_url: str) -> str:
 
 def require_test_database_url(database_url: str) -> str:
     database_name = get_database_name(database_url)
-    if not database_name.endswith(TEST_DATABASE_SUFFIX):
+    if not (
+        database_name.endswith(TEST_DATABASE_SUFFIX) or f"{TEST_DATABASE_SUFFIX}_" in database_name
+    ):
         msg = "database integration tests must use a dedicated *_test database"
         raise RuntimeError(msg)
     return database_url
+
+
+def _build_test_run_id() -> str:
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "local")
+    sanitized_worker_id = RUN_ID_PATTERN.sub("_", worker_id).strip("_") or "local"
+    return f"{sanitized_worker_id}_{os.getpid()}"
 
 
 @asynccontextmanager

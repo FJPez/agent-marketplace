@@ -5,8 +5,13 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import ServiceHealthStatus
+from app.core.logging import SERVICE_ID_FIELD, get_logger
 from app.db.models import ServiceHealthCheck
 from app.repositories.service_health_check_repo import ServiceHealthCheckRepository
+
+logger = get_logger(__name__)
+PUBLISH_READINESS_CHECK_NAME = "publish-readiness"
+HEALTH_CHECK_FAILURE_SUMMARY = "health check failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +44,13 @@ class ServiceHealthCheckStore(Protocol):
         service_id: int,
         check_name: str,
     ) -> ServiceHealthCheck | None: ...
+
+
+class ServiceHealthCheckFailedError(Exception):
+    def __init__(self, *, service_id: int, status: ServiceHealthStatus) -> None:
+        self.service_id = service_id
+        self.status = status
+        super().__init__("latest health check is not passing")
 
 
 class ServiceHealthService:
@@ -82,10 +94,13 @@ class ServiceHealthService:
         try:
             outcome = await checker.run(service_id=service_id)
         except Exception as exc:
-            summary = str(exc) or "checker execution failed"
+            logger.exception(
+                "service health check failed",
+                extra={SERVICE_ID_FIELD: service_id, "check_name": check_name},
+            )
             outcome = ServiceHealthOutcome(
-                status=ServiceHealthStatus.ERROR,
-                summary=summary,
+                status=ServiceHealthStatus.FAIL,
+                summary=HEALTH_CHECK_FAILURE_SUMMARY,
                 details={"error_type": exc.__class__.__name__},
             )
 
@@ -104,4 +119,16 @@ class ServiceHealthService:
         return await self._service_health_check_repo.get_latest_for_service_check(
             service_id=service_id,
             check_name=check_name,
+        )
+
+    async def ensure_publish_ready(self, *, service_id: int) -> None:
+        latest_check = await self.get_latest_check(
+            service_id=service_id,
+            check_name=PUBLISH_READINESS_CHECK_NAME,
+        )
+        if latest_check is None or latest_check.status is ServiceHealthStatus.PASS:
+            return
+        raise ServiceHealthCheckFailedError(
+            service_id=service_id,
+            status=latest_check.status,
         )

@@ -42,3 +42,27 @@ class ModerationActionRepository:
             .limit(1)
         )
         return await self._session.scalar(statement)
+
+    async def get_latest_for_services(
+        self,
+        service_ids: list[int],
+    ) -> dict[int, ModerationAction]:
+        if not service_ids:
+            return {}
+        from sqlalchemy import func
+
+        subquery = (
+            select(
+                ModerationAction.service_id,
+                func.max(ModerationAction.id).label("max_id"),
+            )
+            .where(ModerationAction.service_id.in_(service_ids))
+            .group_by(ModerationAction.service_id)
+            .subquery()
+        )
+        statement = select(ModerationAction).join(
+            subquery,
+            ModerationAction.id == subquery.c.max_id,
+        )
+        result = await self._session.scalars(statement)
+        return {action.service_id: action for action in result}

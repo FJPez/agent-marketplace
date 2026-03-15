@@ -4,6 +4,7 @@ from app.db.models.moderation_action import ModerationAction
 from app.db.models.pricing_model import PricingModel
 from app.db.models.provider_profile import ProviderProfile
 from app.db.models.provider_upstream import ProviderUpstream
+from app.db.models.quote import Quote
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_health_check import ServiceHealthCheck
@@ -17,6 +18,7 @@ __all__ = [
     "PricingModel",
     "ProviderProfile",
     "ProviderUpstream",
+    "Quote",
     "Service",
     "ServiceEndpoint",
     "ServiceHealthCheck",

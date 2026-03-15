@@ -81,8 +81,13 @@ Identity profile notes:
 ## Phase 2 implementation notes
 
 - `services.slug` is currently globally unique.
+- `services.slug` uses lowercase slug-token format and must include at least one
+  lowercase letter, so numeric-only slug values are invalid.
 - `service_tags` are stored as lowercase slug tokens and replaced as a full set.
 - `service_endpoints.key` is unique per service.
+- `service_endpoints.key` uses the same lowercase slug-token format and must
+  include at least one lowercase letter, so numeric-only key values are
+  invalid.
 - `provider_upstreams` are stored privately and are not exposed in API response models.
 - `moderation_actions.service_id` is currently a scalar reference with no ORM relationship or DB foreign key to `services`.
 - `moderation_actions.actor_account_id` is nullable and uses `ON DELETE SET NULL`.

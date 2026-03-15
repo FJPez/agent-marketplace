@@ -90,6 +90,10 @@ class ServiceRepository:
         result = await self._session.scalars(statement)
         return list(result.all())
 
+    async def get_by_id(self, *, service_id: int) -> Service | None:
+        statement = _service_with_relations().where(Service.id == service_id)
+        return await self._session.scalar(statement)
+
     async def get_public(self, *, service_id_or_slug: str) -> Service | None:
         statement = _service_with_relations().where(
             Service.lifecycle == ServiceLifecycle.ACTIVE,

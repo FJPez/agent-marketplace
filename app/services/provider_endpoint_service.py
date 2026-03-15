@@ -18,13 +18,14 @@ from app.schemas.service import (
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
 )
+from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.provider_service_errors import (
     ProviderServiceConflictError,
     ProviderServiceNotFoundError,
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
-from app.services.revision_service import RevisionService
+from app.services.revision_service import RevisionService, UpdateImpact
 
 
 class _EndpointUpdateFields(TypedDict, total=False):
@@ -46,6 +47,7 @@ class ProviderEndpointService:
         self._endpoint_repo = ServiceEndpointRepository(session)
         self._pricing_repo = PricingModelRepository(session)
         self._upstream_repo = ProviderUpstreamRepository()
+        self._moderation_service = ModerationService(session)
         self._revision_service = RevisionService(session)
 
     async def create_endpoint(
@@ -159,7 +161,10 @@ class ProviderEndpointService:
             revision_fields["is_enabled"] = raw_update_fields["is_enabled"]
         if "pricing" in raw_update_fields:
             revision_fields["pricing"] = raw_update_fields["pricing"]
-        self._ensure_endpoint_update_allowed(service)
+        await self._ensure_endpoint_update_allowed(
+            service,
+            update_fields=revision_fields,
+        )
         self._endpoint_repo.update_endpoint(
             endpoint,
             **update_fields,
@@ -259,8 +264,24 @@ class ProviderEndpointService:
         if service.lifecycle is not ServiceLifecycle.DRAFT:
             raise ProviderServiceStateError("service is not mutable outside draft")
 
-    def _ensure_endpoint_update_allowed(self, service: Service) -> None:
-        if service.lifecycle in {ServiceLifecycle.DRAFT, ServiceLifecycle.ACTIVE}:
+    async def _ensure_endpoint_update_allowed(
+        self,
+        service: Service,
+        *,
+        update_fields: dict[str, object],
+    ) -> None:
+        if service.lifecycle is ServiceLifecycle.DRAFT:
+            return
+        if service.lifecycle is ServiceLifecycle.ACTIVE:
+            if (
+                self._revision_service.classify_endpoint_update(update_fields)
+                is not UpdateImpact.MATERIAL
+            ):
+                return
+            try:
+                await self._moderation_service.ensure_service_publishable(service.id)
+            except ServiceUnavailableError as exc:
+                raise ProviderServiceStateError(f"service is {exc.state.value}") from exc
             return
         raise ProviderServiceStateError("service is not mutable outside draft")
 
