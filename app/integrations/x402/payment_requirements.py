@@ -12,7 +12,10 @@ def build_payment_requirement(
     network_caip2: str,
 ) -> dict[str, object]:
     if pay_to_address is None:
-        raise PaymentRequirementConfigError("payment configuration is incomplete")
+        raise PaymentRequirementConfigError(
+            "payment configuration is incomplete: "
+            "APP_X402_PAY_TO_ADDRESS is required for paid invokes",
+        )
     if currency != "USD":
         raise PaymentRequirementConfigError("payment currency is not supported")
 
