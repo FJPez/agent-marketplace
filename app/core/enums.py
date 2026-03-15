@@ -24,6 +24,11 @@ class PricingModelType(StrEnum):
     FIXED_PER_CALL = "fixed_per_call"
 
 
+class InvocationStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"

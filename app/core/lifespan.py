@@ -3,6 +3,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import FastAPI
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.types import Lifespan
 
@@ -32,6 +33,8 @@ async def _init_app_state(state: AppState) -> None:
     state.db_engine = create_engine(state.settings)
     state.db_session_factory = create_session_factory(state.db_engine)
     state.stack.push_async_callback(state.db_engine.dispose)
+    state.http_client = AsyncClient()
+    state.stack.push_async_callback(state.http_client.aclose)
 
 
 def create_lifespan(settings: Settings) -> Lifespan[FastAPI]:

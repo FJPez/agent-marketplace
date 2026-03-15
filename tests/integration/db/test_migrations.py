@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 DOMAIN_TABLES = {
     "accounts",
     "consumer_profiles",
+    "invocations",
     "moderation_actions",
     "pricing_models",
     "provider_profiles",
@@ -199,6 +200,31 @@ async def get_quote_table_specs(
         )
 
     return {column["name"]: column for column in columns}, foreign_keys, indexes
+
+
+async def get_invocation_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("invocations"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys("invocations"),
+        )
+        indexes = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_indexes("invocations"),
+        )
+        check_constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_check_constraints("invocations"),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys, indexes, check_constraints
 
 
 async def get_identity_column_specs(
@@ -616,3 +642,68 @@ def test_migrations_upgrade_creates_quotes_table(
     )
     assert any(index["column_names"] == ["service_id"] for index in indexes)
     assert any(index["column_names"] == ["endpoint_id"] for index in indexes)
+
+
+def test_invoke_core_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    revision = script.get_revision("invoke_core_0006")
+
+    assert revision is not None
+    assert revision.revision == "invoke_core_0006"
+    assert revision.path.endswith("invoke_core_0006_create_invocations.py")
+
+
+def test_migrations_upgrade_creates_invocations_table(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys, indexes, check_constraints = asyncio.run(
+            get_invocation_table_specs(db_engine),
+        )
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert columns.keys() >= {
+        "id",
+        "consumer_account_id",
+        "service_id",
+        "endpoint_id",
+        "endpoint_key",
+        "access_mode",
+        "quote_id",
+        "idempotency_key",
+        "request_hash",
+        "status",
+        "response_payload",
+        "upstream_status_code",
+        "error_message",
+        "created_at",
+    }
+    assert any(
+        foreign_key["referred_table"] == "accounts"
+        and foreign_key["constrained_columns"] == ["consumer_account_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "services"
+        and foreign_key["constrained_columns"] == ["service_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "service_endpoints"
+        and foreign_key["constrained_columns"] == ["endpoint_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(index["column_names"] == ["consumer_account_id"] for index in indexes)
+    assert any(index["column_names"] == ["service_id"] for index in indexes)
+    assert any(index["column_names"] == ["endpoint_id"] for index in indexes)
+    assert any(index["column_names"] == ["quote_id"] for index in indexes)
+    assert any(
+        "succeeded" in str(constraint.get("sqltext", "")) for constraint in check_constraints
+    )
