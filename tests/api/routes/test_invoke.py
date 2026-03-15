@@ -467,3 +467,54 @@ async def test_invoke_maps_upstream_timeout_to_504(
     )
 
     assert response.status_code == 504
+
+
+@pytest.mark.asyncio
+async def test_failed_invoke_replays_original_gateway_error_without_second_upstream_call(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    _ = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+
+    class _TimeoutingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+            **kwargs: int,
+        ) -> Response:
+            _ = (method, url, json, headers, kwargs)
+            self.calls += 1
+            raise TimeoutException("boom")
+
+        async def aclose(self) -> None:
+            return None
+
+    fake_http_client = _TimeoutingClient()
+    get_app_state(app).http_client = fake_http_client
+
+    first = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+    second = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert first.status_code == 504
+    assert second.status_code == 504
+    assert second.json() == {"detail": "upstream request timed out"}
+    assert fake_http_client.calls == 1

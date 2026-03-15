@@ -160,6 +160,11 @@ class InvokeService:
         if existing is not None:
             if existing.request_hash != resolved.request_hash:
                 raise InvokeConflictError("idempotency key already used for a different request")
+            if existing.status is InvocationStatus.FAILED:
+                if existing.error_message == "upstream request timed out":
+                    raise InvokeGatewayTimeoutError("upstream request timed out")
+                message = existing.error_message or "upstream request failed"
+                raise InvokeBadGatewayError(message)
             return existing
 
         invocation = self._invocation_repo.add(
