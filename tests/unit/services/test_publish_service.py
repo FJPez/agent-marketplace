@@ -48,7 +48,13 @@ def _build_endpoint(
             base_url="https://provider.internal",
             path="/translate",
             http_method="POST",
-            config={},
+            config={
+                "auth": {
+                    "type": "hmac_sha256",
+                    "key_id": "gateway-key",
+                    "secret": "super-secret",
+                },
+            },
         )
     endpoint.pricing = pricing
     return endpoint
@@ -104,6 +110,19 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_p
     )
 
     validate_service_for_publish(service)
+
+
+def test_validate_service_for_publish_rejects_missing_hmac_auth_config() -> None:
+    endpoint = _build_endpoint()
+    assert endpoint.upstream is not None
+    endpoint.upstream.config = {}
+    service = _build_service(endpoints=[endpoint])
+
+    with pytest.raises(
+        ProviderServiceValidationError,
+        match="must define hmac auth config before publish",
+    ):
+        validate_service_for_publish(service)
 
 
 def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoints() -> None:

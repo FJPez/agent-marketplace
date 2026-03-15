@@ -28,6 +28,12 @@ Do not use x402 as the owner of:
 - moderation policy
 - ledger behaviour
 
+Use the Base Sepolia testnet:
+
+- Name: base-sepolia
+- V2 CAIP-2 ID: eip155:84532
+- Chain ID: 84532
+
 ## Python and FastAPI notes
 
 The project should be compatible with the official Python x402 support for FastAPI.
@@ -79,3 +85,17 @@ Create an interface such as `FacilitatorClient` so that:
 7. Verify and settle through facilitator logic.
 8. Only then call provider upstream.
 9. Persist payment attempt and invocation outcome.
+
+## Useful Documentation
+
+- [request info](https://docs.x402.org/core-concepts/http-402)
+- [client/server info](https://docs.x402.org/core-concepts/client-server)
+- [facilitator](https://docs.x402.org/core-concepts/facilitator)
+- [payment identifier](https://docs.x402.org/extensions/payment-identifier)
+- [lifecycle hooks](https://docs.x402.org/advanced-concepts/lifecycle-hooks)
+
+## Useful Examples
+
+- [Custom flow](https://github.com/coinbase/x402/blob/main/examples/python/servers/custom/main.py)
+- [Payment identifier](https://github.com/coinbase/x402/blob/main/examples/python/servers/payment-identifier/main.py)
+- [Hooks](https://github.com/coinbase/x402/blob/main/examples/python/servers/advanced/hooks.py)

@@ -24,6 +24,17 @@ class PricingModelType(StrEnum):
     FIXED_PER_CALL = "fixed_per_call"
 
 
+class InvocationStatus(StrEnum):
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class InvocationFailureReason(StrEnum):
+    UPSTREAM_TIMEOUT = "upstream_timeout"
+    UPSTREAM_TRANSPORT = "upstream_transport"
+    UPSTREAM_RESPONSE = "upstream_response"
+
+
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"

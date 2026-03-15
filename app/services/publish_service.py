@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.actor import ActorContext
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models.service import Service
+from app.integrations.provider_gateway.signing import get_hmac_auth_config
 from app.repositories.provider_profile_repo import ProviderProfileRepository
 from app.repositories.service_repo import ServiceRepository
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
@@ -34,6 +35,10 @@ def validate_service_for_publish(service: Service) -> None:
         if endpoint.upstream is None:
             raise ProviderServiceValidationError(
                 f"enabled endpoint '{endpoint.key}' must define upstream before publish",
+            )
+        if get_hmac_auth_config(endpoint.upstream.config) is None:
+            raise ProviderServiceValidationError(
+                f"enabled endpoint '{endpoint.key}' must define hmac auth config before publish",
             )
         if endpoint.access_mode is AccessMode.PAID and (
             endpoint.pricing is None
