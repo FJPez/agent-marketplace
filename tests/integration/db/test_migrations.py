@@ -10,6 +10,7 @@ DOMAIN_TABLES = {
     "consumer_profiles",
     "invocations",
     "moderation_actions",
+    "payment_attempts",
     "pricing_models",
     "provider_profiles",
     "provider_upstreams",
@@ -242,6 +243,27 @@ async def get_identity_column_specs(
         {column["name"]: column for column in provider_columns},
         {column["name"]: column for column in consumer_columns},
     )
+
+
+async def get_payment_attempt_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("payment_attempts"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys("payment_attempts"),
+        )
+        indexes = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_indexes("payment_attempts"),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys, indexes
 
 
 async def seed_identity_rows_at_revision_0001(db_engine: AsyncEngine) -> None:
@@ -707,3 +729,60 @@ def test_migrations_upgrade_creates_invocations_table(
     assert any(
         "succeeded" in str(constraint.get("sqltext", "")) for constraint in check_constraints
     )
+
+
+def test_x402_payment_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    revision = script.get_revision("x402_payment_0007")
+
+    assert revision is not None
+    assert revision.revision == "x402_payment_0007"
+    assert revision.path.endswith("x402_payment_0007_create_payment_attempts.py")
+
+
+def test_migrations_upgrade_creates_payment_attempts_table(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys, indexes = asyncio.run(get_payment_attempt_table_specs(db_engine))
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert columns.keys() >= {
+        "id",
+        "consumer_account_id",
+        "quote_id",
+        "invocation_id",
+        "idempotency_key",
+        "payment_identifier",
+        "payment_requirement",
+        "payment_payload",
+        "verify_outcome",
+        "settle_outcome",
+        "facilitator_reference",
+        "created_at",
+    }
+    assert any(
+        foreign_key["referred_table"] == "accounts"
+        and foreign_key["constrained_columns"] == ["consumer_account_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "quotes"
+        and foreign_key["constrained_columns"] == ["quote_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "invocations"
+        and foreign_key["constrained_columns"] == ["invocation_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(index["column_names"] == ["consumer_account_id"] for index in indexes)
+    assert any(index["column_names"] == ["quote_id"] for index in indexes)
+    assert any(index["column_names"] == ["invocation_id"] for index in indexes)
