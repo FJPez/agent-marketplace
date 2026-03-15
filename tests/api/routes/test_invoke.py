@@ -269,7 +269,7 @@ async def test_invoke_requires_idempotency_key(
 
 
 @pytest.mark.asyncio
-async def test_paid_endpoint_returns_x402_placeholder_conflict(
+async def test_paid_endpoint_without_quote_returns_conflict(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -289,7 +289,7 @@ async def test_paid_endpoint_returns_x402_placeholder_conflict(
     )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "paid invoke requires x402 payment flow"}
+    assert response.json() == {"detail": "paid invoke requires quote"}
 
 
 @pytest.mark.asyncio
