@@ -2,13 +2,12 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.enums import PricingModelType
 from app.core.request_hash import hash_request_body
 from app.db.models import Quote, ServiceEndpoint
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.service_repo import ServiceRepository
-
-DEFAULT_QUOTE_TTL = timedelta(minutes=5)
 
 
 class QuoteNotFoundError(Exception):
@@ -49,8 +48,9 @@ class QuoteService:
             raise QuoteNotFoundError("endpoint not found")
 
         request_hash = hash_request_body(payload)
+        ttl = timedelta(seconds=get_settings().quote_ttl_seconds)
         created_at = datetime.now(UTC)
-        expires_at = created_at + DEFAULT_QUOTE_TTL
+        expires_at = created_at + ttl
         quote = self._quote_repo.add(
             service_id=service.id,
             endpoint_id=endpoint.id,
@@ -62,7 +62,6 @@ class QuoteService:
             service_revision_id=service.current_revision_id,
             service_change_token=service.current_change_token,
             expires_at=expires_at,
-            created_at=created_at,
         )
         await self._session.commit()
         await self._session.refresh(quote)

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +24,6 @@ class QuoteRepository:
         service_revision_id: int | None,
         service_change_token: str | None,
         expires_at: datetime,
-        created_at: datetime | None = None,
     ) -> Quote:
         quote = Quote(
             service_id=service_id,
@@ -37,7 +36,6 @@ class QuoteRepository:
             service_revision_id=service_revision_id,
             service_change_token=service_change_token,
             expires_at=expires_at,
-            created_at=created_at or datetime.now(UTC),
         )
         self._session.add(quote)
         return quote
