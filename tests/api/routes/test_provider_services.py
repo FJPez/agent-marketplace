@@ -37,9 +37,11 @@ async def _create_provider_account(
 
 async def _create_account(
     db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    is_admin: bool = False,
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(is_admin=is_admin)
         session.add(account)
         await session.flush()
         return account.id
@@ -960,7 +962,7 @@ async def test_publish_service_rejects_suspended_service(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    admin_account_id = await _create_account(db_session_factory)
+    admin_account_id = await _create_account(db_session_factory, is_admin=True)
     account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
         db_session_factory,

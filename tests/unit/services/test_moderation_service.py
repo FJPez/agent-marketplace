@@ -64,6 +64,16 @@ class FakeModerationActionRepository:
                 return record
         return None
 
+    async def get_latest_for_services(
+        self,
+        service_ids: list[int],
+    ) -> dict[int, ModerationAction]:
+        result: dict[int, ModerationAction] = {}
+        for record in reversed(self._history):
+            if record.service_id in service_ids and record.service_id not in result:
+                result[record.service_id] = record
+        return result
+
     def add(
         self,
         *,
@@ -85,9 +95,6 @@ class FakeModerationActionRepository:
 
     async def list_for_service(self, service_id: int) -> list[ModerationAction]:
         return [record for record in self._history if record.service_id == service_id]
-
-    async def list_all(self) -> list[ModerationAction]:
-        return list(reversed(self._history))
 
 
 class FakeServiceRepository:
@@ -276,7 +283,7 @@ async def test_delist_service_rejects_already_delisted_service() -> None:
 
 
 @pytest.mark.asyncio
-async def test_suspend_service_rejects_delisted_service() -> None:
+async def test_suspend_service_escalates_delisted_to_suspended() -> None:
     history = [
         _record(
             service_id=42,
@@ -287,15 +294,13 @@ async def test_suspend_service_rejects_delisted_service() -> None:
     ]
     service, _ = _service(history=history)
 
-    with pytest.raises(InvalidModerationTransitionError) as exc_info:
-        await service.suspend_service(
-            service_id=42,
-            reason="secondary action",
-            actor=None,
-        )
+    await service.suspend_service(
+        service_id=42,
+        reason="escalation",
+        actor=None,
+    )
 
-    assert exc_info.value.current_state is ModerationServiceState.DELISTED
-    assert exc_info.value.attempted_action is ModerationActionType.SUSPEND
+    assert await service.get_service_state(42) is ModerationServiceState.SUSPENDED
 
 
 @pytest.mark.asyncio
@@ -355,7 +360,7 @@ async def test_ensure_service_publishable_blocks_suspended_service() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_service_publishable_blocks_delisted_service() -> None:
+async def test_ensure_service_publishable_allows_delisted_service() -> None:
     history = [
         _record(
             service_id=42,
@@ -366,10 +371,7 @@ async def test_ensure_service_publishable_blocks_delisted_service() -> None:
     ]
     service, _ = _service(history=history)
 
-    with pytest.raises(ServiceUnavailableError) as exc_info:
-        await service.ensure_service_publishable(42)
-
-    assert exc_info.value.state is ModerationServiceState.DELISTED
+    await service.ensure_service_publishable(42)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import cast
 
 import pytest
@@ -8,6 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
 from app.db.session import get_db_session
+
+
+@dataclass
+class _FakeAccount:
+    id: int
+    is_admin: bool = False
 
 
 class _DummySession:
@@ -25,15 +32,16 @@ def _build_client(
 ) -> TestClient:
     import app.api.deps.auth as auth_module
 
-    async def fake_exists(
+    async def fake_get(
         self: auth_module.AccountRepository,
         account_id: int,
-    ) -> bool:
+    ) -> _FakeAccount | None:
         _ = self
-        _ = account_id
-        return account_exists
+        if account_exists:
+            return _FakeAccount(id=account_id)
+        return None
 
-    monkeypatch.setattr(auth_module.AccountRepository, "exists", fake_exists)
+    monkeypatch.setattr(auth_module.AccountRepository, "get", fake_get)
 
     app = FastAPI()
 

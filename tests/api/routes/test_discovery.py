@@ -24,6 +24,16 @@ async def _create_provider_account(
         return account.id
 
 
+async def _create_admin_account(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> int:
+    async with db_session_factory.begin() as session:
+        account = Account(is_admin=True)
+        session.add(account)
+        await session.flush()
+        return account.id
+
+
 async def _seed_service(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -235,7 +245,7 @@ async def test_discovery_hides_delisted_service(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
-    admin_account_id = await _create_provider_account(db_session_factory)
+    admin_account_id = await _create_admin_account(db_session_factory)
     service_id = await _seed_service(
         db_session_factory,
         provider_account_id=provider_account_id,
@@ -395,3 +405,41 @@ async def test_list_services_hides_active_service_with_no_enabled_endpoints(
     assert list_response.status_code == 200
     assert not any(item["slug"] == "all-disabled-service" for item in list_response.json())
     assert detail_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_suspended_service_reappears_after_restore(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="restore-visible",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    hidden_response = await async_client.get("/v1/services")
+    assert hidden_response.status_code == 200
+    assert not any(item["slug"] == "restore-visible" for item in hidden_response.json())
+
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="restore",
+    )
+
+    visible_response = await async_client.get("/v1/services")
+    assert visible_response.status_code == 200
+    assert any(item["slug"] == "restore-visible" for item in visible_response.json())
