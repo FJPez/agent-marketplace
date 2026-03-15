@@ -114,7 +114,13 @@ async def _seed_upstream(
                 base_url="https://provider.internal",
                 path=path,
                 http_method="POST",
-                config={},
+                config={
+                    "auth": {
+                        "type": "hmac_sha256",
+                        "key_id": "gateway-key",
+                        "secret": "super-secret",
+                    },
+                },
             ),
         )
 

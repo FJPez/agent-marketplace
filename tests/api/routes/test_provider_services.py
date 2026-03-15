@@ -110,7 +110,13 @@ async def _seed_upstream(
                 base_url="https://provider.internal",
                 path="/invoke",
                 http_method="POST",
-                config={"auth": {"type": "bearer", "token_env": "TOKEN"}},
+                config={
+                    "auth": {
+                        "type": "hmac_sha256",
+                        "key_id": "gateway-key",
+                        "secret": "super-secret",
+                    },
+                },
             ),
         )
 
