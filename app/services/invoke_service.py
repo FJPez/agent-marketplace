@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from app.core.enums import InvocationStatus
+from jsonschema import ValidationError, validate
+from sqlalchemy.exc import IntegrityError
+
+from app.core.enums import InvocationFailureReason, InvocationStatus
 from app.core.request_hash import hash_request_body
 from app.integrations.provider_gateway.client import (
     ProviderGatewayClient,
@@ -111,14 +114,16 @@ class InvokeService:
         auth = get_hmac_auth_config(endpoint.upstream.config)
         if auth is None:
             raise InvokeUnavailableError("service endpoint is not invokable")
+        try:
+            validate(instance=payload, schema=endpoint.request_schema)
+        except ValidationError as exc:
+            raise InvokeConflictError("request payload does not match endpoint schema") from exc
 
-        request_hash = hash_request_body(
-            {
-                "service_id": service.id,
-                "endpoint_key": endpoint_key,
-                "payload": payload,
-                "quote_id": quote_id,
-            },
+        request_hash = self._build_request_hash(
+            service_id=service.id,
+            endpoint_key=endpoint_key,
+            payload=payload,
+            quote_id=quote_id,
         )
         quote: Quote | None = None
         if quote_id is not None:
@@ -152,6 +157,7 @@ class InvokeService:
         *,
         resolved: ResolvedInvokeTarget,
         idempotency_key: str,
+        auto_commit: bool = True,
     ) -> Invocation:
         existing = await self.get_replayable_invocation(
             actor,
@@ -161,21 +167,35 @@ class InvokeService:
         if existing is not None:
             return existing
 
-        invocation = self._invocation_repo.add(
-            consumer_account_id=actor.account_id,
-            service_id=resolved.service.id,
-            endpoint_id=resolved.endpoint.id,
-            endpoint_key=resolved.endpoint.key,
-            access_mode=resolved.endpoint.access_mode,
-            quote_id=None if resolved.quote is None else resolved.quote.id,
-            idempotency_key=idempotency_key,
-            request_hash=resolved.request_hash,
-            status=InvocationStatus.FAILED,
-            response_payload=None,
-            upstream_status_code=None,
-            error_message=None,
-        )
-        await self._session.flush()
+        invocation: Invocation | None = None
+        try:
+            async with self._session.begin_nested():
+                invocation = self._invocation_repo.add(
+                    consumer_account_id=actor.account_id,
+                    service_id=resolved.service.id,
+                    endpoint_id=resolved.endpoint.id,
+                    endpoint_key=resolved.endpoint.key,
+                    access_mode=resolved.endpoint.access_mode,
+                    quote_id=None if resolved.quote is None else resolved.quote.id,
+                    idempotency_key=idempotency_key,
+                    request_hash=resolved.request_hash,
+                    status=InvocationStatus.FAILED,
+                    response_payload=None,
+                    upstream_status_code=None,
+                    error_message=None,
+                    failure_reason=None,
+                )
+                await self._session.flush()
+        except IntegrityError:
+            replayed = await self.get_replayable_invocation(
+                actor,
+                idempotency_key=idempotency_key,
+                request_hash=resolved.request_hash,
+            )
+            if replayed is not None:
+                return replayed
+            raise
+        assert invocation is not None
 
         gateway_client = ProviderGatewayClient(self._http_client)
         assert resolved.endpoint.upstream is not None
@@ -192,23 +212,27 @@ class InvokeService:
             )
         except ProviderGatewayTimeoutError as exc:
             invocation.error_message = "upstream request timed out"
-            await self._commit_and_refresh(invocation)
+            invocation.failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
+            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
             raise InvokeGatewayTimeoutError("upstream request timed out") from exc
         except ProviderGatewayTransportError as exc:
             invocation.error_message = "upstream request failed"
-            await self._commit_and_refresh(invocation)
+            invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
+            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
             raise InvokeBadGatewayError("upstream request failed") from exc
         except ProviderGatewayResponseError as exc:
             invocation.error_message = str(exc)
             invocation.upstream_status_code = exc.upstream_status_code
-            await self._commit_and_refresh(invocation)
+            invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
+            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
             raise InvokeBadGatewayError(str(exc)) from exc
 
         invocation.status = InvocationStatus.SUCCEEDED
         invocation.response_payload = gateway_result.payload
         invocation.upstream_status_code = gateway_result.status_code
         invocation.error_message = None
-        await self._commit_and_refresh(invocation)
+        invocation.failure_reason = None
+        await self._persist_and_refresh(invocation, auto_commit=auto_commit)
         return invocation
 
     async def get_invocation(
@@ -230,6 +254,45 @@ class InvokeService:
         await self._require_consumer_profile(actor.account_id)
         return await self._invocation_repo.list_for_consumer(consumer_account_id=actor.account_id)
 
+    async def try_successful_replay(
+        self,
+        actor: ActorContext,
+        *,
+        service_id_or_slug: str,
+        endpoint_key: str,
+        payload: dict[str, object],
+        quote_id: int | None,
+        idempotency_key: str,
+    ) -> Invocation | None:
+        await self._require_consumer_profile(actor.account_id)
+        existing = await self._invocation_repo.get_by_idempotency_key(
+            consumer_account_id=actor.account_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is None:
+            return None
+
+        service = await self._service_repo.get_by_id(service_id=existing.service_id)
+        if service is None:
+            return None
+        if service_id_or_slug.isdigit():
+            if existing.service_id != int(service_id_or_slug):
+                raise InvokeConflictError("idempotency key already used for a different request")
+        elif service.slug != service_id_or_slug:
+            raise InvokeConflictError("idempotency key already used for a different request")
+
+        request_hash = self._build_request_hash(
+            service_id=existing.service_id,
+            endpoint_key=endpoint_key,
+            payload=payload,
+            quote_id=quote_id,
+        )
+        if existing.request_hash != request_hash:
+            raise InvokeConflictError("idempotency key already used for a different request")
+        if existing.status is not InvocationStatus.SUCCEEDED:
+            return None
+        return existing
+
     async def get_replayable_invocation(
         self,
         actor: ActorContext,
@@ -246,7 +309,7 @@ class InvokeService:
         if existing.request_hash != request_hash:
             raise InvokeConflictError("idempotency key already used for a different request")
         if existing.status is InvocationStatus.FAILED:
-            if existing.error_message == "upstream request timed out":
+            if existing.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
                 raise InvokeGatewayTimeoutError("upstream request timed out")
             message = existing.error_message or "upstream request failed"
             raise InvokeBadGatewayError(message)
@@ -257,6 +320,30 @@ class InvokeService:
         if profile is None:
             raise InvokeNotFoundError("consumer profile not found")
 
-    async def _commit_and_refresh(self, invocation: Invocation) -> None:
-        await self._session.commit()
+    def _build_request_hash(
+        self,
+        *,
+        service_id: int,
+        endpoint_key: str,
+        payload: dict[str, object],
+        quote_id: int | None,
+    ) -> str:
+        return hash_request_body(
+            {
+                "service_id": service_id,
+                "endpoint_key": endpoint_key,
+                "payload": payload,
+                "quote_id": quote_id,
+            },
+        )
+
+    async def _persist_and_refresh(
+        self,
+        invocation: Invocation,
+        *,
+        auto_commit: bool,
+    ) -> None:
+        await self._session.flush()
         await self._session.refresh(invocation)
+        if auto_commit:
+            await self._session.commit()

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import AsyncClient, Response, TimeoutException
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
+from app.core.request_hash import hash_request_body
 from app.db.models import (
     Account,
     ConsumerProfile,
+    Invocation,
     ModerationAction,
     PricingModel,
     ProviderProfile,
@@ -95,6 +98,7 @@ async def _seed_endpoint(
     access_mode: AccessMode = AccessMode.FREE,
     is_enabled: bool = True,
     with_hmac_auth: bool = True,
+    request_schema: dict[str, object] | None = None,
 ) -> int:
     async with db_session_factory.begin() as session:
         endpoint = ServiceEndpoint(
@@ -104,7 +108,7 @@ async def _seed_endpoint(
             summary="Translate text",
             description=None,
             access_mode=access_mode,
-            request_schema={"type": "object"},
+            request_schema=request_schema or {"type": "object"},
             response_schema={"type": "object"},
             timeout_seconds=30,
             is_enabled=is_enabled,
@@ -146,23 +150,67 @@ async def _seed_quote(
     *,
     service_id: int,
     endpoint_id: int,
+    payload: dict[str, object] | None = None,
 ) -> int:
     async with db_session_factory.begin() as session:
         quote = Quote(
             service_id=service_id,
             endpoint_id=endpoint_id,
             endpoint_key="translate",
-            request_hash="2d0f30f895e67f6b3a01359e1805b621736f4ce8c585138f9766eb2f6a2f9f46",
+            request_hash=hash_request_body(payload or {"text": "hello"}),
             pricing_type=PricingModelType.FREE,
             amount_minor=None,
             currency=None,
             service_revision_id=1,
             service_change_token="c" * 64,
-            expires_at="2030-01-01T00:00:00+00:00",
+            expires_at=datetime(2030, 1, 1, tzinfo=UTC),
         )
         session.add(quote)
         await session.flush()
         return quote.id
+
+
+async def _seed_existing_invocation(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    consumer_account_id: int,
+    service_id: int,
+    endpoint_id: int,
+    endpoint_key: str,
+    access_mode: AccessMode,
+    quote_id: int | None,
+    idempotency_key: str,
+    payload: dict[str, object],
+    status: InvocationStatus,
+    response_payload: dict[str, object] | None,
+    upstream_status_code: int | None,
+    error_message: str | None,
+) -> int:
+    async with db_session_factory.begin() as session:
+        invocation = Invocation(
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            endpoint_key=endpoint_key,
+            access_mode=access_mode,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            request_hash=hash_request_body(
+                {
+                    "service_id": service_id,
+                    "endpoint_key": endpoint_key,
+                    "payload": payload,
+                    "quote_id": quote_id,
+                }
+            ),
+            status=status,
+            response_payload=response_payload,
+            upstream_status_code=upstream_status_code,
+            error_message=error_message,
+        )
+        session.add(invocation)
+        await session.flush()
+        return invocation.id
 
 
 async def _seed_moderation_action(
@@ -180,6 +228,17 @@ async def _seed_moderation_action(
                 reason="policy",
             ),
         )
+
+
+async def _expire_quote(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    quote_id: int,
+) -> None:
+    async with db_session_factory.begin() as session:
+        quote = await session.get(Quote, quote_id)
+        assert quote is not None
+        quote.expires_at = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 @dataclass
@@ -331,6 +390,74 @@ async def test_free_invoke_returns_invocation_and_provider_result(
 
 
 @pytest.mark.asyncio
+async def test_invoke_rejects_payload_that_does_not_match_endpoint_schema(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    _ = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        request_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    get_app_state(app).http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": 123}},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "request payload does not match endpoint schema"}
+
+
+@pytest.mark.asyncio
+async def test_invoke_accepts_payload_that_matches_endpoint_schema(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    _ = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        request_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+    )
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "succeeded"
+    assert len(fake_http_client.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_free_invoke_replays_same_invocation_without_second_upstream_call(
     app: FastAPI,
     async_client: AsyncClient,
@@ -363,6 +490,313 @@ async def test_free_invoke_replays_same_invocation_without_second_upstream_call(
 
 
 @pytest.mark.asyncio
+async def test_free_invoke_replays_before_delisted_service_validation(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    _ = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+
+    first = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="delist",
+    )
+    second = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+    assert len(fake_http_client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_free_invoke_replays_before_expired_quote_validation(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    quote_id = await _seed_quote(db_session_factory, service_id=service_id, endpoint_id=endpoint_id)
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+    existing_invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.FREE,
+        quote_id=quote_id,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "bonjour"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    await _expire_quote(db_session_factory, quote_id=quote_id)
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == existing_invocation_id
+    assert len(fake_http_client.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_free_invoke_replays_success_before_delist_validation(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.FREE,
+        quote_id=None,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="delist",
+    )
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "fresh"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == invocation_id
+    assert response.json()["response_payload"] == {"result": "cached"}
+    assert len(fake_http_client.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_replays_success_before_quote_expiry_validation(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+    )
+    invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.PAID,
+        quote_id=quote_id,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    await _expire_quote(db_session_factory, quote_id=quote_id)
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "fresh"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == invocation_id
+    assert response.json()["response_payload"] == {"result": "cached"}
+    assert len(fake_http_client.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_free_invoke_recovers_from_duplicate_insert_and_replays_existing_invocation(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    existing_invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.FREE,
+        quote_id=None,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "fresh"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+
+    from app.repositories.invocation_repo import InvocationRepository
+
+    original_get_by_idempotency_key = InvocationRepository.get_by_idempotency_key
+    lookup_calls = 0
+
+    async def stale_then_delegate(
+        self: InvocationRepository,
+        *,
+        consumer_account_id: int,
+        idempotency_key: str,
+    ) -> Invocation | None:
+        nonlocal lookup_calls
+        lookup_calls += 1
+        if lookup_calls == 1:
+            return None
+        return await original_get_by_idempotency_key(
+            self,
+            consumer_account_id=consumer_account_id,
+            idempotency_key=idempotency_key,
+        )
+
+    monkeypatch.setattr(InvocationRepository, "get_by_idempotency_key", stale_then_delegate)
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == existing_invocation_id
+    assert response.json()["response_payload"] == {"result": "cached"}
+    assert len(fake_http_client.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_free_invoke_duplicate_insert_preserves_request_mismatch_conflict(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.FREE,
+        quote_id=None,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    get_app_state(app).http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "fresh"})],
+    )
+
+    from app.repositories.invocation_repo import InvocationRepository
+
+    original_get_by_idempotency_key = InvocationRepository.get_by_idempotency_key
+    lookup_calls = 0
+
+    async def stale_then_delegate(
+        self: InvocationRepository,
+        *,
+        consumer_account_id: int,
+        idempotency_key: str,
+    ) -> Invocation | None:
+        nonlocal lookup_calls
+        lookup_calls += 1
+        if lookup_calls == 1:
+            return None
+        return await original_get_by_idempotency_key(
+            self,
+            consumer_account_id=consumer_account_id,
+            idempotency_key=idempotency_key,
+        )
+
+    monkeypatch.setattr(InvocationRepository, "get_by_idempotency_key", stale_then_delegate)
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hi"}},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "idempotency key already used for a different request"}
+
+
+@pytest.mark.asyncio
 async def test_free_invoke_rejects_reused_key_for_different_request(
     app: FastAPI,
     async_client: AsyncClient,
@@ -392,6 +826,93 @@ async def test_free_invoke_rejects_reused_key_for_different_request(
     assert second.status_code == 409
     assert second.json() == {"detail": "idempotency key already used for a different request"}
     assert len(fake_http_client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_free_invoke_replays_successful_invocation_after_service_is_delisted(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.FREE,
+        quote_id=None,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="delist",
+    )
+    fake_http_client = _FakeHttpClient()
+    get_app_state(app).http_client = fake_http_client
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == invocation_id
+    assert response.json()["response_payload"] == {"result": "cached"}
+    assert len(fake_http_client.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_free_invoke_replays_successful_invocation_after_quote_expires(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    quote_id = await _seed_quote(db_session_factory, service_id=service_id, endpoint_id=endpoint_id)
+    invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.FREE,
+        quote_id=quote_id,
+        idempotency_key="invoke-key",
+        payload={"text": "hello"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+        upstream_status_code=200,
+        error_message=None,
+    )
+    await _expire_quote(db_session_factory, quote_id=quote_id)
+    fake_http_client = _FakeHttpClient()
+    get_app_state(app).http_client = fake_http_client
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == invocation_id
+    assert response.json()["response_payload"] == {"result": "cached"}
+    assert len(fake_http_client.calls) == 0
 
 
 @pytest.mark.asyncio

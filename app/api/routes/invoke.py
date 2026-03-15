@@ -86,6 +86,29 @@ async def invoke_service(
 ) -> InvocationResponse | JSONResponse:
     invoke_service = InvokeService(session, http_client=_get_http_client(fastapi_request))
     try:
+        replayed = await invoke_service.try_successful_replay(
+            actor,
+            service_id_or_slug=service_id_or_slug,
+            endpoint_key=request.endpoint_key,
+            payload=request.payload,
+            quote_id=request.quote_id,
+            idempotency_key=idempotency_key,
+        )
+        if replayed is not None:
+            if replayed.access_mode is AccessMode.PAID:
+                payment_service = PaymentService(
+                    session,
+                    http_client=_get_http_client(fastapi_request),
+                    facilitator_client=_get_facilitator_client(fastapi_request),
+                    x402_resource_server=_get_x402_resource_server(fastapi_request),
+                    settings=get_app_state(fastapi_request.app).settings,
+                )
+                for header_name, header_value in (
+                    await payment_service._build_success_headers_for_invocation(replayed.id)
+                ).items():
+                    response.headers[header_name] = header_value
+            return InvocationResponse.from_model(replayed)
+
         resolved = await invoke_service.resolve_target(
             actor,
             service_id_or_slug=service_id_or_slug,

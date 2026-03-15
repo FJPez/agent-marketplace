@@ -17,7 +17,7 @@ from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.enums import AccessMode, InvocationStatus
+from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
 from app.db.base import Base
 
 
@@ -71,6 +71,16 @@ class Invocation(Base):
     response_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     upstream_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[InvocationFailureReason | None] = mapped_column(
+        SqlEnum(
+            InvocationFailureReason,
+            name="invocation_failure_reason",
+            create_constraint=True,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

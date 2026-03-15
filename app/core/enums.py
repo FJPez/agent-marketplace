@@ -29,6 +29,12 @@ class InvocationStatus(StrEnum):
     FAILED = "failed"
 
 
+class InvocationFailureReason(StrEnum):
+    UPSTREAM_TIMEOUT = "upstream_timeout"
+    UPSTREAM_TRANSPORT = "upstream_transport"
+    UPSTREAM_RESPONSE = "upstream_response"
+
+
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"

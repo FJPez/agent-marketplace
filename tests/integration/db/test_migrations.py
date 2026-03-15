@@ -705,6 +705,7 @@ def test_migrations_upgrade_creates_invocations_table(
         "response_payload",
         "upstream_status_code",
         "error_message",
+        "failure_reason",
         "created_at",
     }
     assert any(
@@ -729,6 +730,20 @@ def test_migrations_upgrade_creates_invocations_table(
     assert any(
         "succeeded" in str(constraint.get("sqltext", "")) for constraint in check_constraints
     )
+    assert any(
+        "upstream_timeout" in str(constraint.get("sqltext", "")) for constraint in check_constraints
+    )
+
+
+def test_invoke_core_failure_reason_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    revision = script.get_revision("invoke_core_0008")
+
+    assert revision is not None
+    assert revision.revision == "invoke_core_0008"
+    assert revision.path.endswith("invoke_core_0008_add_invocation_failure_reason.py")
 
 
 def test_x402_payment_migration_uses_branch_specific_revision_id(

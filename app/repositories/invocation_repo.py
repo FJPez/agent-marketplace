@@ -1,7 +1,7 @@
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import AccessMode, InvocationStatus
+from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
 from app.db.models import Invocation
 
 
@@ -24,6 +24,7 @@ class InvocationRepository:
         response_payload: dict[str, object] | None,
         upstream_status_code: int | None,
         error_message: str | None,
+        failure_reason: InvocationFailureReason | None,
     ) -> Invocation:
         invocation = Invocation(
             consumer_account_id=consumer_account_id,
@@ -38,6 +39,7 @@ class InvocationRepository:
             response_payload=response_payload,
             upstream_status_code=upstream_status_code,
             error_message=error_message,
+            failure_reason=failure_reason,
         )
         self._session.add(invocation)
         return invocation

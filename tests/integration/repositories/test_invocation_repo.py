@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.enums import AccessMode, InvocationStatus
+from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
 from app.db.models import Account, ConsumerProfile, ProviderProfile, Service, ServiceEndpoint
 from app.repositories.invocation_repo import InvocationRepository
 
@@ -58,6 +58,7 @@ async def test_invocation_repository_persists_and_lists_by_consumer(
             response_payload={"result": "one"},
             upstream_status_code=200,
             error_message=None,
+            failure_reason=None,
         )
         await session.flush()
         second = repo.add(
@@ -73,6 +74,7 @@ async def test_invocation_repository_persists_and_lists_by_consumer(
             response_payload=None,
             upstream_status_code=502,
             error_message="upstream request failed",
+            failure_reason=InvocationFailureReason.UPSTREAM_TRANSPORT,
         )
         await session.flush()
         first_id = first.id
@@ -90,3 +92,4 @@ async def test_invocation_repository_persists_and_lists_by_consumer(
     assert loaded.id == first_id
     assert [item.id for item in items] == [second_id, first_id]
     assert items[0].status is InvocationStatus.FAILED
+    assert items[0].failure_reason is InvocationFailureReason.UPSTREAM_TRANSPORT

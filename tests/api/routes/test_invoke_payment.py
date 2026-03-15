@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from x402 import PaymentPayload
 from x402.http import encode_payment_signature_header
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
 from app.core.request_hash import hash_request_body
 from app.db.models import (
@@ -27,6 +27,7 @@ from app.db.models import (
     ServiceEndpoint,
     ServiceRevision,
 )
+from app.integrations.x402.facilitator_client import FacilitatorUnavailableError
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -182,6 +183,85 @@ async def _count_rows(
     return invocation_count or 0, payment_attempt_count or 0
 
 
+async def _get_payment_attempt(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    payment_identifier: str,
+) -> PaymentAttempt | None:
+    async with db_session_factory() as session:
+        statement = select(PaymentAttempt).where(
+            PaymentAttempt.payment_identifier == payment_identifier,
+        )
+        return await session.scalar(statement)
+
+
+async def _seed_existing_invocation(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    consumer_account_id: int,
+    service_id: int,
+    endpoint_id: int,
+    quote_id: int,
+    idempotency_key: str,
+    payload: dict[str, object],
+    response_payload: dict[str, object],
+) -> int:
+    async with db_session_factory.begin() as session:
+        invocation = Invocation(
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            endpoint_key="translate",
+            access_mode=AccessMode.PAID,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            request_hash=hash_request_body(
+                {
+                    "service_id": service_id,
+                    "endpoint_key": "translate",
+                    "payload": payload,
+                    "quote_id": quote_id,
+                }
+            ),
+            status=InvocationStatus.SUCCEEDED,
+            response_payload=response_payload,
+            upstream_status_code=200,
+            error_message=None,
+        )
+        session.add(invocation)
+        await session.flush()
+        return invocation.id
+
+
+async def _seed_payment_attempt(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    consumer_account_id: int,
+    quote_id: int,
+    invocation_id: int | None,
+    idempotency_key: str,
+    payment_identifier: str,
+    verify_outcome: dict[str, object] | None,
+    settle_outcome: dict[str, object] | None,
+) -> int:
+    async with db_session_factory.begin() as session:
+        attempt = PaymentAttempt(
+            consumer_account_id=consumer_account_id,
+            quote_id=quote_id,
+            invocation_id=invocation_id,
+            idempotency_key=idempotency_key,
+            payment_identifier=payment_identifier,
+            payment_requirement={"amount_minor": 500},
+            payment_payload={"payment_identifier": payment_identifier},
+            verify_outcome=verify_outcome,
+            settle_outcome=settle_outcome,
+            facilitator_reference="settle-1",
+        )
+        session.add(attempt)
+        await session.flush()
+        return attempt.id
+
+
 @dataclass
 class _FakeHttpClient:
     responses: list[Response] = field(default_factory=list)
@@ -269,6 +349,28 @@ class _FakeX402ResourceServer:
         return {"X-PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
 
 
+class _UnavailableFacilitatorClient:
+    async def verify(
+        self,
+        *,
+        payment_requirement: dict[str, object],
+        payment_payload: dict[str, object],
+    ) -> dict[str, object]:
+        _ = payment_requirement
+        _ = payment_payload
+        raise FacilitatorUnavailableError("facilitator unavailable")
+
+    async def settle(
+        self,
+        *,
+        payment_requirement: dict[str, object],
+        payment_payload: dict[str, object],
+    ) -> dict[str, object]:
+        _ = payment_requirement
+        _ = payment_payload
+        raise AssertionError("settle should not be called")
+
+
 def _payment_header(*, payment_identifier: str) -> str:
     return encode_payment_signature_header(
         PaymentPayload.model_validate(
@@ -295,7 +397,7 @@ def _install_payment_state(
     app: FastAPI,
     *,
     upstream_client: _FakeHttpClient,
-    facilitator_client: _FakeFacilitatorClient,
+    facilitator_client: object,
 ) -> None:
     state = get_app_state(app)
     state.http_client = upstream_client
@@ -493,6 +595,85 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
 
 
 @pytest.mark.asyncio
+async def test_paid_invoke_duplicate_attempt_insert_returns_conflict_before_facilitator_calls(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    await _seed_payment_attempt(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        quote_id=quote_id,
+        invocation_id=None,
+        idempotency_key="invoke-key-1",
+        payment_identifier="payment-1",
+        verify_outcome=None,
+        settle_outcome=None,
+    )
+    upstream_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+    facilitator_client = _FakeFacilitatorClient(
+        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    )
+    _install_payment_state(
+        app,
+        upstream_client=upstream_client,
+        facilitator_client=facilitator_client,
+    )
+
+    from app.repositories.payment_attempt_repo import PaymentAttemptRepository
+
+    original_get_by_payment_identifier = PaymentAttemptRepository.get_by_payment_identifier
+    lookup_calls = 0
+
+    async def stale_then_delegate(
+        self: PaymentAttemptRepository,
+        *,
+        payment_identifier: str,
+    ) -> PaymentAttempt | None:
+        nonlocal lookup_calls
+        lookup_calls += 1
+        if lookup_calls == 1:
+            return None
+        return await original_get_by_payment_identifier(self, payment_identifier=payment_identifier)
+
+    monkeypatch.setattr(
+        PaymentAttemptRepository,
+        "get_by_payment_identifier",
+        stale_then_delegate,
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            idempotency_key="invoke-key-2",
+            payment_header=_payment_header(payment_identifier="payment-1"),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "payment identifier already used"}
+    assert len(facilitator_client.verify_calls) == 0
+    assert len(facilitator_client.settle_calls) == 0
+    assert len(upstream_client.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_failed_payment_identifier_reuse_returns_conflict(
     app: FastAPI,
     async_client: AsyncClient,
@@ -542,6 +723,77 @@ async def test_failed_payment_identifier_reuse_returns_conflict(
 
 
 @pytest.mark.asyncio
+async def test_paid_invoke_rejects_payment_identifier_reuse_for_different_quote(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    first_quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    second_quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    invocation_id = await _seed_existing_invocation(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        quote_id=first_quote_id,
+        idempotency_key="invoke-key-1",
+        payload={"text": "hello"},
+        response_payload={"result": "cached"},
+    )
+    await _seed_payment_attempt(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        quote_id=first_quote_id,
+        invocation_id=invocation_id,
+        idempotency_key="invoke-key-1",
+        payment_identifier="payment-1",
+        verify_outcome={"ok": True, "reference": "verify-1"},
+        settle_outcome={"ok": True, "reference": "settle-1"},
+    )
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "fresh"})],
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[],
+            settle_outcomes=[],
+        ),
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            idempotency_key="invoke-key-2",
+            payment_header=_payment_header(payment_identifier="payment-1"),
+        ),
+        json={
+            "endpoint_key": "translate",
+            "payload": {"text": "hello"},
+            "quote_id": second_quote_id,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "payment identifier already used"}
+
+
+@pytest.mark.asyncio
 async def test_verify_failure_returns_402(
     app: FastAPI,
     async_client: AsyncClient,
@@ -578,6 +830,41 @@ async def test_verify_failure_returns_402(
     assert response.status_code == 402
     assert response.json() == {"detail": "payment could not be verified"}
     assert "X-PAYMENT-REQUIRED" in response.headers
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_returns_502_when_facilitator_verify_raises(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(),
+        facilitator_client=_UnavailableFacilitatorClient(),
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            payment_header=_payment_header(payment_identifier="payment-1"),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "facilitator unavailable"}
 
 
 @pytest.mark.asyncio
