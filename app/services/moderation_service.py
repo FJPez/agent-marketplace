@@ -19,6 +19,11 @@ class ModerationActionStore(Protocol):
         service_id: int,
     ) -> ModerationAction | None: ...
 
+    async def get_latest_for_services(
+        self,
+        service_ids: list[int],
+    ) -> dict[int, ModerationAction]: ...
+
     def add(
         self,
         *,
@@ -73,7 +78,7 @@ class ServiceUnavailableError(Exception):
         super().__init__(f"service {service_id} is {state.value}")
 
 
-class ModerationServiceNotFoundError(Exception):
+class ModeratedServiceNotFoundError(Exception):
     pass
 
 
@@ -161,13 +166,25 @@ class ModerationService:
         raise ServiceUnavailableError(service_id=service_id, state=state)
 
     async def ensure_service_publishable(self, service_id: int) -> None:
-        await self.ensure_service_available(service_id)
+        state = await self.get_service_state(service_id)
+        if state is ModerationServiceState.SUSPENDED:
+            raise ServiceUnavailableError(service_id=service_id, state=state)
 
     async def ensure_service_listed(self, service_id: int) -> None:
         await self.ensure_service_available(service_id)
 
     async def list_actions(self, *, service_id: int) -> list[ModerationAction]:
         return await self._moderation_action_repo.list_for_service(service_id)
+
+    async def get_unlisted_service_ids(self, service_ids: list[int]) -> set[int]:
+        if not service_ids:
+            return set()
+        latest_actions = await self._moderation_action_repo.get_latest_for_services(service_ids)
+        blocked: set[int] = set()
+        for sid, action in latest_actions.items():
+            if action.action != ModerationActionType.RESTORE.value:
+                blocked.add(sid)
+        return blocked
 
     async def _record_action(
         self,
@@ -199,7 +216,7 @@ class ModerationService:
     async def _require_service(self, service_id: int) -> None:
         service = await self._service_repo.get_by_id(service_id=service_id)
         if service is None:
-            raise ModerationServiceNotFoundError("service not found")
+            raise ModeratedServiceNotFoundError("service not found")
 
 
 def _is_valid_transition(
@@ -217,6 +234,7 @@ def _is_valid_transition(
         },
         ModerationServiceState.DELISTED: {
             ModerationActionType.RESTORE,
+            ModerationActionType.SUSPEND,
         },
     }
     return action in allowed_actions[state]

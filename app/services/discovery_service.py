@@ -16,16 +16,12 @@ class DiscoveryService:
 
     async def list_services(self) -> list[Service]:
         services = await self._service_repo.list_public()
-        visible_services: list[Service] = []
-        for service in services:
-            if not self._has_public_endpoints(service):
-                continue
-            try:
-                await self._moderation_service.ensure_service_listed(service.id)
-            except ServiceUnavailableError:
-                continue
-            visible_services.append(service)
-        return visible_services
+        visible_services = [s for s in services if self._has_public_endpoints(s)]
+        if not visible_services:
+            return []
+        service_ids = [s.id for s in visible_services]
+        unlisted_ids = await self._moderation_service.get_unlisted_service_ids(service_ids)
+        return [s for s in visible_services if s.id not in unlisted_ids]
 
     async def get_service(self, *, service_id_or_slug: str) -> Service:
         service = await self._service_repo.get_public(

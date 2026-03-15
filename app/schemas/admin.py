@@ -1,4 +1,4 @@
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import BaseModel, StringConstraints
 
@@ -9,7 +9,7 @@ Reason = StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)
 
 
 class ModerationActionRequest(BaseModel):
-    reason: str
+    reason: Annotated[str, Reason]
 
 
 class ModerationActionResponse(BaseModel):
