@@ -3,7 +3,14 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.db.models import Account, ProviderProfile, Service, ServiceEndpoint, ServiceTag
+from app.db.models import (
+    Account,
+    ModerationAction,
+    ProviderProfile,
+    Service,
+    ServiceEndpoint,
+    ServiceTag,
+)
 
 
 async def _create_provider_account(
@@ -14,6 +21,16 @@ async def _create_provider_account(
         session.add(account)
         await session.flush()
         session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
+        return account.id
+
+
+async def _create_admin_account(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> int:
+    async with db_session_factory.begin() as session:
+        account = Account(is_admin=True)
+        session.add(account)
+        await session.flush()
         return account.id
 
 
@@ -66,6 +83,23 @@ async def _seed_endpoint(
         session.add(endpoint)
         await session.flush()
         return endpoint.id
+
+
+async def _seed_moderation_action(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    service_id: int,
+    action: str,
+) -> None:
+    async with db_session_factory.begin() as session:
+        session.add(
+            ModerationAction(
+                service_id=service_id,
+                actor_account_id=None,
+                action=action,
+                reason="policy",
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -206,6 +240,38 @@ async def test_get_service_detail_returns_404_for_nonexistent_service(
 
 
 @pytest.mark.asyncio
+async def test_discovery_hides_delisted_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    admin_account_id = await _create_admin_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="delisted-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    delist_response = await async_client.post(
+        f"/v1/admin/services/{service_id}/delist",
+        headers={"X-Account-Id": str(admin_account_id)},
+        json={"reason": "policy violation"},
+    )
+    list_response = await async_client.get("/v1/services")
+    detail_response = await async_client.get(f"/v1/services/{service_id}")
+
+    assert delist_response.status_code == 201
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+    assert detail_response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_get_service_detail_treats_numeric_path_as_service_id(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -257,6 +323,60 @@ async def test_get_service_detail_does_not_fallback_to_numeric_slug_lookup(
     )
 
     response = await async_client.get("/v1/services/99999")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_services_hides_delisted_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="hidden-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="delist",
+    )
+
+    response = await async_client.get("/v1/services")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.asyncio
+async def test_get_service_detail_returns_not_found_for_suspended_service(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="suspended-service",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    response = await async_client.get(f"/v1/services/{service_id}")
 
     assert response.status_code == 404
 
@@ -285,3 +405,41 @@ async def test_list_services_hides_active_service_with_no_enabled_endpoints(
     assert list_response.status_code == 200
     assert not any(item["slug"] == "all-disabled-service" for item in list_response.json())
     assert detail_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_suspended_service_reappears_after_restore(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="restore-visible",
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    hidden_response = await async_client.get("/v1/services")
+    assert hidden_response.status_code == 200
+    assert not any(item["slug"] == "restore-visible" for item in hidden_response.json())
+
+    await _seed_moderation_action(
+        db_session_factory,
+        service_id=service_id,
+        action="restore",
+    )
+
+    visible_response = await async_client.get("/v1/services")
+    assert visible_response.status_code == 200
+    assert any(item["slug"] == "restore-visible" for item in visible_response.json())
