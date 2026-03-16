@@ -3,6 +3,8 @@ import os
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
+os.environ.setdefault("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+
 import pytest
 from alembic import command
 from alembic.config import Config

@@ -1,62 +1,85 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.db.models import Account
-from app.repositories.consumer_profile_repo import ConsumerProfileRepository
-from app.repositories.provider_profile_repo import ProviderProfileRepository
+from app.repositories.account_repo import AccountRepository
 
 
 @pytest.mark.asyncio
-async def test_provider_profile_repository_persists_and_updates_display_name(
+async def test_account_repository_persists_and_updates_identity_fields(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     _ = migrated_database
 
     async with db_session_factory.begin() as session:
-        account = Account()
-        session.add(account)
-        await session.flush()
+        repo = AccountRepository(session)
+        account = await repo.create(
+            wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
+            display_name="Alpha",
+        )
 
-        repo = ProviderProfileRepository(session)
-        repo.add(account_id=account.id, display_name="Alpha Provider")
+    async with db_session_factory.begin() as session:
+        repo = AccountRepository(session)
+        account = await repo.get_by_wallet_address(
+            "0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
+        )
 
-    async with db_session_factory() as session:
-        repo = ProviderProfileRepository(session)
-        profile = await repo.get_by_account_id(account.id)
+        assert account is not None
+        assert account.display_name == "Alpha"
+        assert account.token_version == 1
 
-        assert profile is not None
-        assert profile.display_name == "Alpha Provider"
+        repo.update_nonce(
+            account,
+            nonce="nonce-2",
+            issued_at=datetime(2026, 3, 16, 12, 5, tzinfo=UTC),
+        )
+        repo.update_display_name(account, display_name="Bravo")
+        repo.bump_token_version(account)
 
-        repo.update_display_name(profile, display_name="Bravo Provider")
-        await session.commit()
+    async with db_session_factory.begin() as session:
+        repo = AccountRepository(session)
+        updated_account = await repo.get(account.id)
 
-    async with db_session_factory() as session:
-        repo = ProviderProfileRepository(session)
-        updated_profile = await repo.get_by_account_id(account.id)
-
-    assert updated_profile is not None
-    assert updated_profile.display_name == "Bravo Provider"
+    assert updated_account is not None
+    assert updated_account.display_name == "Bravo"
+    assert updated_account.nonce == "nonce-2"
+    assert updated_account.nonce_issued_at == datetime(2026, 3, 16, 12, 5, tzinfo=UTC)
+    assert updated_account.token_version == 2
 
 
 @pytest.mark.asyncio
-async def test_consumer_profile_repository_persists_display_name(
+async def test_account_repository_updates_wallet_and_change_timestamp(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     _ = migrated_database
 
     async with db_session_factory.begin() as session:
-        account = Account()
-        session.add(account)
-        await session.flush()
+        repo = AccountRepository(session)
+        account = await repo.create(
+            wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
+            display_name="Wallet Owner",
+        )
 
-        repo = ConsumerProfileRepository(session)
-        repo.add(account_id=account.id, display_name="Consumer One")
+    changed_at = datetime(2026, 3, 17, 9, 0, tzinfo=UTC)
 
-    async with db_session_factory() as session:
-        repo = ConsumerProfileRepository(session)
-        profile = await repo.get_by_account_id(account.id)
+    async with db_session_factory.begin() as session:
+        repo = AccountRepository(session)
+        account = await repo.get(account.id)
+        assert account is not None
+        repo.update_wallet(
+            account,
+            wallet_address="0x000000000000000000000000000000000000dEaD",
+            wallet_changed_at=changed_at,
+        )
 
-    assert profile is not None
-    assert profile.display_name == "Consumer One"
+    async with db_session_factory.begin() as session:
+        repo = AccountRepository(session)
+        updated_account = await repo.get_by_wallet_address(
+            "0x000000000000000000000000000000000000dEaD",
+        )
+
+    assert updated_account is not None
+    assert updated_account.wallet_changed_at == changed_at

@@ -4,7 +4,6 @@ from app.core.actor import ActorContext
 from app.core.enums import LedgerEntryType
 from app.db.models import LedgerEntry
 from app.repositories.ledger_entry_repo import LedgerSummary
-from app.services.identity_errors import IdentityNotFoundError
 from app.services.ledger_service import LedgerService
 
 
@@ -38,22 +37,12 @@ class FakeLedgerRepo:
         return self.summaries
 
 
-class FakeProviderProfileRepo:
-    def __init__(self, exists: bool = True) -> None:
-        self._exists = exists
-
-    async def get_by_account_id(self, account_id: int) -> object | None:
-        assert account_id == 11
-        return object() if self._exists else None
-
-
 @pytest.mark.asyncio
 async def test_record_paid_invocation_writes_charge_fee_and_provider_earning_entries() -> None:
     repo = FakeLedgerRepo()
     service = LedgerService(
         session=None,
         ledger_repo=repo,
-        provider_profile_repo=FakeProviderProfileRepo(),
     )
 
     await service.record_paid_invocation(
@@ -74,12 +63,20 @@ async def test_record_paid_invocation_writes_charge_fee_and_provider_earning_ent
 
 
 @pytest.mark.asyncio
-async def test_get_provider_earnings_requires_existing_provider_profile() -> None:
+async def test_get_provider_earnings_returns_repository_summary() -> None:
     service = LedgerService(
         session=None,
         ledger_repo=FakeLedgerRepo(),
-        provider_profile_repo=FakeProviderProfileRepo(exists=False),
     )
 
-    with pytest.raises(IdentityNotFoundError, match="provider profile"):
-        await service.get_provider_earnings(ActorContext(account_id=11))
+    summaries = await service.get_provider_earnings(ActorContext(account_id=11))
+
+    assert summaries == [
+        LedgerSummary(
+            currency="USD",
+            charge_minor=500,
+            platform_fee_minor=50,
+            provider_earning_minor=450,
+            entry_count=3,
+        )
+    ]

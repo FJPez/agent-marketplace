@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.actor import ActorContext
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.db.models import ProviderProfile, ProviderUpstream, Service, ServiceEndpoint
+from app.db.models import ProviderUpstream, Service, ServiceEndpoint
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
@@ -18,7 +18,6 @@ from app.services.provider_draft_service import ProviderDraftService
 from app.services.provider_endpoint_service import ProviderEndpointService
 from app.services.provider_service_errors import (
     ProviderServiceConflictError,
-    ProviderServiceNotFoundError,
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
@@ -50,15 +49,6 @@ class FailingCommitSession(FakeSession):
     async def commit(self) -> None:
         self.commits += 1
         raise IntegrityError("statement", {}, Exception("boom"))
-
-
-class FakeProviderProfileRepo:
-    def __init__(self, profile: ProviderProfile | None) -> None:
-        self._profile = profile
-
-    async def get_by_account_id(self, account_id: int) -> ProviderProfile | None:
-        _ = account_id
-        return self._profile
 
 
 class FakeServiceRepo:
@@ -284,10 +274,6 @@ class FakeRevisionService:
         return self.endpoint_impact
 
 
-def _provider_profile() -> ProviderProfile:
-    return ProviderProfile(account_id=42, display_name="Provider")
-
-
 def _draft_service() -> Service:
     return Service(
         id=101,
@@ -355,26 +341,25 @@ def _suspended_endpoint() -> ServiceEndpoint:
 
 
 @pytest.mark.asyncio
-async def test_create_service_requires_provider_profile() -> None:
+async def test_create_service_persists_new_draft() -> None:
     service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._provider_profile_repo = FakeProviderProfileRepo(None)
     service._service_repo = FakeServiceRepo()
 
-    with pytest.raises(ProviderServiceNotFoundError, match="provider profile not found"):
-        await service.create_service(
-            ActorContext(account_id=42),
-            ServiceCreateRequest(
-                slug="translation-service",
-                name="Translation Service",
-                summary="Summary",
-            ),
-        )
+    created = await service.create_service(
+        ActorContext(account_id=42),
+        ServiceCreateRequest(
+            slug="translation-service",
+            name="Translation Service",
+            summary="Summary",
+        ),
+    )
+
+    assert created.provider_account_id == 42
 
 
 @pytest.mark.asyncio
 async def test_update_service_rejects_empty_patch_payload() -> None:
     service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = FakeServiceRepo(_draft_service())
 
     with pytest.raises(
@@ -391,7 +376,6 @@ async def test_update_service_rejects_empty_patch_payload() -> None:
 @pytest.mark.asyncio
 async def test_update_service_rejects_suspended_mutation() -> None:
     service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = FakeServiceRepo(_suspended_service())
 
     with pytest.raises(
@@ -410,7 +394,6 @@ async def test_update_service_allows_active_non_material_mutation_without_revisi
     session = FakeSession()
     revision_service = FakeRevisionService()
     service = ProviderDraftService(cast("AsyncSession", session))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = FakeServiceRepo(_active_service())
     service._revision_service = revision_service
 
@@ -431,7 +414,6 @@ async def test_update_service_clears_description_when_explicit_null() -> None:
     session = FakeSession()
     repo = FakeServiceRepo(_draft_service())
     service = ProviderDraftService(cast("AsyncSession", session))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = repo
 
     updated = await service.update_service(
@@ -450,7 +432,6 @@ async def test_update_service_rejects_explicit_null_for_non_nullable_fields(
     field_name: str,
 ) -> None:
     service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = FakeServiceRepo(_draft_service())
 
     with pytest.raises(
@@ -467,7 +448,6 @@ async def test_update_service_rejects_explicit_null_for_non_nullable_fields(
 @pytest.mark.asyncio
 async def test_create_service_translates_duplicate_slug_to_conflict() -> None:
     service = ProviderDraftService(cast("AsyncSession", FailingCommitSession()))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = FakeServiceRepo()
 
     with pytest.raises(ProviderServiceConflictError, match="service slug already exists"):
@@ -486,7 +466,6 @@ async def test_replace_tags_normalizes_and_sorts_tags() -> None:
     session = FakeSession()
     repo = FakeServiceRepo(_draft_service())
     service = ProviderDraftService(cast("AsyncSession", session))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = repo
 
     await service.replace_tags(
@@ -502,7 +481,6 @@ async def test_replace_tags_normalizes_and_sorts_tags() -> None:
 @pytest.mark.asyncio
 async def test_replace_tags_rejects_non_slug_token_values() -> None:
     service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     service._service_repo = FakeServiceRepo(_draft_service())
 
     with pytest.raises(
@@ -521,7 +499,6 @@ async def test_create_endpoint_translates_duplicate_key_to_conflict() -> None:
     endpoint_service = ProviderEndpointService(
         cast("AsyncSession", FailingCommitSession()),
     )
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(_draft_service())
     endpoint_service._endpoint_repo = FakeEndpointRepo()
     endpoint_service._upstream_repo = FakeUpstreamRepo()
@@ -553,7 +530,6 @@ async def test_update_endpoint_clears_nullable_fields_when_explicit_null() -> No
     session = FakeSession()
     endpoint = _draft_endpoint()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
@@ -579,7 +555,6 @@ async def test_update_endpoint_allows_active_material_mutation_and_records_revis
     revision_service = FakeRevisionService(endpoint_impact=UpdateImpact.MATERIAL)
     moderation_service = FakeModerationService()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
@@ -607,7 +582,6 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
     revision_service = FakeRevisionService()
     moderation_service = FakeModerationService()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
@@ -632,7 +606,6 @@ async def test_update_endpoint_allows_active_non_material_mutation_without_revis
 async def test_update_endpoint_rejects_suspended_mutation() -> None:
     endpoint = _suspended_endpoint()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
@@ -666,7 +639,6 @@ async def test_update_endpoint_rejects_explicit_null_for_non_nullable_fields(
 ) -> None:
     endpoint = _draft_endpoint()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = FakeUpstreamRepo()
@@ -688,7 +660,6 @@ async def test_upsert_upstream_marks_endpoint_as_having_upstream() -> None:
     endpoint = _draft_endpoint()
     upstream_repo = FakeUpstreamRepo()
     endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._provider_profile_repo = FakeProviderProfileRepo(_provider_profile())
     endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
     endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
     endpoint_service._upstream_repo = upstream_repo

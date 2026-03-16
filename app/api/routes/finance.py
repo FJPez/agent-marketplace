@@ -11,22 +11,9 @@ from app.schemas.finance import (
     ProviderLedgerEntryResponse,
     ProviderLedgerResponse,
 )
-from app.services.identity_errors import IdentityNotFoundError
 from app.services.ledger_service import LedgerService
 
 router = APIRouter(prefix="/provider", tags=["finance"])
-
-
-def _to_http_exception(exc: Exception) -> HTTPException:
-    if isinstance(exc, IdentityNotFoundError):
-        return HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="provider profile not found",
-        )
-    return HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail=str(exc),
-    )
 
 
 @router.get("/earnings", response_model=ProviderEarningsSummaryResponse)
@@ -37,8 +24,11 @@ async def get_provider_earnings(
     service = LedgerService(session)
     try:
         totals = await service.get_provider_earnings(actor)
-    except IdentityNotFoundError as exc:
-        raise _to_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal server error",
+        ) from exc
     return ProviderEarningsSummaryResponse(
         totals=[ProviderEarningsTotalResponse.from_summary(total) for total in totals],
     )
@@ -52,8 +42,11 @@ async def get_provider_ledger(
     service = LedgerService(session)
     try:
         entries = await service.get_provider_ledger(actor)
-    except IdentityNotFoundError as exc:
-        raise _to_http_exception(exc) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="internal server error",
+        ) from exc
     return ProviderLedgerResponse(
         entries=[ProviderLedgerEntryResponse.from_model(entry) for entry in entries],
     )

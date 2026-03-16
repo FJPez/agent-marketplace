@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from httpx import AsyncClient, Response
 from sqlalchemy import func, select
+from tests.helpers.auth import auth_headers_for_account_id
 from x402 import PaymentPayload
 from x402.http import encode_payment_signature_header
 
@@ -16,12 +17,10 @@ from app.core.lifespan import get_app_state
 from app.core.request_hash import hash_request_body
 from app.db.models import (
     Account,
-    ConsumerProfile,
     Invocation,
     LedgerEntry,
     PaymentAttempt,
     PricingModel,
-    ProviderProfile,
     ProviderUpstream,
     Quote,
     Service,
@@ -42,7 +41,7 @@ def _auth_headers(
     idempotency_key: str = "invoke-key",
     payment_header: str | None = None,
 ) -> dict[str, str]:
-    headers = {"X-Account-Id": str(account_id), "Idempotency-Key": idempotency_key}
+    headers = auth_headers_for_account_id(account_id, idempotency_key=idempotency_key)
     if payment_header is not None:
         headers["PAYMENT-SIGNATURE"] = payment_header
     return headers
@@ -52,10 +51,9 @@ async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
         return account.id
 
 
@@ -63,10 +61,9 @@ async def _create_consumer_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Consumer")
         session.add(account)
         await session.flush()
-        session.add(ConsumerProfile(account_id=account.id, display_name="Consumer"))
         return account.id
 
 

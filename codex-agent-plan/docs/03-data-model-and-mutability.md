@@ -5,13 +5,21 @@
 ### Identity
 
 - `accounts`
-- `provider_profiles`
-- `consumer_profiles`
+- `api_keys`
+- `wallet_change_log`
 
-Identity profile notes:
+Identity notes:
 
-- `provider_profiles` includes `display_name` for provider self-service identity reads and updates
-- `consumer_profiles` includes `display_name` for consumer identity creation
+- `accounts` owns wallet identity, auth nonce state, token invalidation state,
+  account type, admin flag, and display name
+- legacy `accounts` rows may keep a null `wallet_address` until the owner links
+  a wallet through auth; authenticated actors always resolve with a linked
+  wallet address
+- `api_keys` stores hashed bearer keys with optional expiry, last-used
+  tracking, and revocation state
+- `wallet_change_log` is an append-only audit trail for wallet rotation
+- `provider_profiles` and `consumer_profiles` are removed; provider and
+  consumer behaviour now hangs off the unified account model
 
 ### Service definition
 
@@ -31,19 +39,24 @@ Identity profile notes:
 - `invocations`
 - `payment_attempts`
 - `ledger_entries`
-- `payouts`
 
 ### Operations
 
 - `moderation_actions`
 - `service_health_checks`
 
-## Table ownership by branch
+## Table ownership by branch or workstream
 
 - `feat/database-core`
-  - `accounts`
-  - `provider_profiles`
-  - `consumer_profiles`
+  - original `accounts` baseline
+
+- auth redesign follow-on
+  - `feat/unified-profile`
+    - unified `accounts` shape and removal of legacy profile tables
+  - `feat/api-key-auth`
+    - `api_keys`
+  - `feat/wallet-change`
+    - `wallet_change_log`
 
 - `feat/provider-services`
   - `services`
@@ -69,30 +82,33 @@ Identity profile notes:
 - `feat/ledger-and-earnings`
   - `ledger_entries`
 
-- `feat/payouts-reporting`
-  - `payouts`
-
 - `feat/moderation-admin`
   - `moderation_actions`
 
 - `feat/service-health`
   - `service_health_checks`
 
-## Phase 2 implementation notes
+## Current implementation notes
 
-- `services.slug` is currently globally unique.
-- `services.slug` uses lowercase slug-token format and must include at least one
-  lowercase letter, so numeric-only slug values are invalid.
-- `service_tags` are stored as lowercase slug tokens and replaced as a full set.
-- `service_endpoints.key` is unique per service.
+- `services.provider_account_id` references `accounts.id`
+- `services.slug` is globally unique
+- `services.slug` uses lowercase slug-token format and must include at least
+  one lowercase letter, so numeric-only slug values are invalid
+- `service_tags` are stored as lowercase slug tokens and replaced as a full set
+- `service_endpoints.key` is unique per service
 - `service_endpoints.key` uses the same lowercase slug-token format and must
   include at least one lowercase letter, so numeric-only key values are
-  invalid.
-- `provider_upstreams` are stored privately and are not exposed in API response models.
-- `moderation_actions.service_id` is currently a scalar reference with no ORM relationship or DB foreign key to `services`.
-- `moderation_actions.actor_account_id` is nullable and uses `ON DELETE SET NULL`.
-- `service_health_checks.service_id` is currently a scalar reference with no ORM relationship or DB foreign key to `services`.
-- `service_health_checks.status` is constrained to `pass`, `fail`, or `error`.
+  invalid
+- `provider_upstreams` are stored privately and are not exposed in API response
+  models
+- `moderation_actions.service_id` is currently a scalar reference with no ORM
+  relationship or DB foreign key to `services`
+- `moderation_actions.actor_account_id` is nullable and uses `ON DELETE SET NULL`
+- `service_health_checks.service_id` is currently a scalar reference with no
+  ORM relationship or DB foreign key to `services`
+- `service_health_checks.status` is constrained to `pass`, `fail`, or `error`
+- any authenticated account can own provider services and invoke marketplace
+  routes; there is no separate provider or consumer profile gate
 
 ## Mutability policy
 
@@ -110,9 +126,9 @@ Allowed:
 
 Only while lifecycle is `DRAFT`.
 
-The landed Phase 2 route surface supports create/list/get/update for draft services,
-tag replacement, endpoint create/update, and upstream upsert. Delete routes are not
-part of the current draft-management surface.
+The landed provider-management surface supports create/list/get/update for draft
+services, tag replacement, endpoint create/update, and upstream upsert. Delete
+routes are not part of the current draft-management surface.
 
 ### Mutable after publish only with revision and change-token bump
 
@@ -155,13 +171,21 @@ Do not change:
 - payment attempts
 - ledger entries
 
+### Account and auth mutability
+
+- `display_name` is mutable through `PATCH /v1/account/me`
+- `wallet_address` is mutable only through the wallet-change flow
+- `token_version` is mutable only by auth and security flows that need to
+  invalidate existing bearer tokens
+- API keys can be created, listed, expired, and revoked, but plaintext key
+  material is returned only at creation time
+
 ### Frozen while suspended
 
 Block mutation of:
 
 - upstream executable routing
 - upstream credentials
-- payout wallet
 - schemas
 - pricing
 - access mode
@@ -171,3 +195,5 @@ Allow only minimal non-executable remediation metadata.
 ## Reasoning
 
 Anything that changes what a consumer agent is buying must not change silently.
+Anything that changes who controls an account or which bearer credentials remain
+valid must be auditable and explicit.

@@ -1,12 +1,12 @@
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models import (
     Account,
     ModerationAction,
-    ProviderProfile,
     Service,
     ServiceEndpoint,
     ServiceTag,
@@ -17,10 +17,9 @@ async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
         return account.id
 
 
@@ -259,7 +258,7 @@ async def test_discovery_hides_delisted_service(
 
     delist_response = await async_client.post(
         f"/v1/admin/services/{service_id}/delist",
-        headers={"X-Account-Id": str(admin_account_id)},
+        headers=auth_headers_for_account_id(admin_account_id),
         json={"reason": "policy violation"},
     )
     list_response = await async_client.get("/v1/services")

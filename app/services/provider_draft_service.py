@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.actor import ActorContext
 from app.core.enums import ServiceLifecycle
 from app.db.models.service import Service
-from app.repositories.provider_profile_repo import ProviderProfileRepository
 from app.repositories.service_repo import ServiceRepository
 from app.schemas.service import (
     ServiceCreateRequest,
@@ -34,7 +33,6 @@ class _ServiceUpdateFields(TypedDict, total=False):
 class ProviderDraftService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._provider_profile_repo = ProviderProfileRepository(session)
         self._service_repo = ServiceRepository(session)
         self._revision_service = RevisionService(session)
 
@@ -43,8 +41,6 @@ class ProviderDraftService:
         actor: ActorContext,
         request: ServiceCreateRequest,
     ) -> Service:
-        await self._require_provider_profile(actor.account_id)
-
         service = self._service_repo.add(
             provider_account_id=actor.account_id,
             slug=request.slug,
@@ -65,13 +61,11 @@ class ProviderDraftService:
         )
 
     async def list_services(self, actor: ActorContext) -> list[Service]:
-        await self._require_provider_profile(actor.account_id)
         return await self._service_repo.list_by_provider_account_id(
             provider_account_id=actor.account_id,
         )
 
     async def get_service(self, actor: ActorContext, *, service_id: int) -> Service:
-        await self._require_provider_profile(actor.account_id)
         service = await self._service_repo.get_owned(
             service_id=service_id,
             provider_account_id=actor.account_id,
@@ -136,11 +130,6 @@ class ProviderDraftService:
             provider_account_id=actor.account_id,
             service_id=service.id,
         )
-
-    async def _require_provider_profile(self, account_id: int) -> None:
-        profile = await self._provider_profile_repo.get_by_account_id(account_id)
-        if profile is None:
-            raise ProviderServiceNotFoundError("provider profile not found")
 
     def _ensure_draft(self, service: Service) -> None:
         if service.lifecycle is not ServiceLifecycle.DRAFT:

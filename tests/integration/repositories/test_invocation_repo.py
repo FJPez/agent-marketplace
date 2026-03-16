@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
-from app.db.models import Account, ConsumerProfile, ProviderProfile, Service, ServiceEndpoint
+from app.db.models import Account, Service, ServiceEndpoint
 from app.repositories.invocation_repo import InvocationRepository
 
 
@@ -14,12 +14,10 @@ async def test_invocation_repository_persists_and_lists_by_consumer(
     _ = migrated_database
 
     async with db_session_factory.begin() as session:
-        provider_account = Account()
-        consumer_account = Account()
+        provider_account = Account(display_name="Provider")
+        consumer_account = Account(display_name="Consumer")
         session.add_all([provider_account, consumer_account])
         await session.flush()
-        session.add(ProviderProfile(account_id=provider_account.id, display_name="Provider"))
-        session.add(ConsumerProfile(account_id=consumer_account.id, display_name="Consumer"))
         service = Service(
             provider_account_id=provider_account.id,
             slug="invoke-service",

@@ -22,7 +22,7 @@ class Service(Base):
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     provider_account_id: Mapped[int] = mapped_column(
         BigInteger,
-        ForeignKey("provider_profiles.account_id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         index=True,
     )
     slug: Mapped[str] = mapped_column(String(255), unique=True)

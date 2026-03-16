@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.enums import AccessMode, PricingModelType
-from app.db.models import Account, ProviderProfile, Service
+from app.db.models import Account, Service
 from app.repositories.pricing_model_repo import PricingModelRepository
 from app.repositories.service_endpoint_repo import ServiceEndpointRepository
 
@@ -12,10 +12,9 @@ async def _create_provider_account(
     *,
     display_name: str,
 ) -> int:
-    account = Account()
+    account = Account(display_name=display_name)
     session.add(account)
     await session.flush()
-    session.add(ProviderProfile(account_id=account.id, display_name=display_name))
     return account.id
 
 

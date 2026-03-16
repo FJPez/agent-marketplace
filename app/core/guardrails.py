@@ -9,11 +9,13 @@ from typing import Literal
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from app.core.config import get_settings
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
-    build_client_rate_limit_key,
+    build_actor_rate_limit_key,
     get_rate_limits_backend,
 )
+from app.services.auth_resolution_service import AuthResolutionError, AuthResolutionService
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 _INVOKE_PATH_PREFIX = "/v1/invoke/"
@@ -67,9 +69,10 @@ class InvokeGuardrails:
                 content={"detail": "request payload too large"},
             )
 
+        owner_key = await self._resolve_owner_key(request)
         submission_key, request_fingerprint = self._build_submission_key(
             request,
-            owner_key=build_client_rate_limit_key(request),
+            owner_key=owner_key,
             request_fingerprint=buffered_body.request_fingerprint,
         )
 
@@ -179,16 +182,49 @@ class InvokeGuardrails:
         scope, limit_value = route_limit
         return not await self.rate_limits_backend.hit(
             limit_value,
-            key=build_client_rate_limit_key(request),
+            key=await self._resolve_owner_key(request),
             scope=scope,
         )
 
     async def _is_globally_rate_limited(self, request: Request) -> bool:
         return not await self.rate_limits_backend.hit(
             self.api_rate_limit,
-            key=build_client_rate_limit_key(request),
+            key=await self._resolve_owner_key(request),
             scope="global",
         )
+
+    async def _resolve_owner_key(self, request: Request) -> str:
+        cached_key = getattr(request.state, "rate_limit_owner_key", None)
+        if isinstance(cached_key, str):
+            return cached_key
+
+        authorization = request.headers.get("Authorization")
+        if authorization is None:
+            owner_key = build_actor_rate_limit_key(request)
+            request.state.rate_limit_owner_key = owner_key
+            return owner_key
+
+        app_state = getattr(request.app.state, "app_state", None)
+        session_factory = getattr(app_state, "db_session_factory", None)
+        if session_factory is None:
+            owner_key = build_actor_rate_limit_key(request)
+            request.state.rate_limit_owner_key = owner_key
+            return owner_key
+
+        async with session_factory() as session:
+            service = AuthResolutionService(session, settings=get_settings())
+            try:
+                actor = await service.resolve_actor(
+                    authorization=authorization,
+                    touch_api_key=False,
+                )
+            except AuthResolutionError:
+                owner_key = build_actor_rate_limit_key(request)
+            else:
+                owner_key = f"account:{actor.account_id}"
+
+        request.state.rate_limit_owner_key = owner_key
+        return owner_key
 
 
 def install_guardrails(app: FastAPI, *, guardrails: InvokeGuardrails) -> None:

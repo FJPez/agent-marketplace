@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.helpers.auth import auth_headers_for_account_id, wallet_address_for_index
 
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
@@ -10,7 +11,6 @@ from app.db.models import (
     Account,
     ModerationAction,
     PricingModel,
-    ProviderProfile,
     Quote,
     Service,
     ServiceEndpoint,
@@ -23,10 +23,9 @@ async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
         return account.id
 
 
@@ -275,7 +274,7 @@ async def test_create_quote_rate_limits_repeated_requests(
 
 
 @pytest.mark.asyncio
-async def test_create_quote_rate_limit_ignores_spoofed_account_header(
+async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -308,19 +307,18 @@ async def test_create_quote_rate_limit_ignores_spoofed_account_header(
         ) as rate_limited_client:
             first = await rate_limited_client.post(
                 "/v1/services/quote-service/quote",
-                headers={"X-Account-Id": "111"},
+                headers=auth_headers_for_account_id(111),
                 json={"endpoint_key": "translate", "payload": {"text": "hello"}},
             )
             second = await rate_limited_client.post(
                 "/v1/services/quote-service/quote",
-                headers={"X-Account-Id": "222"},
+                headers=auth_headers_for_account_id(222),
                 json={"endpoint_key": "translate", "payload": {"text": "hello"}},
             )
     get_settings.cache_clear()
 
     assert first.status_code == 201
-    assert second.status_code == 429
-    assert second.json() == {"detail": "rate limit exceeded"}
+    assert second.status_code == 201
 
 
 @pytest.mark.asyncio
@@ -433,14 +431,14 @@ async def test_create_quote_works_with_authenticated_consumer(
     )
 
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(wallet_address=wallet_address_for_index(999))
         session.add(account)
         await session.flush()
         account_id = account.id
 
     response = await async_client.post(
         f"/v1/services/{service_id}/quote",
-        headers={"X-Account-Id": str(account_id)},
+        headers=auth_headers_for_account_id(account_id),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 

@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.enums import AppEnv
@@ -17,6 +18,13 @@ class Settings(BaseSettings):
     title: str = "Agent Marketplace Backend"
     debug: bool = False
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
+    jwt_secret_key: str = ""
+    jwt_access_token_expiry: int = 900
+    jwt_refresh_token_expiry: int = 604800
+    siwe_domain: str = "testserver"
+    siwe_nonce_expiry: int = 300
+    wallet_change_cooldown: int = 604800
+    api_key_prefix: str = "amp_"
     quote_ttl_seconds: int = 300
     x402_facilitator_url: str = "https://x402.org/facilitator"
     x402_network: str = "base-sepolia"
@@ -31,6 +39,13 @@ class Settings(BaseSettings):
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
+
+    @model_validator(mode="after")
+    def validate_required_auth_settings(self) -> "Settings":
+        if not self.jwt_secret_key:
+            msg = "jwt_secret_key is required"
+            raise ValueError(msg)
+        return self
 
 
 @lru_cache

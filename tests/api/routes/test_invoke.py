@@ -6,17 +6,16 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import AsyncClient, Response, TimeoutException
+from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
 from app.core.request_hash import hash_request_body
 from app.db.models import (
     Account,
-    ConsumerProfile,
     Invocation,
     ModerationAction,
     PricingModel,
-    ProviderProfile,
     ProviderUpstream,
     Quote,
     Service,
@@ -30,31 +29,26 @@ if TYPE_CHECKING:
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
-    return {"X-Account-Id": str(account_id), "Idempotency-Key": "invoke-key"}
+    return auth_headers_for_account_id(account_id, idempotency_key="invoke-key")
 
 
 async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
         return account.id
 
 
 async def _create_consumer_account(
     db_session_factory: async_sessionmaker[AsyncSession],
-    *,
-    with_profile: bool = True,
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Consumer")
         session.add(account)
         await session.flush()
-        if with_profile:
-            session.add(ConsumerProfile(account_id=account.id, display_name="Consumer"))
         return account.id
 
 
@@ -288,24 +282,7 @@ async def test_invoke_requires_auth_header(async_client: AsyncClient) -> None:
     )
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "X-Account-Id header is required"}
-
-
-@pytest.mark.asyncio
-async def test_invoke_requires_consumer_profile(
-    async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await _create_consumer_account(db_session_factory, with_profile=False)
-
-    response = await async_client.post(
-        "/v1/invoke/invoke-service",
-        headers=_auth_headers(account_id),
-        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
-    )
-
-    assert response.status_code == 404
-    assert response.json() == {"detail": "consumer profile not found"}
+    assert response.json() == {"detail": "Authorization header is required"}
 
 
 @pytest.mark.asyncio
@@ -320,7 +297,7 @@ async def test_invoke_requires_idempotency_key(
 
     response = await async_client.post(
         "/v1/invoke/invoke-service",
-        headers={"X-Account-Id": str(consumer_account_id)},
+        headers={"Authorization": _auth_headers(consumer_account_id)["Authorization"]},
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 
@@ -939,11 +916,11 @@ async def test_invoke_list_and_detail_are_consumer_scoped(
 
     owned_list = await async_client.get(
         "/v1/invocations",
-        headers={"X-Account-Id": str(consumer_one)},
+        headers=_auth_headers(consumer_one),
     )
     foreign_detail = await async_client.get(
         f"/v1/invocations/{invocation_id}",
-        headers={"X-Account-Id": str(consumer_two)},
+        headers=_auth_headers(consumer_two),
     )
 
     assert owned_list.status_code == 200
