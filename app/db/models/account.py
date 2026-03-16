@@ -1,20 +1,73 @@
-from datetime import datetime
+from datetime import UTC, datetime
+from uuid import uuid4
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Identity, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+
+
+def _placeholder_wallet_address() -> str:
+    token = uuid4().hex + uuid4().hex[:8]
+    return f"0x{token}"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    wallet_address: Mapped[str] = mapped_column(
+        String(42),
+        unique=True,
+        index=True,
+        default=_placeholder_wallet_address,
+    )
+    account_type: Mapped[str] = mapped_column(
+        String(10),
+        default="human",
+        server_default=text("'human'"),
+    )
     is_admin: Mapped[bool] = mapped_column(
         Boolean,
+        default=False,
         server_default=text("false"),
+    )
+    display_name: Mapped[str] = mapped_column(
+        String(255),
+        default="Anonymous",
+        server_default=text("'Anonymous'"),
+    )
+    nonce: Mapped[str] = mapped_column(
+        String(64),
+        default="",
+        server_default=text("''"),
+    )
+    nonce_issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        server_default=text("now()"),
+    )
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        default=1,
+        server_default=text("1"),
+    )
+    wallet_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        default=_utc_now,
         server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=_utc_now,
+        server_default=text("now()"),
+        onupdate=_utc_now,
     )

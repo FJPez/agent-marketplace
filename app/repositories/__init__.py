@@ -1,15 +1,15 @@
 """Repository package."""
 
 from app.repositories.account_repo import AccountRepository
-from app.repositories.consumer_profile_repo import ConsumerProfileRepository
+from app.repositories.api_key_repo import ApiKeyRepository
 from app.repositories.invocation_repo import InvocationRepository
 from app.repositories.payment_attempt_repo import PaymentAttemptRepository
-from app.repositories.provider_profile_repo import ProviderProfileRepository
+from app.repositories.wallet_change_log_repo import WalletChangeLogRepository
 
 __all__ = [
     "AccountRepository",
-    "ConsumerProfileRepository",
+    "ApiKeyRepository",
     "InvocationRepository",
     "PaymentAttemptRepository",
-    "ProviderProfileRepository",
+    "WalletChangeLogRepository",
 ]
