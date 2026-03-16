@@ -99,17 +99,6 @@ def upgrade() -> None:
             """
         )
     )
-    op.execute(
-        sa.text(
-            """
-            UPDATE accounts
-            SET wallet_address = '0x' || lpad(lower(to_hex(id)), 40, '0')
-            WHERE wallet_address IS NULL
-            """
-        )
-    )
-
-    op.alter_column("accounts", "wallet_address", nullable=False)
     op.create_index(op.f("ix_accounts_wallet_address"), "accounts", ["wallet_address"], unique=True)
 
     op.drop_constraint(

@@ -1,15 +1,9 @@
 from datetime import UTC, datetime
-from uuid import uuid4
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-
-
-def _placeholder_wallet_address() -> str:
-    token = uuid4().hex + uuid4().hex[:8]
-    return f"0x{token}"
 
 
 def _utc_now() -> datetime:
@@ -20,11 +14,11 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    wallet_address: Mapped[str] = mapped_column(
+    wallet_address: Mapped[str | None] = mapped_column(
         String(42),
         unique=True,
         index=True,
-        default=_placeholder_wallet_address,
+        nullable=True,
     )
     account_type: Mapped[str] = mapped_column(
         String(10),

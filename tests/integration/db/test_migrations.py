@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 DOMAIN_TABLES = {
     "accounts",
+    "api_keys",
     "invocations",
     "ledger_entries",
     "moderation_actions",
@@ -19,6 +20,7 @@ DOMAIN_TABLES = {
     "service_revisions",
     "service_tags",
     "services",
+    "wallet_change_log",
 }
 
 
@@ -84,7 +86,7 @@ def test_head_migration_expands_accounts_table(
         "created_at",
         "updated_at",
     }.issubset(columns)
-    assert columns["wallet_address"]["nullable"] is False
+    assert columns["wallet_address"]["nullable"] is True
     assert columns["display_name"]["nullable"] is False
     assert columns["token_version"]["nullable"] is False
 
