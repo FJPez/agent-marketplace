@@ -4,15 +4,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+
 from app.core.security import (
-    AuthTokenType,
-    create_jwt,
     generate_nonce,
     verify_siwe_signature,
 )
 from app.repositories.account_repo import AccountRepository
 from app.repositories.wallet_change_log_repo import WalletChangeLogRepository
-from app.services.auth_service import TokenPair
+from app.services.auth_service import TokenPair, issue_token_pair
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,7 +98,7 @@ class WalletChangeService:
 
         self._wallet_change_log_repo.add(
             account_id=account.id,
-            previous_wallet_address=account.wallet_address,
+            previous_wallet_address=self._require_wallet_address(account),
             new_wallet_address=parsed.address,
         )
         self._account_repo.update_wallet(
@@ -108,7 +108,12 @@ class WalletChangeService:
         )
         self._account_repo.bump_token_version(account)
         self._account_repo.update_nonce(account, nonce=generate_nonce())
-        await self._session.commit()
+        try:
+            await self._session.commit()
+        except IntegrityError as exc:
+            await self._session.rollback()
+            msg = "wallet address is already in use"
+            raise WalletChangeError(msg) from exc
         await self._session.refresh(account)
         return account, self._issue_tokens(account)
 
@@ -128,20 +133,10 @@ class WalletChangeService:
             raise WalletChangeError("wallet change is in cooldown")
 
     def _issue_tokens(self, account: Account) -> TokenPair:
-        access_token = create_jwt(
-            secret_key=self._settings.jwt_secret_key,
-            account_id=account.id,
-            wallet_address=account.wallet_address,
-            token_version=account.token_version,
-            token_type=AuthTokenType.ACCESS,
-            expires_in_seconds=self._settings.jwt_access_token_expiry,
-        )
-        refresh_token = create_jwt(
-            secret_key=self._settings.jwt_secret_key,
-            account_id=account.id,
-            wallet_address=account.wallet_address,
-            token_version=account.token_version,
-            token_type=AuthTokenType.REFRESH,
-            expires_in_seconds=self._settings.jwt_refresh_token_expiry,
-        )
-        return TokenPair(access_token=access_token, refresh_token=refresh_token)
+        return issue_token_pair(settings=self._settings, account=account)
+
+    def _require_wallet_address(self, account: Account) -> str:
+        if account.wallet_address is None:
+            msg = "account wallet address is required"
+            raise WalletChangeError(msg)
+        return account.wallet_address

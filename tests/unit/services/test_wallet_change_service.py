@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 import app.services.wallet_change_service as wallet_change_module
 from app.core.actor import ActorContext
@@ -15,12 +16,19 @@ if TYPE_CHECKING:
 
 
 class FakeSession:
-    def __init__(self) -> None:
+    def __init__(self, *, commit_error: Exception | None = None) -> None:
         self.commits = 0
+        self.rollbacks = 0
         self.refreshed: list[object] = []
+        self.commit_error = commit_error
 
     async def commit(self) -> None:
+        if self.commit_error is not None:
+            raise self.commit_error
         self.commits += 1
+
+    async def rollback(self) -> None:
+        self.rollbacks += 1
 
     async def refresh(self, instance: object) -> None:
         self.refreshed.append(instance)
@@ -167,9 +175,53 @@ async def test_confirm_wallet_change_rejects_duplicate_wallet(
         now: datetime | None = None,
     ) -> ParsedSiweMessage:
         _ = message, signature, expected_nonce, now
+        assert other_account.wallet_address is not None
         return ParsedSiweMessage(
             domain="testserver",
             address=other_account.wallet_address,
+            uri="http://testserver",
+            version="1",
+            chain_id=1,
+            nonce="nonce-1",
+            issued_at=issued_at,
+        )
+
+    monkeypatch.setattr(wallet_change_module, "verify_siwe_signature", fake_verify)
+
+    with pytest.raises(WalletChangeError, match="already in use"):
+        await service.confirm_change(
+            ActorContext(account_id=1),
+            message="ignored",
+            signature="ignored",
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_wallet_change_translates_commit_uniqueness_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_session = FakeSession(
+        commit_error=IntegrityError("statement", {}, Exception("duplicate key"))
+    )
+    session = cast("AsyncSession", fake_session)
+    account = _account()
+    service = WalletChangeService(session, settings=_settings())
+    service._account_repo = FakeAccountRepo(account)
+    service._wallet_change_log_repo = FakeWalletChangeLogRepo()
+    issued_at = datetime.now(UTC).replace(microsecond=0)
+
+    def fake_verify(
+        _settings: Settings,
+        *,
+        message: str,
+        signature: str,
+        expected_nonce: str,
+        now: datetime | None = None,
+    ) -> ParsedSiweMessage:
+        _ = message, signature, expected_nonce, now
+        return ParsedSiweMessage(
+            domain="testserver",
+            address="0x000000000000000000000000000000000000dEaD",
             uri="http://testserver",
             version="1",
             chain_id=1,

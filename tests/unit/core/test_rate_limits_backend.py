@@ -6,7 +6,6 @@ from app.core.rate_limits_backend import (
     build_actor_rate_limit_key,
     build_client_rate_limit_key,
 )
-from app.core.security import AuthTokenType, create_jwt
 
 
 def _build_request(
@@ -34,16 +33,9 @@ def test_build_client_rate_limit_key_uses_client_host() -> None:
     assert build_client_rate_limit_key(request) == "client:10.0.0.1"
 
 
-def test_build_actor_rate_limit_key_prefers_verified_jwt_subject() -> None:
-    token = create_jwt(
-        secret_key="dev-jwt-secret-key-with-32-bytes-min",
-        account_id=42,
-        wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
-        token_version=1,
-        token_type=AuthTokenType.ACCESS,
-        expires_in_seconds=900,
-    )
-    request = _build_request(authorization=f"Bearer {token}")
+def test_build_actor_rate_limit_key_prefers_cached_owner_key() -> None:
+    request = _build_request()
+    request.state.rate_limit_owner_key = "account:42"
 
     assert build_actor_rate_limit_key(request) == "account:42"
 

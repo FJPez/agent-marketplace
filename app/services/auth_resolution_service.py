@@ -29,10 +29,15 @@ class AuthResolutionService:
         self._account_repo = AccountRepository(session)
         self._api_key_repo = ApiKeyRepository(session)
 
-    async def resolve_actor(self, *, authorization: str) -> ActorContext:
+    async def resolve_actor(
+        self,
+        *,
+        authorization: str,
+        touch_api_key: bool = True,
+    ) -> ActorContext:
         token = self._extract_bearer_token(authorization)
         if token.startswith(self._settings.api_key_prefix):
-            return await self._resolve_api_key_actor(token)
+            return await self._resolve_api_key_actor(token, touch_api_key=touch_api_key)
         return await self._resolve_jwt_actor(token)
 
     async def resolve_jwt_actor(self, *, authorization: str) -> ActorContext:
@@ -48,7 +53,12 @@ class AuthResolutionService:
             raise AuthResolutionError(msg)
         return token
 
-    async def _resolve_api_key_actor(self, token: str) -> ActorContext:
+    async def _resolve_api_key_actor(
+        self,
+        token: str,
+        *,
+        touch_api_key: bool,
+    ) -> ActorContext:
         api_key = await self._api_key_repo.get_by_hash(hash_api_key(token))
         if api_key is None or api_key.revoked_at is not None:
             msg = "invalid api key"
@@ -62,8 +72,9 @@ class AuthResolutionService:
             msg = "authenticated account does not exist"
             raise AuthResolutionError(msg)
 
-        self._api_key_repo.touch_last_used(api_key)
-        await self._session.commit()
+        if touch_api_key:
+            self._api_key_repo.touch_last_used(api_key)
+            await self._session.commit()
         return ActorContext(
             account_id=account.id,
             is_admin=account.is_admin,

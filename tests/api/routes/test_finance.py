@@ -22,6 +22,7 @@ from app.db.models import (
     ServiceRevision,
 )
 from app.repositories.ledger_entry_repo import LedgerEntryRepository
+from app.services.ledger_service import LedgerService
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
@@ -207,3 +208,26 @@ async def test_get_provider_ledger_returns_entries_newest_first(
         "charge",
     ]
     assert all(item["service_id"] == service_id for item in payload["entries"])
+
+
+@pytest.mark.asyncio
+async def test_finance_routes_do_not_leak_internal_exceptions(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_account_id, _ = await _seed_provider_finance_data(db_session_factory)
+
+    async def explode(self: LedgerService, actor: object) -> list[object]:
+        _ = self, actor
+        raise RuntimeError("sensitive database details")
+
+    monkeypatch.setattr(LedgerService, "get_provider_earnings", explode)
+
+    response = await async_client.get(
+        "/v1/provider/earnings",
+        headers=_auth_headers(provider_account_id),
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "internal server error"}

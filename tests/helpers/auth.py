@@ -45,6 +45,7 @@ async def auth_headers_for_account(
         account = await session.get(Account, account_id)
 
     assert account is not None
+    assert account.wallet_address is not None
     token = create_jwt(
         secret_key=get_settings().jwt_secret_key,
         account_id=account.id,

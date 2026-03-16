@@ -27,7 +27,7 @@ async def get_provider_earnings(
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
+            detail="internal server error",
         ) from exc
     return ProviderEarningsSummaryResponse(
         totals=[ProviderEarningsTotalResponse.from_summary(total) for total in totals],
@@ -45,7 +45,7 @@ async def get_provider_ledger(
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(exc),
+            detail="internal server error",
         ) from exc
     return ProviderLedgerResponse(
         entries=[ProviderLedgerEntryResponse.from_model(entry) for entry in entries],

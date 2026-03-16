@@ -8,7 +8,7 @@ from limits.aio.storage import MemoryStorage
 from limits.aio.strategies import FixedWindowRateLimiter
 
 from app.core.config import get_settings
-from app.core.security import AuthTokenType, decode_jwt, hash_api_key
+from app.core.security import hash_api_key
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -20,6 +20,10 @@ def build_client_rate_limit_key(request: Request) -> str:
 
 
 def build_actor_rate_limit_key(request: Request) -> str:
+    cached_key = getattr(request.state, "rate_limit_owner_key", None)
+    if isinstance(cached_key, str):
+        return cached_key
+
     authorization = request.headers.get("Authorization")
     if authorization is not None:
         scheme, _, token = authorization.partition(" ")
@@ -27,16 +31,7 @@ def build_actor_rate_limit_key(request: Request) -> str:
             settings = get_settings()
             if token.startswith(settings.api_key_prefix):
                 return f"api_key:{hash_api_key(token)}"
-            try:
-                claims = decode_jwt(
-                    token,
-                    secret_key=settings.jwt_secret_key,
-                    expected_token_type=AuthTokenType.ACCESS,
-                )
-            except Exception:
-                pass
-            else:
-                return f"account:{claims.account_id}"
+            return f"bearer:{hash_api_key(token)}"
     return build_client_rate_limit_key(request)
 
 

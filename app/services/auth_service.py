@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from jwt import InvalidTokenError
+from sqlalchemy.exc import IntegrityError
 
 from app.core.security import (
     AuthTokenType,
@@ -45,6 +46,34 @@ class AuthResult:
     refresh_token: str
 
 
+def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
+    wallet_address = _require_wallet_address(account)
+    access_token = create_jwt(
+        secret_key=settings.jwt_secret_key,
+        account_id=account.id,
+        wallet_address=wallet_address,
+        token_version=account.token_version,
+        token_type=AuthTokenType.ACCESS,
+        expires_in_seconds=settings.jwt_access_token_expiry,
+    )
+    refresh_token = create_jwt(
+        secret_key=settings.jwt_secret_key,
+        account_id=account.id,
+        wallet_address=wallet_address,
+        token_version=account.token_version,
+        token_type=AuthTokenType.REFRESH,
+        expires_in_seconds=settings.jwt_refresh_token_expiry,
+    )
+    return TokenPair(access_token=access_token, refresh_token=refresh_token)
+
+
+def _require_wallet_address(account: Account) -> str:
+    if account.wallet_address is None:
+        msg = "account wallet address is required"
+        raise AuthenticationError(msg)
+    return account.wallet_address
+
+
 class AuthService:
     def __init__(self, session: AsyncSession, *, settings: Settings) -> None:
         self._session = session
@@ -54,16 +83,29 @@ class AuthService:
     async def issue_nonce(self, *, wallet_address: str) -> str:
         normalized_wallet = normalize_wallet_address(wallet_address)
         account = await self._account_repo.get_by_wallet_address(normalized_wallet)
+        if account is not None and self._nonce_is_active(account):
+            return account.nonce
+
         nonce = generate_nonce()
+        issued_at = datetime.now(UTC)
         if account is None:
-            await self._account_repo.create(
-                wallet_address=normalized_wallet,
-                display_name="Anonymous",
-                nonce=nonce,
-                nonce_issued_at=datetime.now(UTC),
-            )
+            try:
+                await self._account_repo.create(
+                    wallet_address=normalized_wallet,
+                    display_name="Anonymous",
+                    nonce=nonce,
+                    nonce_issued_at=issued_at,
+                )
+            except IntegrityError:
+                await self._session.rollback()
+                account = await self._account_repo.get_by_wallet_address(normalized_wallet)
+                if account is None:
+                    raise
+                if self._nonce_is_active(account):
+                    return account.nonce
+                self._account_repo.update_nonce(account, nonce=nonce, issued_at=issued_at)
         else:
-            self._account_repo.update_nonce(account, nonce=nonce)
+            self._account_repo.update_nonce(account, nonce=nonce, issued_at=issued_at)
         await self._session.commit()
         return nonce
 
@@ -105,7 +147,7 @@ class AuthService:
         return create_jwt(
             secret_key=self._settings.jwt_secret_key,
             account_id=account.id,
-            wallet_address=account.wallet_address,
+            wallet_address=_require_wallet_address(account),
             token_version=account.token_version,
             token_type=AuthTokenType.ACCESS,
             expires_in_seconds=self._settings.jwt_access_token_expiry,
@@ -136,20 +178,10 @@ class AuthService:
         raise AuthenticationError("nonce is not valid")
 
     def _build_token_pair(self, account: Account) -> TokenPair:
-        access_token = create_jwt(
-            secret_key=self._settings.jwt_secret_key,
-            account_id=account.id,
-            wallet_address=account.wallet_address,
-            token_version=account.token_version,
-            token_type=AuthTokenType.ACCESS,
-            expires_in_seconds=self._settings.jwt_access_token_expiry,
-        )
-        refresh_token = create_jwt(
-            secret_key=self._settings.jwt_secret_key,
-            account_id=account.id,
-            wallet_address=account.wallet_address,
-            token_version=account.token_version,
-            token_type=AuthTokenType.REFRESH,
-            expires_in_seconds=self._settings.jwt_refresh_token_expiry,
-        )
-        return TokenPair(access_token=access_token, refresh_token=refresh_token)
+        return issue_token_pair(settings=self._settings, account=account)
+
+    def _nonce_is_active(self, account: Account) -> bool:
+        if not account.nonce:
+            return False
+        expires_at = account.nonce_issued_at + timedelta(seconds=self._settings.siwe_nonce_expiry)
+        return expires_at >= datetime.now(UTC)
