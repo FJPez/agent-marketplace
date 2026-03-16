@@ -230,24 +230,30 @@ uv run alembic upgrade head
 
 For a live x402 v2 manual test:
 
-1. Create `.env` from `.env.example` and set `APP_X402_PAY_TO_ADDRESS` to the
-   provider wallet that should receive Base Sepolia USDC.
-2. Point the seeded service at a reachable upstream with
+1. Create `.env` from `.env.example`.
+2. Set these x402 values for the recommended CDP facilitator path:
+   - `APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
+   - `APP_X402_CDP_API_KEY_ID=...`
+   - `APP_X402_CDP_API_KEY_SECRET=...`
+   - `APP_X402_PAY_TO_ADDRESS=...`
+   The payout address should be the provider wallet that should receive Base
+   Sepolia USDC.
+3. Point the seeded service at a reachable upstream with
    `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
-3. Run migrations and seed data:
+4. Run migrations and seed data:
    `uv run alembic upgrade head`
    `make seed`
-4. Create a quote for the paid endpoint:
+5. Create a quote for the paid endpoint:
    `POST /v1/services/demo-agent-service/quote`
-5. Invoke with `X-Account-Id` and `Idempotency-Key`. The first unpaid request
+6. Invoke with `X-Account-Id` and `Idempotency-Key`. The first unpaid request
    should return `402 Payment Required` with `PAYMENT-REQUIRED`.
-6. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
+7. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
    A successful paid invoke returns the upstream response plus
-   `PAYMENT-RESPONSE`.
+   `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
 
 For the full local demo walkthrough, including the mock upstream, seeded demo
-service, example client, `.env` setup, Base Sepolia wallet preparation, and
-facilitator defaults, see
+service, example client, `.env` setup, Base Sepolia wallet preparation, CDP
+facilitator credentials, and transaction verification, see
 [`docs/demo-setup.md`](/Users/freddieperrott/Development/uni-work/agent-marketplace/docs/demo-setup.md).
 
 ## Working style

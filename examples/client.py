@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 from eth_account import Account
 from x402 import x402Client
-from x402.http import x402HTTPClient
+from x402.http import decode_payment_response_header, x402HTTPClient
 from x402.mechanisms.evm.exact import register_exact_evm_client
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
@@ -147,6 +147,19 @@ async def _invoke_paid(
     logger.info("\nPaid invoke:\n%s", json.dumps(body, indent=2))
     if payment_response := response.headers.get("PAYMENT-RESPONSE"):
         logger.info("PAYMENT-RESPONSE: %s", payment_response)
+        decoded_payment_response = decode_payment_response_header(payment_response)
+        logger.info(
+            "Decoded PAYMENT-RESPONSE:\n%s",
+            json.dumps(
+                decoded_payment_response.model_dump(by_alias=True, exclude_none=True),
+                indent=2,
+            ),
+        )
+        logger.info("Settlement transaction: %s", decoded_payment_response.transaction)
+        logger.info(
+            "Explorer URL: https://sepolia-explorer.base.org/tx/%s",
+            decoded_payment_response.transaction,
+        )
     return body
 
 

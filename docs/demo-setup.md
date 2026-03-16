@@ -7,8 +7,8 @@ This demo gives you a local end-to-end path for:
 - free invoke
 - paid `402 Payment Required`
 - signed paid retry with the Python x402 client
-
-The paid retry still depends on the external facilitator. In my local run on March 16, 2026, the retry reached the app correctly and then came back with `502 {"detail":"facilitator unavailable"}` from the live facilitator.
+- payment settlement through the CDP facilitator
+- Base Sepolia transaction verification for the buyer and provider wallets
 
 ## Prerequisites
 
@@ -18,6 +18,7 @@ The paid retry still depends on the external facilitator. In my local run on Mar
   - You can use your own local Postgres, or `docker compose up -d postgres`
 - a Base Sepolia private key for the buyer wallet
 - a Base Sepolia address for the provider payout wallet
+- a CDP secret API key id and secret for the facilitator
 
 ## What You Need Before Starting
 
@@ -36,8 +37,30 @@ For the full paid retry path, the buyer wallet should be prepared for Base Sepol
 
 - add Base Sepolia in your wallet app if it is not already present
 - fund the buyer wallet with Base Sepolia ETH for gas
-- make sure the buyer wallet can hold Base Sepolia USDC
+- fund the buyer wallet with Base Sepolia USDC
 - never commit the private key to the repo or put it in `.env.example`
+
+The provider payout wallet should also be a Base Sepolia EVM address. It does
+not need a private key in this repo; only the address is required so the app can
+advertise where the x402 payment should settle.
+
+You also need CDP facilitator credentials:
+
+- `APP_X402_CDP_API_KEY_ID`
+  - your CDP secret API key id
+  - usually shaped like `organizations/<org-id>/apiKeys/<key-id>`
+- `APP_X402_CDP_API_KEY_SECRET`
+  - the matching private key material
+  - if you paste it into `.env`, keep the literal `\n` escapes or quote the
+    multiline value so the loader preserves the PEM content
+
+The recommended facilitator for this demo is:
+
+- `https://api.cdp.coinbase.com/platform/v2/x402`
+
+That is the authenticated CDP x402 facilitator. This repo still supports
+unauthenticated facilitators such as `https://x402.org/facilitator`, but the
+CDP path is the intended setup for a reliable wallet-to-wallet test.
 
 If you only want to test discovery, quoting, free invoke, and the initial `402 Payment Required` response, you do not need a fully funded buyer wallet.
 
@@ -63,9 +86,11 @@ APP_TITLE=Agent Marketplace Backend
 APP_DEBUG=false
 APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace
 APP_QUOTE_TTL_SECONDS=300
-APP_X402_FACILITATOR_URL=https://x402.org/facilitator
+APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402
 APP_X402_NETWORK=base-sepolia
 APP_X402_NETWORK_CAIP2=eip155:84532
+APP_X402_CDP_API_KEY_ID=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
+APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n
 APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS
 APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000
 APP_DEMO_FREE_UPSTREAM_PATH=/free-ping
@@ -85,13 +110,18 @@ What each setting does:
   - change only if your Postgres host, port, user, password, or db name differ
 - `APP_QUOTE_TTL_SECONDS=300`
   - quotes expire after 5 minutes
-- `APP_X402_FACILITATOR_URL=https://x402.org/facilitator`
-  - the repo default and the common public facilitator URL used in this demo
-  - if you operate your own facilitator, replace this value
+- `APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
+  - the recommended facilitator URL for the paid demo
+  - uses CDP Bearer JWT auth for `/supported`, `/verify`, and `/settle`
 - `APP_X402_NETWORK=base-sepolia`
   - human-readable network name used by the app
 - `APP_X402_NETWORK_CAIP2=eip155:84532`
   - CAIP-2 network identifier for Base Sepolia
+- `APP_X402_CDP_API_KEY_ID=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID`
+  - CDP secret API key id used to mint facilitator Bearer JWTs
+- `APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n`
+  - CDP private key material used to sign facilitator JWTs
+  - literal `\n` escapes are supported
 - `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS`
   - provider payout address advertised in the x402 payment requirement
   - must be a Base Sepolia EVM address
@@ -188,6 +218,12 @@ The example client will:
 3. Call `POST /v1/invoke/demo-agent-service` for the free endpoint
 4. Call the paid endpoint, receive `402 Payment Required`, generate a signed payment with `x402HTTPClient`, and retry the same request
 
+On success the example client also logs:
+
+- the raw `PAYMENT-RESPONSE` header
+- the decoded settlement payload
+- the transaction hash you can inspect on Base Sepolia
+
 ## Expected Results
 
 You should see:
@@ -196,22 +232,39 @@ You should see:
 - a successful quote response
 - a successful free invoke response
 - an initial paid response with `402` and a `PAYMENT-REQUIRED` header
+- a successful paid retry with `200`
+- a `PAYMENT-RESPONSE` header
+- a decoded settlement payload with `transaction` and `network`
 
-If the facilitator is available and your buyer wallet can be settled on Base Sepolia, the paid retry should return `200` and a `PAYMENT-RESPONSE` header.
+When the paid retry succeeds, take the `transaction` value from the decoded
+`PAYMENT-RESPONSE` and verify it on the Base Sepolia explorer:
 
-If the facilitator is unavailable, you will see the retry fail with:
+- explorer: `https://sepolia-explorer.base.org`
+- confirm the transaction hash exists
+- confirm the buyer wallet is the payer
+- confirm the provider payout address matches `APP_X402_PAY_TO_ADDRESS`
+
+If you want to see value movement clearly, compare the buyer and provider
+wallets in the explorer before and after the paid retry.
+
+If the facilitator cannot authenticate or settle, you will see the retry fail
+with one of these app errors:
 
 ```text
+502 {"detail":"facilitator authentication failed"}
 502 {"detail":"facilitator unavailable"}
 ```
 
-That means the local app, seeding, routing, challenge generation, and x402 client retry are working, but the external facilitator could not complete the payment leg.
+`facilitator authentication failed` usually means the CDP API key id or secret
+is wrong for the configured facilitator URL. `facilitator unavailable` usually
+means the facilitator could not be reached or returned a non-auth failure.
 
 ## Common Defaults
 
 These are the values used by this repo unless you override them:
 
-- facilitator URL: `https://x402.org/facilitator`
+- code default facilitator URL: `https://x402.org/facilitator`
+- recommended demo facilitator URL: `https://api.cdp.coinbase.com/platform/v2/x402`
 - network name: `base-sepolia`
 - network CAIP-2 id: `eip155:84532`
 - local API URL: `http://127.0.0.1:8000`
@@ -233,10 +286,35 @@ If the paid retry fails before it reaches the app, confirm:
 - the buyer wallet is configured for Base Sepolia
 - the buyer wallet has any required testnet funds for the path you are attempting
 
+If the paid retry reaches the app but returns `502 {"detail":"facilitator authentication failed"}`, confirm:
+
+- `APP_X402_FACILITATOR_URL` is `https://api.cdp.coinbase.com/platform/v2/x402`
+- `APP_X402_CDP_API_KEY_ID` is the CDP secret API key id, not a wallet id
+- `APP_X402_CDP_API_KEY_SECRET` matches that key id
+- the secret formatting in `.env` preserved the PEM or base64 value correctly
+
+If the paid retry reaches the app but returns `502 {"detail":"facilitator unavailable"}`, confirm:
+
+- the facilitator URL is reachable from your machine
+- CDP is not returning a transient `5xx`
+- the buyer wallet has Base Sepolia ETH and USDC
+- the provider payout address is a valid Base Sepolia EVM address
+
 If the app cannot reach the mock upstream, confirm:
 
 - `examples/mock_upstream.py` is running on port `9000`
 - the API was started with `APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000`
+
+If you want to try the unauthenticated public facilitator instead, set:
+
+```dotenv
+APP_X402_FACILITATOR_URL=https://x402.org/facilitator
+APP_X402_CDP_API_KEY_ID=
+APP_X402_CDP_API_KEY_SECRET=
+```
+
+That path can still exercise the x402 flow, but the CDP facilitator is the
+recommended setup for a full buyer-to-provider settlement demo.
 
 If the paid retry returns `502 {"detail":"facilitator unavailable"}`, the local demo still proved:
 
