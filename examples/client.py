@@ -5,17 +5,20 @@ import json
 import logging
 import os
 import uuid
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from eth_account import Account
+from eth_account.messages import encode_defunct
 from x402 import x402Client
 from x402.http import decode_payment_response_header, x402HTTPClient
 from x402.mechanisms.evm.exact import register_exact_evm_client
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
-CONSUMER_ACCOUNT_ID = os.getenv("CONSUMER_ACCOUNT_ID", "2")
 CONSUMER_PRIVATE_KEY = os.getenv("CONSUMER_PRIVATE_KEY")
+SIWE_DOMAIN = os.getenv("SIWE_DOMAIN")
 SERVICE_SLUG = os.getenv("SERVICE_SLUG", "demo-agent-service")
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
@@ -33,11 +36,11 @@ async def main() -> None:
     buyer, wallet_address = _build_x402_http_client(CONSUMER_PRIVATE_KEY)
 
     logger.info("API base URL: %s", API_BASE_URL)
-    logger.info("Using consumer account id: %s", CONSUMER_ACCOUNT_ID)
     logger.info("Using wallet address: %s", wallet_address)
     logger.info("Target network: Base Sepolia (%s, chain %s)", NETWORK_CAIP2, CHAIN_ID)
 
     async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=30.0) as client:
+        access_token = await _authenticate(client, private_key=CONSUMER_PRIVATE_KEY)
         services = await _discover_services(client)
         _select_service(services, SERVICE_SLUG)
 
@@ -46,13 +49,14 @@ async def main() -> None:
             "message": ("Summarize this marketplace request after the x402 payment flow completes.")
         }
 
-        quote = await _create_quote(client, SERVICE_SLUG, paid_payload)
-        await _invoke_free(client, SERVICE_SLUG, free_payload)
+        quote = await _create_quote(client, SERVICE_SLUG, paid_payload, access_token=access_token)
+        await _invoke_free(client, SERVICE_SLUG, free_payload, access_token=access_token)
         await _invoke_paid(
             client,
             buyer,
             SERVICE_SLUG,
             paid_payload,
+            access_token=access_token,
             quote_id=quote["id"],
         )
 
@@ -78,10 +82,12 @@ async def _create_quote(
     client: httpx.AsyncClient,
     service_slug: str,
     payload: dict[str, object],
+    *,
+    access_token: str,
 ) -> dict[str, Any]:
     response = await client.post(
         f"/v1/services/{service_slug}/quote",
-        headers={"X-Account-Id": CONSUMER_ACCOUNT_ID},
+        headers=_authorization_headers(access_token),
         json={"endpoint_key": PAID_ENDPOINT_KEY, "payload": payload},
     )
     response.raise_for_status()
@@ -94,10 +100,12 @@ async def _invoke_free(
     client: httpx.AsyncClient,
     service_slug: str,
     payload: dict[str, object],
+    *,
+    access_token: str,
 ) -> dict[str, Any]:
     response = await client.post(
         f"/v1/invoke/{service_slug}",
-        headers=_invoke_headers(),
+        headers=_invoke_headers(access_token),
         json={"endpoint_key": FREE_ENDPOINT_KEY, "payload": payload},
     )
     response.raise_for_status()
@@ -112,9 +120,10 @@ async def _invoke_paid(
     service_slug: str,
     payload: dict[str, object],
     *,
+    access_token: str,
     quote_id: int,
 ) -> dict[str, Any]:
-    request_headers = _invoke_headers()
+    request_headers = _invoke_headers(access_token)
     request_body = {
         "endpoint_key": PAID_ENDPOINT_KEY,
         "payload": payload,
@@ -173,9 +182,64 @@ def _build_x402_http_client(private_key: str) -> tuple[x402HTTPClient, str]:
     return x402HTTPClient(buyer), wallet.address
 
 
-def _invoke_headers() -> dict[str, str]:
+async def _authenticate(client: httpx.AsyncClient, *, private_key: str) -> str:
+    signer = Account.from_key(private_key)
+    nonce_response = await client.get(
+        "/v1/auth/nonce",
+        params={"address": signer.address},
+    )
+    nonce_response.raise_for_status()
+    nonce = nonce_response.json()["nonce"]
+    issued_at = datetime.now(UTC).replace(microsecond=0)
+    domain = _resolve_siwe_domain()
+    message = "\n".join(
+        [
+            f"{domain} wants you to sign in with your Ethereum account:",
+            signer.address,
+            "",
+            f"URI: {API_BASE_URL}",
+            "Version: 1",
+            f"Chain ID: {CHAIN_ID}",
+            f"Nonce: {nonce}",
+            f"Issued At: {issued_at.isoformat().replace('+00:00', 'Z')}",
+        ],
+    )
+    signed = Account.sign_message(
+        signable_message=encode_defunct(text=message),
+        private_key=private_key,
+    )
+    verify_response = await client.post(
+        "/v1/auth/verify",
+        json={
+            "message": message,
+            "signature": signed.signature.to_0x_hex(),
+        },
+    )
+    verify_response.raise_for_status()
+    body = verify_response.json()
+    logger.info(
+        "\nAuthenticated account:\n%s",
+        json.dumps(body["account"], indent=2),
+    )
+    return body["access_token"]
+
+
+def _resolve_siwe_domain() -> str:
+    if SIWE_DOMAIN:
+        return SIWE_DOMAIN
+    parsed = urlparse(API_BASE_URL)
+    if parsed.hostname:
+        return parsed.hostname
+    return "127.0.0.1"
+
+
+def _authorization_headers(access_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+def _invoke_headers(access_token: str) -> dict[str, str]:
     return {
-        "X-Account-Id": CONSUMER_ACCOUNT_ID,
+        **_authorization_headers(access_token),
         "Idempotency-Key": f"example-{uuid.uuid4()}",
     }
 

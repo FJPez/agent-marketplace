@@ -9,7 +9,6 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
-from app.core.security import hash_api_key
 from app.db.models import (
     Account,
     PricingModel,
@@ -25,20 +24,16 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 DEMO_PROVIDER_NAME = "Demo Provider"
-DEMO_CONSUMER_NAME = "Demo Consumer"
 DEMO_PROVIDER_WALLET = "0x00000000000000000000000000000000000000a1"
-DEMO_CONSUMER_WALLET = "0x00000000000000000000000000000000000000b2"
 DEMO_SERVICE_SLUG = "demo-agent-service"
 DEMO_CHANGE_TOKEN = "d" * 64
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
-DEMO_API_KEY_PLAINTEXT = "amp_demo_manual_testing_key"
 
 
 @dataclass(frozen=True, slots=True)
 class SeedResult:
     provider_account_id: int
-    consumer_account_id: int
     service_id: int
     free_endpoint_id: int
     paid_endpoint_id: int
@@ -297,11 +292,6 @@ async def seed_demo_data() -> SeedResult:
                 wallet_address=DEMO_PROVIDER_WALLET,
                 display_name=DEMO_PROVIDER_NAME,
             )
-            consumer = await _get_or_create_account(
-                session,
-                wallet_address=DEMO_CONSUMER_WALLET,
-                display_name=DEMO_CONSUMER_NAME,
-            )
             service = await _get_or_create_service(
                 session,
                 provider_account_id=provider.id,
@@ -359,7 +349,6 @@ async def seed_demo_data() -> SeedResult:
             )
             return SeedResult(
                 provider_account_id=provider.id,
-                consumer_account_id=consumer.id,
                 service_id=service.id,
                 free_endpoint_id=free_endpoint.id,
                 paid_endpoint_id=paid_endpoint.id,
@@ -374,7 +363,6 @@ async def main() -> None:
         "\n".join(
             [
                 f"provider_account_id={result.provider_account_id}",
-                f"consumer_account_id={result.consumer_account_id}",
                 f"service_id={result.service_id}",
                 f"service_slug={DEMO_SERVICE_SLUG}",
                 f"free_endpoint_id={result.free_endpoint_id}",
@@ -383,8 +371,6 @@ async def main() -> None:
                 f"demo_free_upstream_path={get_settings().demo_free_upstream_path}",
                 f"demo_paid_upstream_path={get_settings().demo_paid_upstream_path}",
                 f"demo_provider_wallet={DEMO_PROVIDER_WALLET}",
-                f"demo_consumer_wallet={DEMO_CONSUMER_WALLET}",
-                f"demo_api_key_hash={hash_api_key(DEMO_API_KEY_PLAINTEXT)}",
             ],
         )
         + "\n",

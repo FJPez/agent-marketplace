@@ -6,15 +6,11 @@ Backend-only marketplace where agents can publish services, discover other agent
 
 This project is a FastAPI backend for an agent-to-agent service marketplace.
 
-Providers can:
+Authenticated accounts can:
 
-- register as service providers
 - create and manage service drafts
 - define callable endpoints
 - publish services with machine-readable schemas and pricing
-
-Consumers can:
-
 - discover available services
 - inspect schemas and pricing
 - request quotes
@@ -38,7 +34,7 @@ The MVP focuses on the core marketplace loop:
 
 Included in the MVP:
 
-- provider and consumer identities
+- unified account identity with wallet auth and API keys
 - service drafts and publishing
 - endpoint definitions
 - public discovery API
@@ -183,8 +179,9 @@ uv python install 3.12
 uv sync
 ```
 
-Copy `.env.example` to `.env` for local development. The supported settings still
-live in `app/core/config.py` if you need the source of truth.
+Copy `.env.example` to `.env` for local development. `.env.example` now includes
+the current auth, guardrail, demo, and x402 settings; `app/core/config.py`
+remains the source of truth if you need to verify defaults.
 
 ### Run the app
 
@@ -218,20 +215,22 @@ uv run alembic upgrade head
 
 ## Operational notes
 
-- `.env.example` now documents the supported `APP_...` environment variables.
+- `.env.example` includes the current `APP_...` settings used by local auth,
+  guardrails, x402, and the demo seed path.
 - `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; startup and free routes
   still work without it, but paid invoke attempts fail with a clear config error.
 - x402 v2 payment flows use `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
   `PAYMENT-RESPONSE` headers.
-- `scripts/seed_demo.py` seeds a rerunnable demo provider, consumer, active
-  service, endpoints, pricing, upstreams, tags, and revision for manual testing.
+- `scripts/seed_demo.py` seeds a rerunnable demo provider-owned active service,
+  endpoints, pricing, upstreams, tags, and revision for manual testing.
 - `APP_DEMO_UPSTREAM_BASE_URL`, `APP_DEMO_FREE_UPSTREAM_PATH`, and
   `APP_DEMO_PAID_UPSTREAM_PATH` let the demo seed target a real provider for
   manual invoke testing instead of `provider.example.com`.
 - `make seed` runs that seed helper through `uv`.
 - A root `Makefile` wraps the common `uv` commands; `make run`, `make test`,
   `make lint`, `make format`, `make typecheck`, and `make migrate` map directly
-  to the existing workflows.
+  to the existing workflows. `make demo-upstream`, `make demo-api`, and
+  `make demo-client` wrap the local demo commands.
 
 ## Manual Paid Invoke
 
@@ -252,12 +251,20 @@ For a live x402 v2 manual test:
 4. Run migrations and seed data:
    `uv run alembic upgrade head`
    `make seed`
-5. Create a quote for the paid endpoint:
+5. Authenticate the buyer wallet with the same private key the example x402
+   client uses:
+   `GET /v1/auth/nonce?address=<wallet>`
+   sign the returned nonce in a SIWE message whose domain matches
+   `APP_SIWE_DOMAIN`
+   `POST /v1/auth/verify`
+6. Optionally create an API key for repeated manual calls:
+   `POST /v1/auth/api-keys`
+7. Create a quote for the paid endpoint:
    `POST /v1/services/demo-agent-service/quote`
-6. Invoke with `Authorization: Bearer <jwt>` and `Idempotency-Key`. The first
+8. Invoke with `Authorization: Bearer <jwt-or-api-key>` and `Idempotency-Key`. The first
    unpaid request should return `402 Payment Required` with
    `PAYMENT-REQUIRED`.
-7. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
+9. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
    A successful paid invoke returns the upstream response plus
    `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
 

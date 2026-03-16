@@ -85,6 +85,13 @@ APP_ENV=dev
 APP_TITLE=Agent Marketplace Backend
 APP_DEBUG=false
 APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace
+APP_JWT_SECRET_KEY=dev-jwt-secret-key-with-32-bytes-min
+APP_JWT_ACCESS_TOKEN_EXPIRY=900
+APP_JWT_REFRESH_TOKEN_EXPIRY=604800
+APP_SIWE_DOMAIN=127.0.0.1
+APP_SIWE_NONCE_EXPIRY=300
+APP_WALLET_CHANGE_COOLDOWN=604800
+APP_API_KEY_PREFIX=amp_
 APP_QUOTE_TTL_SECONDS=300
 APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402
 APP_X402_NETWORK=base-sepolia
@@ -92,6 +99,10 @@ APP_X402_NETWORK_CAIP2=eip155:84532
 APP_X402_CDP_API_KEY_ID=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
 APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n
 APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS
+APP_API_RATE_LIMIT=120/minute
+APP_INVOKE_RATE_LIMIT=60/minute
+APP_QUOTE_RATE_LIMIT=30/minute
+APP_INVOKE_PAYLOAD_MAX_BYTES=1048576
 APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000
 APP_DEMO_FREE_UPSTREAM_PATH=/free-ping
 APP_DEMO_PAID_UPSTREAM_PATH=/paid-summary
@@ -108,6 +119,22 @@ What each setting does:
 - `APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace`
   - local Postgres connection string
   - change only if your Postgres host, port, user, password, or db name differ
+- `APP_JWT_SECRET_KEY=dev-jwt-secret-key-with-32-bytes-min`
+  - signing secret for marketplace JWTs
+  - keep the example value only for local development
+- `APP_JWT_ACCESS_TOKEN_EXPIRY=900`
+  - access tokens expire after 15 minutes
+- `APP_JWT_REFRESH_TOKEN_EXPIRY=604800`
+  - refresh tokens expire after 7 days
+- `APP_SIWE_DOMAIN=127.0.0.1`
+  - the SIWE message domain the API expects during wallet login
+  - for this local demo it should match the host portion of `API_BASE_URL`
+- `APP_SIWE_NONCE_EXPIRY=300`
+  - wallet-login nonces expire after 5 minutes
+- `APP_WALLET_CHANGE_COOLDOWN=604800`
+  - cooldown window for wallet rotation requests
+- `APP_API_KEY_PREFIX=amp_`
+  - prefix for generated marketplace API keys
 - `APP_QUOTE_TTL_SECONDS=300`
   - quotes expire after 5 minutes
 - `APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
@@ -125,6 +152,14 @@ What each setting does:
 - `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS`
   - provider payout address advertised in the x402 payment requirement
   - must be a Base Sepolia EVM address
+- `APP_API_RATE_LIMIT=120/minute`
+  - base rate limit for authenticated API traffic
+- `APP_INVOKE_RATE_LIMIT=60/minute`
+  - invoke-specific rate limit
+- `APP_QUOTE_RATE_LIMIT=30/minute`
+  - quote-specific rate limit
+- `APP_INVOKE_PAYLOAD_MAX_BYTES=1048576`
+  - maximum allowed invoke payload size in bytes
 - `APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000`
   - points the seeded demo service at the local mock upstream
 - `APP_DEMO_FREE_UPSTREAM_PATH=/free-ping`
@@ -159,7 +194,7 @@ Important:
 In one terminal:
 
 ```bash
-uv run python examples/mock_upstream.py
+make demo-upstream
 ```
 
 This starts a FastAPI app on `http://127.0.0.1:9000` and logs every incoming header so you can inspect the `X-Agent-Marketplace-*` signing headers.
@@ -169,21 +204,26 @@ This starts a FastAPI app on `http://127.0.0.1:9000` and logs every incoming hea
 In a second terminal, seed the demo service:
 
 ```bash
-uv run python scripts/seed_demo.py
+make seed
 ```
 
 Expected output:
 
 ```text
 provider_account_id=1
-consumer_account_id=2
 service_id=1
 service_slug=demo-agent-service
 free_endpoint_id=1
 paid_endpoint_id=2
+demo_upstream_base_url=http://127.0.0.1:9000
+demo_free_upstream_path=/free-ping
+demo_paid_upstream_path=/paid-summary
+demo_provider_wallet=0x00000000000000000000000000000000000000a1
 ```
 
-`consumer_account_id=2` is the default used by `examples/client.py`. If your output differs, export `CONSUMER_ACCOUNT_ID` before running the client.
+The seed now prepares only the provider-owned demo service. The example client
+authenticates as whichever wallet matches `CONSUMER_PRIVATE_KEY`, so there is
+no seeded consumer account id to export.
 
 Pricing note:
 
@@ -200,7 +240,7 @@ Pricing note:
 In a third terminal:
 
 ```bash
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+make demo-api
 ```
 
 The API will be available at `http://127.0.0.1:8000`.
@@ -211,30 +251,30 @@ In a fourth terminal:
 
 ```bash
 export CONSUMER_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_PRIVATE_KEY
-export CONSUMER_ACCOUNT_ID=2
 export API_BASE_URL=http://127.0.0.1:8000
 
-uv run python examples/client.py
+make demo-client
 ```
 
 What these values mean:
 
 - `CONSUMER_PRIVATE_KEY`
   - buyer wallet private key for Base Sepolia
-  - used only by the example client
-- `CONSUMER_ACCOUNT_ID`
-  - marketplace consumer account id from the seed output
+  - used by the example client for both wallet auth and x402 payment signing
 - `API_BASE_URL`
   - local marketplace API base URL
+  - the host should match `APP_SIWE_DOMAIN` unless you explicitly set `SIWE_DOMAIN`
 
 The example client uses the installed Python x402 client and Base Sepolia network `eip155:84532`.
 
 The example client will:
 
-1. Call `GET /v1/services`
-2. Call `POST /v1/services/demo-agent-service/quote`
-3. Call `POST /v1/invoke/demo-agent-service` for the free endpoint
-4. Call the paid endpoint, receive `402 Payment Required`, generate a signed payment with `x402HTTPClient`, and retry the same request
+1. Call `GET /v1/auth/nonce` for the buyer wallet
+2. Sign a SIWE message and call `POST /v1/auth/verify`
+3. Call `GET /v1/services`
+4. Call `POST /v1/services/demo-agent-service/quote`
+5. Call `POST /v1/invoke/demo-agent-service` for the free endpoint
+6. Call the paid endpoint, receive `402 Payment Required`, generate a signed payment with `x402HTTPClient`, and retry the same request
 
 On success the example client also logs:
 
@@ -249,6 +289,21 @@ On failure the example client logs:
 
 That makes it much easier to distinguish facilitator auth problems from verify
 or settle failures.
+
+## Optional API-Key Flow
+
+If you want a long-lived token for repeated manual requests, first obtain a JWT
+with the nonce and verify flow above, then create an API key:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/auth/api-keys \
+  -H "Authorization: Bearer <jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"demo-cli"}'
+```
+
+The response includes the plaintext `api_key` once. You can then replace the
+JWT with `Authorization: Bearer amp_...` for later quote or invoke calls.
 
 ## Expected Results
 
@@ -294,9 +349,9 @@ These are the values used by this repo unless you override them:
 - network name: `base-sepolia`
 - network CAIP-2 id: `eip155:84532`
 - local API URL: `http://127.0.0.1:8000`
+- local SIWE domain: `127.0.0.1`
 - local mock upstream URL: `http://127.0.0.1:9000`
 - seeded service slug: `demo-agent-service`
-- seeded consumer account id: usually `2` on a clean local database
 
 ## Troubleshooting
 
@@ -307,6 +362,7 @@ If quote creation returns a validation error around `service_change_token`, reru
 If the paid retry fails before it reaches the app, confirm:
 
 - `CONSUMER_PRIVATE_KEY` is set
+- the example client's SIWE domain matches `APP_SIWE_DOMAIN`
 - the app is returning `PAYMENT-REQUIRED`
 - `examples/client.py` is using `http://127.0.0.1:8000`
 - the buyer wallet is configured for Base Sepolia
