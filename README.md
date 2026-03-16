@@ -120,9 +120,15 @@ codex-agent-plan/
 - account self-service uses `GET /v1/account/me` and `PATCH /v1/account/me`
 - wallet rotation uses `POST /v1/account/wallet` and
   `POST /v1/account/wallet/confirm`
+- API-key management and account self-service routes require JWT auth; API keys
+  are accepted only on routes that allow generic bearer auth
 - protected routes use `Authorization: Bearer <jwt-or-api-key>`
 - any authenticated account can provide and consume marketplace services
 - request correlation uses `X-Request-ID`, and responses echo that header
+
+Legacy `accounts` rows may temporarily have `wallet_address = NULL` until the
+owner links a wallet through the auth flow. Authenticated accounts always have
+a linked wallet address.
 
 ## Implemented Phase 2
 

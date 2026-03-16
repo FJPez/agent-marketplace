@@ -12,6 +12,9 @@ Identity notes:
 
 - `accounts` owns wallet identity, auth nonce state, token invalidation state,
   account type, admin flag, and display name
+- legacy `accounts` rows may keep a null `wallet_address` until the owner links
+  a wallet through auth; authenticated actors always resolve with a linked
+  wallet address
 - `api_keys` stores hashed bearer keys with optional expiry, last-used
   tracking, and revocation state
 - `wallet_change_log` is an append-only audit trail for wallet rotation

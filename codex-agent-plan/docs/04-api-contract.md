@@ -22,6 +22,7 @@
   - returns a fresh access token
 - API-key routes
   - require bearer JWT auth
+  - reject API-key bearer tokens with `403`
   - create returns plaintext key material exactly once
   - list returns metadata only
   - delete revokes an existing key and returns `204`
@@ -36,6 +37,7 @@
 ### Account route behaviour
 
 - account routes require `Authorization: Bearer <jwt>`
+- account routes reject API-key bearer tokens with `403`
 - `GET /v1/account/me`
   - returns the authenticated account
 - `PATCH /v1/account/me`
