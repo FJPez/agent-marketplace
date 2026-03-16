@@ -12,6 +12,7 @@ DOMAIN_TABLES = {
     "ledger_entries",
     "moderation_actions",
     "payment_attempts",
+    "payouts",
     "pricing_models",
     "provider_upstreams",
     "quotes",

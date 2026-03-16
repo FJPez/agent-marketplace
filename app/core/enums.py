@@ -42,6 +42,13 @@ class LedgerEntryType(StrEnum):
     REFUND = "refund"
 
 
+class PayoutStatus(StrEnum):
+    READY = "ready"
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"
