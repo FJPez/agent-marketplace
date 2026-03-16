@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 DEMO_PROVIDER_NAME = "Demo Provider"
 DEMO_CONSUMER_NAME = "Demo Consumer"
 DEMO_SERVICE_SLUG = "demo-agent-service"
-DEMO_CHANGE_TOKEN = "demo-change-token-v1"
+DEMO_CHANGE_TOKEN = "d" * 64
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
 
@@ -187,6 +187,7 @@ async def _get_or_create_endpoint(
 async def _upsert_upstream(
     session: AsyncSession,
     *,
+    base_url: str,
     endpoint_id: int,
     path: str,
 ) -> None:
@@ -194,14 +195,14 @@ async def _upsert_upstream(
     if upstream is None:
         upstream = ProviderUpstream(
             endpoint_id=endpoint_id,
-            base_url="https://provider.example.com",
+            base_url=base_url,
             path=path,
             http_method="POST",
             config={},
         )
         session.add(upstream)
 
-    upstream.base_url = "https://provider.example.com"
+    upstream.base_url = base_url
     upstream.path = path
     upstream.http_method = "POST"
     upstream.config = {
@@ -293,15 +294,17 @@ async def _ensure_revision(
             service_id=service.id,
             revision_number=1,
             change_token=DEMO_CHANGE_TOKEN,
-            snapshot=_build_snapshot(
-                service,
-                free_endpoint_id=free_endpoint_id,
-                paid_endpoint_id=paid_endpoint_id,
-            ),
+            snapshot={},
         )
         session.add(revision)
         await session.flush()
 
+    revision.change_token = DEMO_CHANGE_TOKEN
+    revision.snapshot = _build_snapshot(
+        service,
+        free_endpoint_id=free_endpoint_id,
+        paid_endpoint_id=paid_endpoint_id,
+    )
     service.current_revision_id = revision.id
     service.current_change_token = revision.change_token
     await session.flush()
@@ -340,13 +343,15 @@ async def seed_demo_data() -> SeedResult:
             )
             await _upsert_upstream(
                 session,
+                base_url=settings.demo_upstream_base_url,
                 endpoint_id=free_endpoint.id,
-                path="/demo/free-ping",
+                path=settings.demo_free_upstream_path,
             )
             await _upsert_upstream(
                 session,
+                base_url=settings.demo_upstream_base_url,
                 endpoint_id=paid_endpoint.id,
-                path="/demo/paid-summary",
+                path=settings.demo_paid_upstream_path,
             )
             await _upsert_pricing(
                 session,
@@ -390,6 +395,9 @@ async def main() -> None:
                 f"service_slug={DEMO_SERVICE_SLUG}",
                 f"free_endpoint_id={result.free_endpoint_id}",
                 f"paid_endpoint_id={result.paid_endpoint_id}",
+                f"demo_upstream_base_url={get_settings().demo_upstream_base_url}",
+                f"demo_free_upstream_path={get_settings().demo_free_upstream_path}",
+                f"demo_paid_upstream_path={get_settings().demo_paid_upstream_path}",
             ],
         )
         + "\n",

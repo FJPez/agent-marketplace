@@ -214,12 +214,40 @@ uv run alembic upgrade head
 - `.env.example` now documents the supported `APP_...` environment variables.
 - `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; startup and free routes
   still work without it, but paid invoke attempts fail with a clear config error.
+- x402 v2 payment flows use `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
+  `PAYMENT-RESPONSE` headers.
 - `scripts/seed_demo.py` seeds a rerunnable demo provider, consumer, active
   service, endpoints, pricing, upstreams, tags, and revision for manual testing.
+- `APP_DEMO_UPSTREAM_BASE_URL`, `APP_DEMO_FREE_UPSTREAM_PATH`, and
+  `APP_DEMO_PAID_UPSTREAM_PATH` let the demo seed target a real provider for
+  manual invoke testing instead of `provider.example.com`.
 - `make seed` runs that seed helper through `uv`.
 - A root `Makefile` wraps the common `uv` commands; `make run`, `make test`,
   `make lint`, `make format`, `make typecheck`, and `make migrate` map directly
   to the existing workflows.
+
+## Manual Paid Invoke
+
+For a live x402 v2 manual test:
+
+1. Create `.env` from `.env.example` and set `APP_X402_PAY_TO_ADDRESS` to the
+   provider wallet that should receive Base Sepolia USDC.
+2. Point the seeded service at a reachable upstream with
+   `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
+3. Run migrations and seed data:
+   `uv run alembic upgrade head`
+   `make seed`
+4. Create a quote for the paid endpoint:
+   `POST /v1/services/demo-agent-service/quote`
+5. Invoke with `X-Account-Id` and `Idempotency-Key`. The first unpaid request
+   should return `402 Payment Required` with `PAYMENT-REQUIRED`.
+6. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
+   A successful paid invoke returns the upstream response plus
+   `PAYMENT-RESPONSE`.
+
+For the full local demo walkthrough, including the mock upstream, seeded demo
+service, and example client, see
+[`docs/demo-setup.md`](/Users/freddieperrott/Development/uni-work/agent-marketplace/docs/demo-setup.md).
 
 ## Working style
 

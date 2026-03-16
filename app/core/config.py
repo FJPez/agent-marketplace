@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     x402_network: str = "base-sepolia"
     x402_network_caip2: str = "eip155:84532"
     x402_pay_to_address: str | None = None
+    demo_upstream_base_url: str = "https://provider.example.com"
+    demo_free_upstream_path: str = "/demo/free-ping"
+    demo_paid_upstream_path: str = "/demo/paid-summary"
 
 
 @lru_cache
