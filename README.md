@@ -114,11 +114,18 @@ codex-agent-plan/
 - Contract-affecting changes require revision and change-token handling.
 - Paid requests are only forwarded after safe payment state.
 
-## Implemented Phase 1 Foundations
+## Implemented Auth Foundations
 
-- `POST /v1/providers` and `POST /v1/consumers` support anonymous bootstrap
-  creation and authenticated create-on-existing-account
-- protected provider self-service routes use `X-Account-Id`
+- accounts are unified in `accounts`; there are no provider/consumer profile tables
+- wallet auth bootstrap uses `GET /v1/auth/nonce` and `POST /v1/auth/verify`
+- session refresh uses `POST /v1/auth/refresh`
+- API-key management uses `POST /v1/auth/api-keys`, `GET /v1/auth/api-keys`,
+  and `DELETE /v1/auth/api-keys/{id}`
+- account self-service uses `GET /v1/account/me` and `PATCH /v1/account/me`
+- wallet rotation uses `POST /v1/account/wallet` and
+  `POST /v1/account/wallet/confirm`
+- protected routes use `Authorization: Bearer <jwt-or-api-key>`
+- any authenticated account can provide and consume marketplace services
 - request correlation uses `X-Request-ID`, and responses echo that header
 
 ## Implemented Phase 2
@@ -247,8 +254,9 @@ For a live x402 v2 manual test:
    `make seed`
 5. Create a quote for the paid endpoint:
    `POST /v1/services/demo-agent-service/quote`
-6. Invoke with `X-Account-Id` and `Idempotency-Key`. The first unpaid request
-   should return `402 Payment Required` with `PAYMENT-REQUIRED`.
+6. Invoke with `Authorization: Bearer <jwt>` and `Idempotency-Key`. The first
+   unpaid request should return `402 Payment Required` with
+   `PAYMENT-REQUIRED`.
 7. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
    A successful paid invoke returns the upstream response plus
    `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
