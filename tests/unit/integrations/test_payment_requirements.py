@@ -18,6 +18,7 @@ def test_build_payment_requirement_for_usd_fixed_price() -> None:
 
     assert requirement["asset"] == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     assert requirement["amount_minor"] == 500
+    assert requirement["payment_amount"] == 5_000_000
     assert requirement["currency"] == "USD"
     assert requirement["pay_to"] == "0x000000000000000000000000000000000000c0de"
     assert requirement["network"] == "base-sepolia"

@@ -130,7 +130,10 @@ async def test_verify_wraps_sdk_failures_as_facilitator_unavailable(
         lambda requirement: requirement,
     )
 
-    with pytest.raises(FacilitatorUnavailableError, match="facilitator unavailable"):
+    with pytest.raises(
+        FacilitatorUnavailableError,
+        match=r"facilitator verify failed: RuntimeError\('boom'\)|facilitator verify failed: boom",
+    ):
         await client.verify(
             payment_requirement={"amount_minor": 500},
             payment_payload={"authorization": {"nonce": "payment-1"}},
@@ -152,7 +155,10 @@ async def test_settle_wraps_sdk_failures_as_facilitator_unavailable(
         lambda requirement: requirement,
     )
 
-    with pytest.raises(FacilitatorUnavailableError, match="facilitator unavailable"):
+    with pytest.raises(
+        FacilitatorUnavailableError,
+        match=r"facilitator settle failed: RuntimeError\('boom'\)|facilitator settle failed: boom",
+    ):
         await client.settle(
             payment_requirement={"amount_minor": 500},
             payment_payload={"authorization": {"nonce": "payment-1"}},

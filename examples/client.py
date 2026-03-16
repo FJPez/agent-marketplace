@@ -142,6 +142,9 @@ async def _invoke_paid(
             json=request_body,
         )
 
+    if response.is_error:
+        logger.info("Paid invoke failed status: %s", response.status_code)
+        logger.info("Paid invoke failed body: %s", response.text)
     response.raise_for_status()
     body = response.json()
     logger.info("\nPaid invoke:\n%s", json.dumps(body, indent=2))

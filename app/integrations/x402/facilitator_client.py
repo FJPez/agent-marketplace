@@ -126,7 +126,7 @@ class FacilitatorClient:
                 self._identifier,
                 exc,
             )
-            raise FacilitatorUnavailableError("facilitator unavailable") from exc
+            raise FacilitatorUnavailableError(_build_unavailable_message("verify", exc)) from exc
 
     async def settle(
         self,
@@ -159,7 +159,7 @@ class FacilitatorClient:
                 self._identifier,
                 exc,
             )
-            raise FacilitatorUnavailableError("facilitator unavailable") from exc
+            raise FacilitatorUnavailableError(_build_unavailable_message("settle", exc)) from exc
 
 
 def _build_auth_provider(
@@ -209,3 +209,10 @@ def _extract_status_code(exc: Exception) -> int | None:
     if match is None:
         return None
     return int(match.group("status"))
+
+
+def _build_unavailable_message(operation: str, exc: Exception) -> str:
+    detail = str(exc).strip()
+    if detail:
+        return f"facilitator {operation} failed: {detail}"
+    return "facilitator unavailable"

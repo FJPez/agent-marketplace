@@ -279,7 +279,7 @@ class PaymentService:
         except FacilitatorAuthError as exc:
             raise InvokeBadGatewayError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
-            raise InvokeBadGatewayError("facilitator unavailable") from exc
+            raise InvokeBadGatewayError(str(exc)) from exc
 
     async def _settle(
         self,
@@ -297,7 +297,7 @@ class PaymentService:
         except FacilitatorAuthError as exc:
             raise InvokeBadGatewayError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
-            raise InvokeBadGatewayError("facilitator unavailable") from exc
+            raise InvokeBadGatewayError(str(exc)) from exc
 
 
 def _is_verify_success(verify_outcome: dict[str, object]) -> bool:

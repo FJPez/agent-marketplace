@@ -21,7 +21,7 @@ def to_payment_requirements(payment_requirement: dict[str, object]) -> PaymentRe
             "scheme": str(payment_requirement["scheme"]),
             "network": str(payment_requirement["network_caip2"]),
             "asset": str(payment_requirement["asset"]),
-            "amount": str(payment_requirement["amount_minor"]),
+            "amount": str(_payment_amount(payment_requirement)),
             "payTo": str(payment_requirement["pay_to"]),
             "maxTimeoutSeconds": _int_value(payment_requirement["max_timeout_seconds"]),
             "extra": extra,
@@ -40,3 +40,8 @@ def _int_value(value: object) -> int:
         return int(value)
     msg = "payment requirement contains a non-integer timeout"
     raise TypeError(msg)
+
+
+def _payment_amount(payment_requirement: dict[str, object]) -> int:
+    value = payment_requirement.get("payment_amount", payment_requirement["amount_minor"])
+    return _int_value(value)
