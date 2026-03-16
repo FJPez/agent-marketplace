@@ -4,7 +4,6 @@ from app.core.actor import ActorContext
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models.service import Service
 from app.integrations.provider_gateway.signing import get_hmac_auth_config
-from app.repositories.provider_profile_repo import ProviderProfileRepository
 from app.repositories.service_repo import ServiceRepository
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.provider_service_errors import (
@@ -52,7 +51,6 @@ def validate_service_for_publish(service: Service) -> None:
 class PublishService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._provider_profile_repo = ProviderProfileRepository(session)
         self._service_repo = ServiceRepository(session)
         self._service_health_service = ServiceHealthService(session)
         self._moderation_service = ModerationService(session)
@@ -64,7 +62,6 @@ class PublishService:
         *,
         service_id: int,
     ) -> Service:
-        await self._require_provider_profile(actor.account_id)
         service = await self._service_repo.get_owned_for_update(
             service_id=service_id,
             provider_account_id=actor.account_id,
@@ -97,8 +94,3 @@ class PublishService:
         if published is None:
             raise ProviderServiceNotFoundError("service not found")
         return published
-
-    async def _require_provider_profile(self, account_id: int) -> None:
-        profile = await self._provider_profile_repo.get_by_account_id(account_id)
-        if profile is None:
-            raise ProviderServiceNotFoundError("provider profile not found")

@@ -8,7 +8,6 @@ from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.repositories.pricing_model_repo import PricingModelRepository
-from app.repositories.provider_profile_repo import ProviderProfileRepository
 from app.repositories.provider_upstream_repo import ProviderUpstreamRepository
 from app.repositories.service_endpoint_repo import ServiceEndpointRepository
 from app.repositories.service_repo import ServiceRepository
@@ -42,7 +41,6 @@ class _EndpointUpdateFields(TypedDict, total=False):
 class ProviderEndpointService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-        self._provider_profile_repo = ProviderProfileRepository(session)
         self._service_repo = ServiceRepository(session)
         self._endpoint_repo = ServiceEndpointRepository(session)
         self._pricing_repo = PricingModelRepository(session)
@@ -97,7 +95,6 @@ class ProviderEndpointService:
         *,
         endpoint_id: int,
     ) -> ServiceEndpoint:
-        await self._require_provider_profile(actor.account_id)
         endpoint = await self._endpoint_repo.get_owned(
             endpoint_id=endpoint_id,
             provider_account_id=actor.account_id,
@@ -210,7 +207,6 @@ class ProviderEndpointService:
         *,
         service_id: int,
     ) -> Service:
-        await self._require_provider_profile(provider_account_id)
         service = await self._service_repo.get_owned(
             service_id=service_id,
             provider_account_id=provider_account_id,
@@ -225,7 +221,6 @@ class ProviderEndpointService:
         *,
         service_id: int,
     ) -> Service:
-        await self._require_provider_profile(provider_account_id)
         service = await self._service_repo.get_owned_for_update(
             service_id=service_id,
             provider_account_id=provider_account_id,
@@ -240,7 +235,6 @@ class ProviderEndpointService:
         *,
         endpoint_id: int,
     ) -> tuple[Service, ServiceEndpoint]:
-        await self._require_provider_profile(provider_account_id)
         service = await self._service_repo.get_owned_by_endpoint_for_update(
             endpoint_id=endpoint_id,
             provider_account_id=provider_account_id,
@@ -254,11 +248,6 @@ class ProviderEndpointService:
         if endpoint is None:
             raise ProviderServiceNotFoundError("endpoint not found")
         return service, endpoint
-
-    async def _require_provider_profile(self, account_id: int) -> None:
-        profile = await self._provider_profile_repo.get_by_account_id(account_id)
-        if profile is None:
-            raise ProviderServiceNotFoundError("provider profile not found")
 
     def _ensure_draft(self, service: Service) -> None:
         if service.lifecycle is not ServiceLifecycle.DRAFT:

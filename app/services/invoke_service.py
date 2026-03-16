@@ -16,7 +16,6 @@ from app.integrations.provider_gateway.client import (
     SupportsRequest,
 )
 from app.integrations.provider_gateway.signing import HmacAuthConfig, get_hmac_auth_config
-from app.repositories.consumer_profile_repo import ConsumerProfileRepository
 from app.repositories.invocation_repo import InvocationRepository
 from app.repositories.service_repo import ServiceRepository
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
@@ -78,7 +77,6 @@ class InvokeService:
     ) -> None:
         self._session = session
         self._http_client = http_client
-        self._consumer_profile_repo = ConsumerProfileRepository(session)
         self._service_repo = ServiceRepository(session)
         self._quote_service = QuoteService(session)
         self._moderation_service = ModerationService(session)
@@ -93,8 +91,6 @@ class InvokeService:
         payload: dict[str, object],
         quote_id: int | None,
     ) -> ResolvedInvokeTarget:
-        await self._require_consumer_profile(actor.account_id)
-
         service = await self._service_repo.get_public(service_id_or_slug=service_id_or_slug)
         if service is None:
             raise InvokeNotFoundError("service not found")
@@ -241,7 +237,6 @@ class InvokeService:
         *,
         invocation_id: int,
     ) -> Invocation:
-        await self._require_consumer_profile(actor.account_id)
         invocation = await self._invocation_repo.get_for_consumer(
             invocation_id=invocation_id,
             consumer_account_id=actor.account_id,
@@ -251,7 +246,6 @@ class InvokeService:
         return invocation
 
     async def list_invocations(self, actor: ActorContext) -> list[Invocation]:
-        await self._require_consumer_profile(actor.account_id)
         return await self._invocation_repo.list_for_consumer(consumer_account_id=actor.account_id)
 
     async def try_successful_replay(
@@ -264,7 +258,6 @@ class InvokeService:
         quote_id: int | None,
         idempotency_key: str,
     ) -> Invocation | None:
-        await self._require_consumer_profile(actor.account_id)
         existing = await self._invocation_repo.get_by_idempotency_key(
             consumer_account_id=actor.account_id,
             idempotency_key=idempotency_key,
@@ -314,11 +307,6 @@ class InvokeService:
             message = existing.error_message or "upstream request failed"
             raise InvokeBadGatewayError(message)
         return existing
-
-    async def _require_consumer_profile(self, account_id: int) -> None:
-        profile = await self._consumer_profile_repo.get_by_account_id(account_id)
-        if profile is None:
-            raise InvokeNotFoundError("consumer profile not found")
 
     def _build_request_hash(
         self,

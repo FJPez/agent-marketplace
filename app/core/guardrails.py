@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
-    build_client_rate_limit_key,
+    build_actor_rate_limit_key,
     get_rate_limits_backend,
 )
 
@@ -69,7 +69,7 @@ class InvokeGuardrails:
 
         submission_key, request_fingerprint = self._build_submission_key(
             request,
-            owner_key=build_client_rate_limit_key(request),
+            owner_key=build_actor_rate_limit_key(request),
             request_fingerprint=buffered_body.request_fingerprint,
         )
 
@@ -179,14 +179,14 @@ class InvokeGuardrails:
         scope, limit_value = route_limit
         return not await self.rate_limits_backend.hit(
             limit_value,
-            key=build_client_rate_limit_key(request),
+            key=build_actor_rate_limit_key(request),
             scope=scope,
         )
 
     async def _is_globally_rate_limited(self, request: Request) -> bool:
         return not await self.rate_limits_backend.hit(
             self.api_rate_limit,
-            key=build_client_rate_limit_key(request),
+            key=build_actor_rate_limit_key(request),
             scope="global",
         )
 
