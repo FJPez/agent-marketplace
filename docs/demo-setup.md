@@ -146,6 +146,14 @@ Apply migrations:
 uv run alembic upgrade head
 ```
 
+Important:
+
+- if you change any of `APP_DEMO_UPSTREAM_BASE_URL`, `APP_DEMO_FREE_UPSTREAM_PATH`,
+  or `APP_DEMO_PAID_UPSTREAM_PATH`, rerun the seed step below before starting the
+  API again
+- the demo service stores upstream targets in the database, so changing `.env`
+  alone is not enough
+
 ## Start the Mock Upstream
 
 In one terminal:
@@ -176,6 +184,16 @@ paid_endpoint_id=2
 ```
 
 `consumer_account_id=2` is the default used by `examples/client.py`. If your output differs, export `CONSUMER_ACCOUNT_ID` before running the client.
+
+Pricing note:
+
+- quote `amount_minor` is stored in USD minor units
+- for example, `250` means `$2.50`
+- the x402 payment requirement is converted internally to USDC base units before
+  the facilitator sees it
+- using the same example, `$2.50` becomes `2_500_000` base units for a 6-decimal
+  USDC token
+- the current seeded paid endpoint is configured at `25`, which means `$0.25`
 
 ## Start the Marketplace API
 
@@ -223,6 +241,14 @@ On success the example client also logs:
 - the raw `PAYMENT-RESPONSE` header
 - the decoded settlement payload
 - the transaction hash you can inspect on Base Sepolia
+
+On failure the example client logs:
+
+- the HTTP status code for the failed paid retry
+- the full JSON body returned by the API
+
+That makes it much easier to distinguish facilitator auth problems from verify
+or settle failures.
 
 ## Expected Results
 
@@ -299,6 +325,11 @@ If the paid retry reaches the app but returns `502 {"detail":"facilitator unavai
 - CDP is not returning a transient `5xx`
 - the buyer wallet has Base Sepolia ETH and USDC
 - the provider payout address is a valid Base Sepolia EVM address
+
+If the paid retry returns a more specific body such as
+`facilitator verify failed: ...` or `facilitator settle failed: ...`, use that
+exact message as the source of truth. The API now preserves the facilitator's
+error text instead of collapsing every non-auth failure into a generic `502`.
 
 If the app cannot reach the mock upstream, confirm:
 

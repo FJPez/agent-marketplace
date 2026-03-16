@@ -240,6 +240,8 @@ For a live x402 v2 manual test:
    Sepolia USDC.
 3. Point the seeded service at a reachable upstream with
    `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
+   If you change those values, rerun the demo seed so the stored upstream rows
+   in the database are updated.
 4. Run migrations and seed data:
    `uv run alembic upgrade head`
    `make seed`
@@ -250,6 +252,9 @@ For a live x402 v2 manual test:
 7. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
    A successful paid invoke returns the upstream response plus
    `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
+
+Quote prices remain in USD minor units at the API layer. The x402 integration
+converts that amount to USDC base units internally before verify/settle.
 
 For the full local demo walkthrough, including the mock upstream, seeded demo
 service, example client, `.env` setup, Base Sepolia wallet preparation, CDP

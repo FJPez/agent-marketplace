@@ -268,7 +268,7 @@ def _build_snapshot(
                 "access_mode": AccessMode.PAID.value,
                 "pricing": {
                     "pricing_type": PricingModelType.FIXED_PER_CALL.value,
-                    "amount_minor": 250,
+                    "amount_minor": 25,
                     "currency": "USD",
                 },
             },
@@ -364,7 +364,7 @@ async def seed_demo_data() -> SeedResult:
                 session,
                 endpoint_id=paid_endpoint.id,
                 pricing_type=PricingModelType.FIXED_PER_CALL,
-                amount_minor=250,
+                amount_minor=25,
                 currency="USD",
             )
             await _ensure_revision(
