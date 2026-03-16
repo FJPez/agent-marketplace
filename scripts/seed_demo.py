@@ -9,11 +9,10 @@ from sqlalchemy import select
 
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.security import hash_api_key
 from app.db.models import (
     Account,
-    ConsumerProfile,
     PricingModel,
-    ProviderProfile,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -27,10 +26,13 @@ if TYPE_CHECKING:
 
 DEMO_PROVIDER_NAME = "Demo Provider"
 DEMO_CONSUMER_NAME = "Demo Consumer"
+DEMO_PROVIDER_WALLET = "0x00000000000000000000000000000000000000a1"
+DEMO_CONSUMER_WALLET = "0x00000000000000000000000000000000000000b2"
 DEMO_SERVICE_SLUG = "demo-agent-service"
 DEMO_CHANGE_TOKEN = "d" * 64
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
+DEMO_API_KEY_PLAINTEXT = "amp_demo_manual_testing_key"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,45 +44,23 @@ class SeedResult:
     paid_endpoint_id: int
 
 
-async def _get_or_create_account(session: AsyncSession) -> Account:
-    account = Account()
-    session.add(account)
+async def _get_or_create_account(
+    session: AsyncSession,
+    *,
+    wallet_address: str,
+    display_name: str,
+) -> Account:
+    account = await session.scalar(
+        select(Account).where(Account.wallet_address == wallet_address),
+    )
+    if account is None:
+        account = Account(wallet_address=wallet_address, display_name=display_name)
+        session.add(account)
+        await session.flush()
+
+    account.display_name = display_name
     await session.flush()
     return account
-
-
-async def _get_or_create_provider(session: AsyncSession) -> ProviderProfile:
-    provider = await session.scalar(
-        select(ProviderProfile).where(ProviderProfile.display_name == DEMO_PROVIDER_NAME),
-    )
-    if provider is not None:
-        return provider
-
-    account = await _get_or_create_account(session)
-    provider = ProviderProfile(
-        account_id=account.id,
-        display_name=DEMO_PROVIDER_NAME,
-    )
-    session.add(provider)
-    await session.flush()
-    return provider
-
-
-async def _get_or_create_consumer(session: AsyncSession) -> ConsumerProfile:
-    consumer = await session.scalar(
-        select(ConsumerProfile).where(ConsumerProfile.display_name == DEMO_CONSUMER_NAME),
-    )
-    if consumer is not None:
-        return consumer
-
-    account = await _get_or_create_account(session)
-    consumer = ConsumerProfile(
-        account_id=account.id,
-        display_name=DEMO_CONSUMER_NAME,
-    )
-    session.add(consumer)
-    await session.flush()
-    return consumer
 
 
 async def _get_or_create_service(session: AsyncSession, *, provider_account_id: int) -> Service:
@@ -154,17 +134,13 @@ async def _get_or_create_endpoint(
             access_mode=access_mode,
             request_schema={
                 "type": "object",
-                "properties": {
-                    "message": {"type": "string"},
-                },
+                "properties": {"message": {"type": "string"}},
                 "required": ["message"],
                 "additionalProperties": False,
             },
             response_schema={
                 "type": "object",
-                "properties": {
-                    "result": {"type": "string"},
-                },
+                "properties": {"result": {"type": "string"}},
                 "required": ["result"],
                 "additionalProperties": False,
             },
@@ -316,11 +292,19 @@ async def seed_demo_data() -> SeedResult:
     session_factory = create_session_factory(engine)
     try:
         async with session_factory.begin() as session:
-            provider = await _get_or_create_provider(session)
-            consumer = await _get_or_create_consumer(session)
+            provider = await _get_or_create_account(
+                session,
+                wallet_address=DEMO_PROVIDER_WALLET,
+                display_name=DEMO_PROVIDER_NAME,
+            )
+            consumer = await _get_or_create_account(
+                session,
+                wallet_address=DEMO_CONSUMER_WALLET,
+                display_name=DEMO_CONSUMER_NAME,
+            )
             service = await _get_or_create_service(
                 session,
-                provider_account_id=provider.account_id,
+                provider_account_id=provider.id,
             )
             await _replace_tags(session, service_id=service.id)
             free_endpoint = await _get_or_create_endpoint(
@@ -374,8 +358,8 @@ async def seed_demo_data() -> SeedResult:
                 paid_endpoint_id=paid_endpoint.id,
             )
             return SeedResult(
-                provider_account_id=provider.account_id,
-                consumer_account_id=consumer.account_id,
+                provider_account_id=provider.id,
+                consumer_account_id=consumer.id,
                 service_id=service.id,
                 free_endpoint_id=free_endpoint.id,
                 paid_endpoint_id=paid_endpoint.id,
@@ -398,6 +382,9 @@ async def main() -> None:
                 f"demo_upstream_base_url={get_settings().demo_upstream_base_url}",
                 f"demo_free_upstream_path={get_settings().demo_free_upstream_path}",
                 f"demo_paid_upstream_path={get_settings().demo_paid_upstream_path}",
+                f"demo_provider_wallet={DEMO_PROVIDER_WALLET}",
+                f"demo_consumer_wallet={DEMO_CONSUMER_WALLET}",
+                f"demo_api_key_hash={hash_api_key(DEMO_API_KEY_PLAINTEXT)}",
             ],
         )
         + "\n",

@@ -10,7 +10,6 @@ from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
     PricingModel,
-    ProviderProfile,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -28,12 +27,9 @@ async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(
-            ProviderProfile(account_id=account.id, display_name="Provider"),
-        )
         return account.id
 
 

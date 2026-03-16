@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.enums import AccessMode, PricingModelType
-from app.db.models import Account, PricingModel, ProviderProfile, Service, ServiceEndpoint
+from app.db.models import Account, PricingModel, Service, ServiceEndpoint
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
 from app.services.revision_service import RevisionService
@@ -14,12 +14,9 @@ async def _create_provider_account(
     *,
     display_name: str,
 ) -> int:
-    account = Account()
+    account = Account(display_name=display_name)
     session.add(account)
     await session.flush()
-    session.add(
-        ProviderProfile(account_id=account.id, display_name=display_name),
-    )
     return account.id
 
 

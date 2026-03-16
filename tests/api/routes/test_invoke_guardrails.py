@@ -7,15 +7,14 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient, Response
+from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
 from app.db.models import (
     Account,
-    ConsumerProfile,
     PricingModel,
-    ProviderProfile,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
 
 
 def _auth_headers(account_id: int, *, idempotency_key: str) -> dict[str, str]:
-    return {"X-Account-Id": str(account_id), "Idempotency-Key": idempotency_key}
+    return auth_headers_for_account_id(account_id, idempotency_key=idempotency_key)
 
 
 def _get_test_app(client: AsyncClient) -> FastAPI:
@@ -45,10 +44,9 @@ async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
         return account.id
 
 
@@ -56,10 +54,9 @@ async def _create_consumer_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Consumer")
         session.add(account)
         await session.flush()
-        session.add(ConsumerProfile(account_id=account.id, display_name="Consumer"))
         return account.id
 
 

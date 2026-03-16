@@ -2,13 +2,13 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
 from app.db.models import (
     Account,
     ModerationAction,
     PricingModel,
-    ProviderProfile,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -18,7 +18,7 @@ from app.db.models import (
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
-    return {"X-Account-Id": str(account_id)}
+    return auth_headers_for_account_id(account_id)
 
 
 async def _create_provider_account(
@@ -27,12 +27,9 @@ async def _create_provider_account(
     display_name: str = "Provider Account",
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name=display_name)
         session.add(account)
         await session.flush()
-        session.add(
-            ProviderProfile(account_id=account.id, display_name=display_name),
-        )
         return account.id
 
 
@@ -218,13 +215,13 @@ async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
 
 
 @pytest.mark.asyncio
-async def test_provider_service_routes_require_x_account_id_header(
+async def test_provider_service_routes_require_bearer_token(
     async_client: AsyncClient,
 ) -> None:
     response = await async_client.get("/v1/provider/services")
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "X-Account-Id header is required"}
+    assert response.json() == {"detail": "Authorization header is required"}
 
 
 @pytest.mark.asyncio
@@ -259,7 +256,7 @@ async def test_create_provider_service_returns_created_draft_service(
 
 
 @pytest.mark.asyncio
-async def test_create_provider_service_returns_not_found_without_provider_profile(
+async def test_create_provider_service_allows_any_authenticated_account(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -275,8 +272,8 @@ async def test_create_provider_service_returns_not_found_without_provider_profil
         },
     )
 
-    assert response.status_code == 404
-    assert response.json() == {"detail": "provider profile not found"}
+    assert response.status_code == 201
+    assert response.json()["provider_account_id"] == account_id
 
 
 @pytest.mark.asyncio

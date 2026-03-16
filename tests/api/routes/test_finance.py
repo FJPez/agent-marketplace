@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import (
     AccessMode,
@@ -13,10 +14,8 @@ from app.core.enums import (
 )
 from app.db.models import (
     Account,
-    ConsumerProfile,
     Invocation,
     PaymentAttempt,
-    ProviderProfile,
     Quote,
     Service,
     ServiceEndpoint,
@@ -26,19 +25,17 @@ from app.repositories.ledger_entry_repo import LedgerEntryRepository
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
-    return {"X-Account-Id": str(account_id)}
+    return auth_headers_for_account_id(account_id)
 
 
 async def _seed_provider_finance_data(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[int, int]:
     async with db_session_factory.begin() as session:
-        provider_account = Account()
-        consumer_account = Account()
+        provider_account = Account(display_name="Provider")
+        consumer_account = Account(display_name="Consumer")
         session.add_all([provider_account, consumer_account])
         await session.flush()
-        session.add(ProviderProfile(account_id=provider_account.id, display_name="Provider"))
-        session.add(ConsumerProfile(account_id=consumer_account.id, display_name="Consumer"))
 
         service = Service(
             provider_account_id=provider_account.id,
@@ -155,13 +152,13 @@ async def _seed_provider_finance_data(
 
 
 @pytest.mark.asyncio
-async def test_provider_finance_routes_require_x_account_id_header(
+async def test_provider_finance_routes_require_bearer_token(
     async_client: AsyncClient,
 ) -> None:
     response = await async_client.get("/v1/provider/earnings")
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "X-Account-Id header is required"}
+    assert response.json() == {"detail": "Authorization header is required"}
 
 
 @pytest.mark.asyncio

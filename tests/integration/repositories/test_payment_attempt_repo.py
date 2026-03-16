@@ -6,10 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
-    ConsumerProfile,
     Invocation,
     PricingModel,
-    ProviderProfile,
     Quote,
     Service,
     ServiceEndpoint,
@@ -26,12 +24,10 @@ async def test_payment_attempt_repository_persists_and_loads_by_identifier(
     _ = migrated_database
 
     async with db_session_factory.begin() as session:
-        provider_account = Account()
-        consumer_account = Account()
+        provider_account = Account(display_name="Provider")
+        consumer_account = Account(display_name="Consumer")
         session.add_all([provider_account, consumer_account])
         await session.flush()
-        session.add(ProviderProfile(account_id=provider_account.id, display_name="Provider"))
-        session.add(ConsumerProfile(account_id=consumer_account.id, display_name="Consumer"))
 
         service = Service(
             provider_account_id=provider_account.id,

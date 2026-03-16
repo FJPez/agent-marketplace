@@ -1,12 +1,13 @@
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.helpers.auth import auth_headers_for_account_id
 
-from app.db.models import Account, ProviderProfile, Service
+from app.db.models import Account, Service
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
-    return {"X-Account-Id": str(account_id)}
+    return auth_headers_for_account_id(account_id)
 
 
 async def _create_account(
@@ -33,10 +34,9 @@ async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account()
+        account = Account(display_name="Provider")
         session.add(account)
         await session.flush()
-        session.add(ProviderProfile(account_id=account.id, display_name="Provider"))
         return account.id
 
 
