@@ -38,7 +38,7 @@ include = ["app", "tests"]
 error-on-warning = true
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
