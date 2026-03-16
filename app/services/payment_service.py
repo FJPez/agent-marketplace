@@ -126,7 +126,9 @@ class PaymentService:
             amount_minor=resolved.quote.amount_minor,
             currency=resolved.quote.currency,
         )
-        payment_header = request_headers.get("X-PAYMENT") or request_headers.get("x-payment")
+        payment_header = request_headers.get("PAYMENT-SIGNATURE") or request_headers.get(
+            "payment-signature"
+        )
         if payment_header is None:
             return self._challenge(payment_requirement, detail="payment required")
 
@@ -166,8 +168,10 @@ class PaymentService:
             )
             return PaidInvokeSuccess(
                 invocation=invocation,
-                response_headers=self._build_response_headers(
-                    existing_attempt.settle_outcome or {},
+                response_headers=(
+                    self._build_response_headers(existing_attempt.settle_outcome)
+                    if existing_attempt.settle_outcome
+                    else {}
                 ),
             )
         assert attempt is not None
@@ -285,7 +289,9 @@ class PaymentService:
 
 
 def _is_verify_success(verify_outcome: dict[str, object]) -> bool:
-    return bool(verify_outcome.get("ok") or verify_outcome.get("is_valid"))
+    return bool(
+        verify_outcome.get("isValid") or verify_outcome.get("ok") or verify_outcome.get("is_valid")
+    )
 
 
 def _is_settle_success(settle_outcome: dict[str, object]) -> bool:

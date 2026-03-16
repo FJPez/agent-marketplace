@@ -18,7 +18,7 @@ def test_build_payment_required_headers_uses_official_x402_encoding() -> None:
         }
     )
 
-    decoded = decode_payment_required_header(headers["X-PAYMENT-REQUIRED"])
+    decoded = decode_payment_required_header(headers["PAYMENT-REQUIRED"])
 
     assert decoded.x402_version == 2
     assert len(decoded.accepts) == 1
@@ -36,7 +36,7 @@ def test_build_payment_response_headers_uses_official_x402_encoding() -> None:
         }
     )
 
-    decoded = decode_payment_response_header(headers["X-PAYMENT-RESPONSE"])
+    decoded = decode_payment_response_header(headers["PAYMENT-RESPONSE"])
 
     assert decoded.success is True
     assert decoded.transaction == "0xsettled"

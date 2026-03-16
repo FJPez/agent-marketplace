@@ -269,7 +269,7 @@ async def test_handle_paid_invoke_conflicts_before_verify_when_identifier_claim_
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            request_headers={"X-PAYMENT": _payment_header(payment_identifier="payment-1")},
+            request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
         )
 
     assert facilitator_client.verify_calls == 0
