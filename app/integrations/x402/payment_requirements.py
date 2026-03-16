@@ -2,6 +2,20 @@ class PaymentRequirementConfigError(Exception):
     pass
 
 
+_ASSET_CONFIG_BY_NETWORK: dict[str, dict[str, str]] = {
+    "eip155:8453": {
+        "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "name": "USD Coin",
+        "version": "2",
+    },
+    "eip155:84532": {
+        "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "name": "USDC",
+        "version": "2",
+    },
+}
+
+
 def build_payment_requirement(
     *,
     amount_minor: int,
@@ -18,10 +32,13 @@ def build_payment_requirement(
         )
     if currency != "USD":
         raise PaymentRequirementConfigError("payment currency is not supported")
+    asset_config = _ASSET_CONFIG_BY_NETWORK.get(network_caip2)
+    if asset_config is None:
+        raise PaymentRequirementConfigError("payment network is not supported")
 
     return {
         "scheme": "exact",
-        "asset": "usdc",
+        "asset": asset_config["asset"],
         "amount_minor": amount_minor,
         "currency": currency,
         "pay_to": pay_to_address,
@@ -29,4 +46,6 @@ def build_payment_requirement(
         "network_caip2": network_caip2,
         "facilitator_url": facilitator_url,
         "max_timeout_seconds": 300,
+        "name": asset_config["name"],
+        "version": asset_config["version"],
     }

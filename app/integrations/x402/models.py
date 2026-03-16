@@ -5,6 +5,17 @@ from x402.schemas import SettleResponse
 
 
 def to_payment_requirements(payment_requirement: dict[str, object]) -> PaymentRequirements:
+    extra = {
+        "facilitator_url": payment_requirement["facilitator_url"],
+        "network": payment_requirement["network"],
+        "currency": payment_requirement["currency"],
+        "amount_minor": payment_requirement["amount_minor"],
+    }
+    if "name" in payment_requirement:
+        extra["name"] = payment_requirement["name"]
+    if "version" in payment_requirement:
+        extra["version"] = payment_requirement["version"]
+
     return PaymentRequirements.model_validate(
         {
             "scheme": str(payment_requirement["scheme"]),
@@ -13,12 +24,7 @@ def to_payment_requirements(payment_requirement: dict[str, object]) -> PaymentRe
             "amount": str(payment_requirement["amount_minor"]),
             "payTo": str(payment_requirement["pay_to"]),
             "maxTimeoutSeconds": _int_value(payment_requirement["max_timeout_seconds"]),
-            "extra": {
-                "facilitator_url": payment_requirement["facilitator_url"],
-                "network": payment_requirement["network"],
-                "currency": payment_requirement["currency"],
-                "amount_minor": payment_requirement["amount_minor"],
-            },
+            "extra": extra,
         }
     )
 
