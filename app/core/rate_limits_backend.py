@@ -7,17 +7,11 @@ from limits import RateLimitItem, parse
 from limits.aio.storage import MemoryStorage
 from limits.aio.strategies import FixedWindowRateLimiter
 
-from app.api.deps.auth import X_ACCOUNT_ID_HEADER
-
 if TYPE_CHECKING:
     from fastapi import Request
 
 
-def build_rate_limit_key(request: Request) -> str:
-    account_id = request.headers.get(X_ACCOUNT_ID_HEADER)
-    if account_id:
-        return f"account:{account_id}"
-
+def build_client_rate_limit_key(request: Request) -> str:
     client_host = request.client.host if request.client is not None else "unknown"
     return f"client:{client_host}"
 

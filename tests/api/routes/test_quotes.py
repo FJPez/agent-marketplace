@@ -275,6 +275,55 @@ async def test_create_quote_rate_limits_repeated_requests(
 
 
 @pytest.mark.asyncio
+async def test_create_quote_rate_limit_ignores_spoofed_account_header(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = migrated_database
+    monkeypatch.setenv("APP_API_RATE_LIMIT", "10/minute")
+    monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "1/minute")
+    monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
+
+    get_settings.cache_clear()
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="quote-service",
+        with_revision=True,
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as rate_limited_client:
+            first = await rate_limited_client.post(
+                "/v1/services/quote-service/quote",
+                headers={"X-Account-Id": "111"},
+                json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+            )
+            second = await rate_limited_client.post(
+                "/v1/services/quote-service/quote",
+                headers={"X-Account-Id": "222"},
+                json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+            )
+    get_settings.cache_clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json() == {"detail": "rate limit exceeded"}
+
+
+@pytest.mark.asyncio
 async def test_create_quote_returns_not_found_for_disabled_endpoint(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],

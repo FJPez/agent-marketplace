@@ -1,7 +1,7 @@
 import pytest
 from starlette.requests import Request
 
-from app.core.rate_limits_backend import RateLimitsBackend, build_rate_limit_key
+from app.core.rate_limits_backend import RateLimitsBackend, build_client_rate_limit_key
 
 
 def _build_request(
@@ -23,17 +23,17 @@ def _build_request(
     return Request(scope)
 
 
-def test_build_rate_limit_key_prefers_account_id() -> None:
+def test_build_client_rate_limit_key_uses_client_host() -> None:
     request = _build_request(account_id="42", client_host="10.0.0.1")
 
-    assert build_rate_limit_key(request) == "account:42"
+    assert build_client_rate_limit_key(request) == "client:10.0.0.1"
 
 
 @pytest.mark.asyncio
 async def test_rate_limits_backend_reset_clears_recorded_hits() -> None:
     backend = RateLimitsBackend()
     request = _build_request(account_id="42")
-    key = build_rate_limit_key(request)
+    key = build_client_rate_limit_key(request)
 
     first_allowed = await backend.hit("1/minute", key=key, scope="global")
     second_allowed = await backend.hit("1/minute", key=key, scope="global")

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
-    build_rate_limit_key,
+    build_client_rate_limit_key,
     get_rate_limits_backend,
 )
 
@@ -21,6 +21,13 @@ _QUOTE_PATH_SUFFIX = "/quote"
 _V1_PATH_PREFIX = "/v1/"
 _IDEMPOTENCY_HEADER = "Idempotency-Key"
 RouteLimitScope = Literal["global", "invoke", "quote"]
+
+
+@dataclass(slots=True)
+class BufferedInvokeBody:
+    body: bytes | None
+    request_fingerprint: str | None
+    payload_too_large: bool
 
 
 @dataclass(slots=True)
@@ -53,8 +60,8 @@ class InvokeGuardrails:
                 return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
             return await call_next(request)
 
-        body = await request.body()
-        if len(body) > self.payload_max_bytes:
+        buffered_body = await self._read_invoke_body(request)
+        if buffered_body.payload_too_large:
             return JSONResponse(
                 status_code=413,
                 content={"detail": "request payload too large"},
@@ -62,8 +69,8 @@ class InvokeGuardrails:
 
         submission_key, request_fingerprint = self._build_submission_key(
             request,
-            owner_key=build_rate_limit_key(request),
-            body=body,
+            owner_key=build_client_rate_limit_key(request),
+            request_fingerprint=buffered_body.request_fingerprint,
         )
 
         async with self._lock:
@@ -93,14 +100,50 @@ class InvokeGuardrails:
     async def reset_rate_limits(self) -> None:
         await self.rate_limits_backend.reset()
 
+    async def _read_invoke_body(self, request: Request) -> BufferedInvokeBody:
+        declared_content_length = request.headers.get("content-length")
+        if declared_content_length is not None:
+            try:
+                if int(declared_content_length) > self.payload_max_bytes:
+                    return BufferedInvokeBody(
+                        body=None,
+                        request_fingerprint=None,
+                        payload_too_large=True,
+                    )
+            except ValueError:
+                pass
+
+        digest = sha256()
+        chunks: list[bytes] = []
+        total_size = 0
+        async for chunk in request.stream():
+            total_size += len(chunk)
+            if total_size > self.payload_max_bytes:
+                return BufferedInvokeBody(
+                    body=None,
+                    request_fingerprint=None,
+                    payload_too_large=True,
+                )
+            chunks.append(chunk)
+            digest.update(chunk)
+
+        body = b"".join(chunks)
+        request._body = body
+        return BufferedInvokeBody(
+            body=body,
+            request_fingerprint=digest.hexdigest(),
+            payload_too_large=False,
+        )
+
     def _build_submission_key(
         self,
         request: Request,
         *,
         owner_key: str,
-        body: bytes,
+        request_fingerprint: str | None,
     ) -> tuple[str | None, str]:
-        request_fingerprint = sha256(body).hexdigest()
+        if request_fingerprint is None:
+            request_fingerprint = sha256(b"").hexdigest()
         idempotency_key = request.headers.get(_IDEMPOTENCY_HEADER)
         if not idempotency_key:
             return None, request_fingerprint
@@ -136,14 +179,14 @@ class InvokeGuardrails:
         scope, limit_value = route_limit
         return not await self.rate_limits_backend.hit(
             limit_value,
-            key=build_rate_limit_key(request),
+            key=build_client_rate_limit_key(request),
             scope=scope,
         )
 
     async def _is_globally_rate_limited(self, request: Request) -> bool:
         return not await self.rate_limits_backend.hit(
             self.api_rate_limit,
-            key=build_rate_limit_key(request),
+            key=build_client_rate_limit_key(request),
             scope="global",
         )
 
