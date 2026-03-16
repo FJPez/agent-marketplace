@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import auth_headers_for_account_id
 
@@ -9,6 +10,7 @@ from app.core.enums import (
     AccessMode,
     InvocationStatus,
     LedgerEntryType,
+    PayoutStatus,
     PricingModelType,
     ServiceLifecycle,
 )
@@ -16,6 +18,7 @@ from app.db.models import (
     Account,
     Invocation,
     PaymentAttempt,
+    Payout,
     Quote,
     Service,
     ServiceEndpoint,
@@ -33,7 +36,10 @@ async def _seed_provider_finance_data(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[int, int]:
     async with db_session_factory.begin() as session:
-        provider_account = Account(display_name="Provider")
+        provider_account = Account(
+            display_name="Provider",
+            wallet_address="0x00000000000000000000000000000000000000aa",
+        )
         consumer_account = Account(display_name="Consumer")
         session.add_all([provider_account, consumer_account])
         await session.flush()
@@ -152,11 +158,108 @@ async def _seed_provider_finance_data(
         return provider_account.id, service.id
 
 
+async def _seed_provider_payout_data(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> tuple[int, int]:
+    provider_account_id, service_id = await _seed_provider_finance_data(db_session_factory)
+
+    async with db_session_factory.begin() as session:
+        provider_account = await session.get(Account, provider_account_id)
+        assert provider_account is not None
+
+        invocation = await session.scalar(
+            select(Invocation).where(Invocation.service_id == service_id).order_by(Invocation.id)
+        )
+        assert invocation is not None
+        retry_invocation = Invocation(
+            consumer_account_id=invocation.consumer_account_id,
+            service_id=invocation.service_id,
+            endpoint_id=invocation.endpoint_id,
+            endpoint_key=invocation.endpoint_key,
+            access_mode=invocation.access_mode,
+            quote_id=invocation.quote_id,
+            idempotency_key="finance-key-retry",
+            request_hash="d" * 64,
+            status=InvocationStatus.SUCCEEDED,
+            response_payload={"result": "retry"},
+            upstream_status_code=200,
+            error_message=None,
+            failure_reason=None,
+        )
+        session.add(retry_invocation)
+        await session.flush()
+        payment_attempt = await session.scalar(
+            select(PaymentAttempt)
+            .where(PaymentAttempt.invocation_id == invocation.id)
+            .order_by(PaymentAttempt.id)
+        )
+        assert payment_attempt is not None
+        retry_attempt = PaymentAttempt(
+            consumer_account_id=payment_attempt.consumer_account_id,
+            quote_id=payment_attempt.quote_id,
+            invocation_id=retry_invocation.id,
+            idempotency_key="finance-key-retry",
+            payment_identifier="payment-finance-retry",
+            payment_requirement={"amount_minor": 500},
+            payment_payload={"payment_identifier": "payment-finance-retry"},
+            verify_outcome={"ok": True},
+            settle_outcome={"ok": True},
+            facilitator_reference="settle-finance-retry",
+        )
+        session.add(retry_attempt)
+        await session.flush()
+
+        session.add_all(
+            [
+                Payout(
+                    provider_account_id=provider_account_id,
+                    service_id=service_id,
+                    invocation_id=invocation.id,
+                    payment_attempt_id=payment_attempt.id,
+                    destination_wallet=provider_account.wallet_address,
+                    amount_minor=4_500_000,
+                    currency="USDC",
+                    network="base-sepolia",
+                    status=PayoutStatus.SENT,
+                    transfer_reference="0xsent",
+                    error_message=None,
+                    attempt_count=1,
+                ),
+                Payout(
+                    provider_account_id=provider_account_id,
+                    service_id=service_id,
+                    invocation_id=retry_invocation.id,
+                    payment_attempt_id=retry_attempt.id,
+                    destination_wallet=provider_account.wallet_address,
+                    amount_minor=4_400_000,
+                    currency="USDC",
+                    network="base-sepolia",
+                    status=PayoutStatus.FAILED,
+                    transfer_reference=None,
+                    error_message="rpc unavailable",
+                    attempt_count=2,
+                ),
+            ]
+        )
+
+    return provider_account_id, service_id
+
+
 @pytest.mark.asyncio
 async def test_provider_finance_routes_require_bearer_token(
     async_client: AsyncClient,
 ) -> None:
     response = await async_client.get("/v1/provider/earnings")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authorization header is required"}
+
+
+@pytest.mark.asyncio
+async def test_provider_payouts_route_requires_bearer_token(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.get("/v1/provider/payouts")
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Authorization header is required"}
@@ -208,6 +311,84 @@ async def test_get_provider_ledger_returns_entries_newest_first(
         "charge",
     ]
     assert all(item["service_id"] == service_id for item in payload["entries"])
+
+
+@pytest.mark.asyncio
+async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, service_id = await _seed_provider_payout_data(db_session_factory)
+
+    response = await async_client.get(
+        "/v1/provider/payouts",
+        headers=_auth_headers(provider_account_id),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "summary": {
+            "currency": "USDC",
+            "total_count": 2,
+            "ready_count": 0,
+            "pending_count": 0,
+            "sent_count": 1,
+            "failed_count": 1,
+            "total_amount_minor": 8_900_000,
+            "sent_amount_minor": 4_500_000,
+        },
+        "payouts": [
+            {
+                "id": 2,
+                "service_id": service_id,
+                "invocation_id": 2,
+                "payment_attempt_id": 2,
+                "destination_wallet": "0x00000000000000000000000000000000000000aa",
+                "amount_minor": 4_400_000,
+                "currency": "USDC",
+                "network": "base-sepolia",
+                "status": "failed",
+                "transfer_reference": None,
+                "error_message": "rpc unavailable",
+                "attempt_count": 2,
+                "created_at": response.json()["payouts"][0]["created_at"],
+                "updated_at": response.json()["payouts"][0]["updated_at"],
+            },
+            {
+                "id": 1,
+                "service_id": service_id,
+                "invocation_id": 1,
+                "payment_attempt_id": 1,
+                "destination_wallet": "0x00000000000000000000000000000000000000aa",
+                "amount_minor": 4_500_000,
+                "currency": "USDC",
+                "network": "base-sepolia",
+                "status": "sent",
+                "transfer_reference": "0xsent",
+                "error_message": None,
+                "attempt_count": 1,
+                "created_at": response.json()["payouts"][1]["created_at"],
+                "updated_at": response.json()["payouts"][1]["updated_at"],
+            },
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_provider_payouts_filters_by_status(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_payout_data(db_session_factory)
+
+    response = await async_client.get(
+        "/v1/provider/payouts?status=failed",
+        headers=_auth_headers(provider_account_id),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["failed_count"] == 1
+    assert [item["status"] for item in response.json()["payouts"]] == ["failed"]
 
 
 @pytest.mark.asyncio

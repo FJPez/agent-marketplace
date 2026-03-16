@@ -4,6 +4,7 @@ from app.db.models.invocation import Invocation
 from app.db.models.ledger_entry import LedgerEntry
 from app.db.models.moderation_action import ModerationAction
 from app.db.models.payment_attempt import PaymentAttempt
+from app.db.models.payout import Payout
 from app.db.models.pricing_model import PricingModel
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.quote import Quote
@@ -21,6 +22,7 @@ __all__ = [
     "LedgerEntry",
     "ModerationAction",
     "PaymentAttempt",
+    "Payout",
     "PricingModel",
     "ProviderUpstream",
     "Quote",
