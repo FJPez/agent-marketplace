@@ -4,11 +4,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.enums import PricingModelType
+from app.core.logging import (
+    QUOTE_ID_FIELD,
+    SERVICE_ID_FIELD,
+    build_event_context,
+    get_logger,
+)
 from app.core.request_hash import hash_request_body
 from app.db.models import Quote, ServiceEndpoint
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.service_repo import ServiceRepository
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
+
+logger = get_logger(__name__)
 
 
 class QuoteNotFoundError(Exception):
@@ -76,6 +84,16 @@ class QuoteService:
         )
         await self._session.commit()
         await self._session.refresh(quote)
+        logger.info(
+            "quote created",
+            extra=build_event_context(
+                "quote.created",
+                **{
+                    SERVICE_ID_FIELD: quote.service_id,
+                    QUOTE_ID_FIELD: quote.id,
+                },
+            ),
+        )
         return quote
 
     async def validate_quote(
