@@ -38,8 +38,18 @@ class AccountRepository:
     async def get(self, account_id: int) -> Account | None:
         return await self._session.get(Account, account_id)
 
+    async def get_for_update(self, account_id: int) -> Account | None:
+        statement = select(Account).where(Account.id == account_id).with_for_update()
+        return await self._session.scalar(statement)
+
     async def get_by_wallet_address(self, wallet_address: str) -> Account | None:
         statement = select(Account).where(Account.wallet_address == wallet_address)
+        return await self._session.scalar(statement)
+
+    async def get_by_wallet_address_for_update(self, wallet_address: str) -> Account | None:
+        statement = (
+            select(Account).where(Account.wallet_address == wallet_address).with_for_update()
+        )
         return await self._session.scalar(statement)
 
     def update_nonce(

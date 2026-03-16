@@ -118,7 +118,7 @@ class WalletChangeService:
         return account, self._issue_tokens(account)
 
     async def _require_account(self, account_id: int) -> Account:
-        account = await self._account_repo.get(account_id)
+        account = await self._account_repo.get_for_update(account_id)
         if account is None:
             raise WalletChangeError("account not found")
         return account

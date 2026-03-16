@@ -111,7 +111,7 @@ class AuthService:
 
     async def verify_wallet(self, *, message: str, signature: str) -> AuthResult:
         parsed = self._parse_and_validate_message(message=message, signature=signature)
-        account = await self._account_repo.get_by_wallet_address(parsed.address)
+        account = await self._account_repo.get_by_wallet_address_for_update(parsed.address)
         if account is None:
             raise AuthenticationError("account not found for wallet")
         if account.nonce != parsed.nonce:
