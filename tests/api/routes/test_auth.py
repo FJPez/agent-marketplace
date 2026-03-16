@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
+from app.core.config import Settings
 from app.core.security import AuthTokenType, create_jwt, hash_api_key
 from app.db.session import get_db_session
 
@@ -68,15 +69,16 @@ def _build_client(
     api_key: _FakeApiKey | None = None,
 ) -> TestClient:
     import app.api.deps.auth as auth_module
+    import app.services.auth_resolution_service as auth_resolution_module
 
     monkeypatch.setattr(
         auth_module,
         "get_settings",
-        lambda: auth_module.Settings(jwt_secret_key=TEST_SECRET),
+        lambda: Settings(jwt_secret_key=TEST_SECRET),
     )
 
     async def fake_get(
-        self: auth_module.AccountRepository,
+        self: auth_resolution_module.AccountRepository,
         account_id: int,
     ) -> _FakeAccount | None:
         _ = self
@@ -84,10 +86,10 @@ def _build_client(
             return account
         return None
 
-    monkeypatch.setattr(auth_module.AccountRepository, "get", fake_get)
+    monkeypatch.setattr(auth_resolution_module.AccountRepository, "get", fake_get)
 
     async def fake_get_by_hash(
-        self: auth_module.ApiKeyRepository,
+        self: auth_resolution_module.ApiKeyRepository,
         key_hash: str,
     ) -> _FakeApiKey | None:
         _ = self
@@ -96,15 +98,17 @@ def _build_client(
         return None
 
     def fake_touch_last_used(
-        self: auth_module.ApiKeyRepository,
+        self: auth_resolution_module.ApiKeyRepository,
         current_api_key: _FakeApiKey,
     ) -> _FakeApiKey:
         _ = self
         current_api_key.last_used_at = datetime.now(UTC)
         return current_api_key
 
-    monkeypatch.setattr(auth_module.ApiKeyRepository, "get_by_hash", fake_get_by_hash)
-    monkeypatch.setattr(auth_module.ApiKeyRepository, "touch_last_used", fake_touch_last_used)
+    monkeypatch.setattr(auth_resolution_module.ApiKeyRepository, "get_by_hash", fake_get_by_hash)
+    monkeypatch.setattr(
+        auth_resolution_module.ApiKeyRepository, "touch_last_used", fake_touch_last_used
+    )
 
     app = FastAPI()
 

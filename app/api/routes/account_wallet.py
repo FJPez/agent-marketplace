@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps.auth import CurrentActor
+from app.api.deps.auth import CurrentJwtActor
 from app.core.config import get_settings
 from app.core.security import normalize_wallet_address
 from app.db.session import get_db_session
@@ -22,7 +22,7 @@ router = APIRouter(prefix="/account/wallet", tags=["account"])
 @router.post("", response_model=WalletChangeInitiateResponse)
 async def initiate_wallet_change(
     request: WalletChangeInitiateRequest,
-    actor: CurrentActor,
+    actor: CurrentJwtActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WalletChangeInitiateResponse:
     service = WalletChangeService(session, settings=get_settings())
@@ -31,7 +31,12 @@ async def initiate_wallet_change(
             actor,
             wallet_address=normalize_wallet_address(request.wallet_address),
         )
-    except (ValueError, WalletChangeError) as exc:
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except WalletChangeError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return WalletChangeInitiateResponse(nonce=challenge.nonce, expires_at=challenge.expires_at)
 
@@ -39,7 +44,7 @@ async def initiate_wallet_change(
 @router.post("/confirm", response_model=WalletChangeConfirmResponse)
 async def confirm_wallet_change(
     request: WalletChangeConfirmRequest,
-    actor: CurrentActor,
+    actor: CurrentJwtActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WalletChangeConfirmResponse:
     service = WalletChangeService(session, settings=get_settings())

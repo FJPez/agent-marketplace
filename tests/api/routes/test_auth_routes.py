@@ -125,3 +125,71 @@ async def test_refresh_auth_token_returns_new_access_token(
 
     assert response.status_code == 200
     assert response.json()["access_token"]
+
+
+async def _authenticate(async_client: AsyncClient) -> tuple[str, str]:
+    signer = Account.create()
+    nonce_response = await async_client.get(
+        "/v1/auth/nonce",
+        params={"address": signer.address},
+    )
+    nonce = nonce_response.json()["nonce"]
+    issued_at = datetime.now(UTC).replace(microsecond=0)
+    message = _build_siwe_message(
+        address=signer.address,
+        nonce=nonce,
+        issued_at=issued_at,
+    )
+    signed = Account.sign_message(
+        signable_message=encode_defunct(text=message),
+        private_key=signer.key,
+    )
+    verify_response = await async_client.post(
+        "/v1/auth/verify",
+        json={
+            "message": message,
+            "signature": signed.signature.to_0x_hex(),
+        },
+    )
+    return signer.address, verify_response.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_api_key_crud_routes_require_jwt_and_support_create_list_revoke(
+    async_client: AsyncClient,
+) -> None:
+    _, access_token = await _authenticate(async_client)
+    auth_headers = {"Authorization": f"Bearer {access_token}"}
+
+    create_response = await async_client.post(
+        "/v1/auth/api-keys",
+        headers=auth_headers,
+        json={"name": "worker-key"},
+    )
+
+    assert create_response.status_code == 201
+    created_key = create_response.json()
+    plaintext_api_key = created_key["api_key"]
+    api_key_id = created_key["id"]
+
+    list_response = await async_client.get(
+        "/v1/auth/api-keys",
+        headers=auth_headers,
+    )
+
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == [api_key_id]
+
+    api_key_response = await async_client.get(
+        "/v1/auth/api-keys",
+        headers={"Authorization": f"Bearer {plaintext_api_key}"},
+    )
+
+    assert api_key_response.status_code == 403
+
+    revoke_response = await async_client.delete(
+        f"/v1/auth/api-keys/{api_key_id}",
+        headers=auth_headers,
+    )
+
+    assert revoke_response.status_code == 204

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps.auth import CurrentActor
+from app.api.deps.auth import CurrentJwtActor
 from app.core.config import get_settings
 from app.core.security import normalize_wallet_address
 from app.db.session import get_db_session
@@ -34,7 +34,7 @@ async def get_auth_nonce(
         nonce = await service.issue_nonce(wallet_address=normalize_wallet_address(address))
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     return AuthNonceResponse(nonce=nonce)
@@ -80,7 +80,7 @@ async def refresh_auth(
 )
 async def create_api_key(
     request: ApiKeyCreateRequest,
-    actor: CurrentActor,
+    actor: CurrentJwtActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ApiKeyCreateResponse:
     service = ApiKeyService(session, settings=get_settings())
@@ -92,7 +92,7 @@ async def create_api_key(
         )
     except ApiKeyValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
     return ApiKeyCreateResponse(
@@ -109,7 +109,7 @@ async def create_api_key(
 
 @router.get("/api-keys", response_model=list[ApiKeyResponse])
 async def list_api_keys(
-    actor: CurrentActor,
+    actor: CurrentJwtActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ApiKeyResponse]:
     service = ApiKeyService(session, settings=get_settings())
@@ -131,7 +131,7 @@ async def list_api_keys(
 @router.delete("/api-keys/{api_key_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_api_key(
     api_key_id: int,
-    actor: CurrentActor,
+    actor: CurrentJwtActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> Response:
     service = ApiKeyService(session, settings=get_settings())

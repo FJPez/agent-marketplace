@@ -81,3 +81,78 @@ async def test_patch_account_me_updates_display_name(async_client: AsyncClient) 
 
     assert response.status_code == 200
     assert response.json()["display_name"] == "Updated Name"
+
+
+@pytest.mark.asyncio
+async def test_account_me_rejects_api_key_bearer(async_client: AsyncClient) -> None:
+    _, access_token = await _authenticate(async_client)
+    create_response = await async_client.post(
+        "/v1/auth/api-keys",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"name": "worker-key"},
+    )
+    api_key = create_response.json()["api_key"]
+
+    response = await async_client.get(
+        "/v1/account/me",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_wallet_change_routes_require_jwt_and_complete_rotation(
+    async_client: AsyncClient,
+) -> None:
+    _, access_token = await _authenticate(async_client)
+    new_signer = Account.create()
+
+    initiate_response = await async_client.post(
+        "/v1/account/wallet",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"wallet_address": new_signer.address},
+    )
+
+    assert initiate_response.status_code == 200
+    nonce = initiate_response.json()["nonce"]
+    issued_at = datetime.now(UTC).replace(microsecond=0)
+    message = _build_siwe_message(
+        address=new_signer.address,
+        nonce=nonce,
+        issued_at=issued_at,
+    )
+    signed = Account.sign_message(
+        signable_message=encode_defunct(text=message),
+        private_key=new_signer.key,
+    )
+
+    confirm_response = await async_client.post(
+        "/v1/account/wallet/confirm",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={
+            "message": message,
+            "signature": signed.signature.to_0x_hex(),
+        },
+    )
+
+    assert confirm_response.status_code == 200
+    body = confirm_response.json()
+    assert body["account"]["wallet_address"] == new_signer.address
+    assert body["access_token"]
+    assert body["refresh_token"]
+
+
+@pytest.mark.asyncio
+async def test_wallet_change_initiate_rejects_invalid_wallet_address(
+    async_client: AsyncClient,
+) -> None:
+    _, access_token = await _authenticate(async_client)
+
+    response = await async_client.post(
+        "/v1/account/wallet",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"wallet_address": "not-a-wallet"},
+    )
+
+    assert response.status_code == 422
