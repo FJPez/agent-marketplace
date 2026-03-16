@@ -17,6 +17,13 @@ def test_settings_use_default_values(
     assert settings.env is AppEnv.DEV
     assert settings.title == "Agent Marketplace Backend"
     assert settings.debug is False
+    assert settings.jwt_secret_key == "dev-jwt-secret-key-with-32-bytes-min"
+    assert settings.jwt_access_token_expiry == 900
+    assert settings.jwt_refresh_token_expiry == 604800
+    assert settings.siwe_domain == "testserver"
+    assert settings.siwe_nonce_expiry == 300
+    assert settings.wallet_change_cooldown == 604800
+    assert settings.api_key_prefix == "amp_"
     assert settings.x402_cdp_api_key_id is None
     assert settings.x402_cdp_api_key_secret is None
 

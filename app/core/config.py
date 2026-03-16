@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     title: str = "Agent Marketplace Backend"
     debug: bool = False
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
+    jwt_secret_key: str = "dev-jwt-secret-key-with-32-bytes-min"
+    jwt_access_token_expiry: int = 900
+    jwt_refresh_token_expiry: int = 604800
+    siwe_domain: str = "testserver"
+    siwe_nonce_expiry: int = 300
+    wallet_change_cooldown: int = 604800
+    api_key_prefix: str = "amp_"
     quote_ttl_seconds: int = 300
     x402_facilitator_url: str = "https://x402.org/facilitator"
     x402_network: str = "base-sepolia"
