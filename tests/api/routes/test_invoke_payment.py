@@ -18,6 +18,7 @@ from app.db.models import (
     Account,
     ConsumerProfile,
     Invocation,
+    LedgerEntry,
     PaymentAttempt,
     PricingModel,
     ProviderProfile,
@@ -175,13 +176,14 @@ async def _seed_quote(
 
 async def _count_rows(
     db_session_factory: async_sessionmaker[AsyncSession],
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     async with db_session_factory() as session:
         invocation_count = await session.scalar(select(func.count()).select_from(Invocation))
         payment_attempt_count = await session.scalar(
             select(func.count()).select_from(PaymentAttempt)
         )
-    return invocation_count or 0, payment_attempt_count or 0
+        ledger_count = await session.scalar(select(func.count()).select_from(LedgerEntry))
+    return invocation_count or 0, payment_attempt_count or 0, ledger_count or 0
 
 
 async def _get_payment_attempt(
@@ -436,13 +438,14 @@ async def test_paid_invoke_without_payment_returns_402_and_creates_no_records(
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
 
-    invocation_count, payment_attempt_count = await _count_rows(db_session_factory)
+    invocation_count, payment_attempt_count, ledger_count = await _count_rows(db_session_factory)
 
     assert response.status_code == 402
     assert response.json() == {"detail": "payment required"}
     assert "PAYMENT-REQUIRED" in response.headers
     assert invocation_count == 0
     assert payment_attempt_count == 0
+    assert ledger_count == 0
 
 
 @pytest.mark.asyncio
@@ -490,6 +493,65 @@ async def test_paid_invoke_with_valid_payment_returns_success_and_payment_respon
     assert len(upstream_client.calls) == 1
     assert len(facilitator_client.verify_calls) == 1
     assert len(facilitator_client.settle_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_paid_invoke_writes_ledger_entries(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    upstream_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})]
+    )
+    facilitator_client = _FakeFacilitatorClient(
+        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    )
+    _install_payment_state(
+        app,
+        upstream_client=upstream_client,
+        facilitator_client=facilitator_client,
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            payment_header=_payment_header(payment_identifier="payment-ledger"),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 200
+
+    async with db_session_factory() as session:
+        entries = list(
+            (
+                await session.execute(
+                    select(LedgerEntry).order_by(LedgerEntry.id),
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    assert [entry.entry_type.value for entry in entries] == [
+        "charge",
+        "platform_fee",
+        "provider_earning",
+    ]
+    assert [entry.amount_minor for entry in entries] == [500, 50, 450]
 
 
 @pytest.mark.asyncio

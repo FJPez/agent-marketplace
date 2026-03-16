@@ -3,7 +3,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps.auth import OptionalCurrentActor
 from app.db.session import get_db_session
 from app.schemas.quote import QuoteCreateRequest, QuoteResponse
 from app.services.quote_service import QuoteNotFoundError, QuoteService, QuoteUnavailableError
@@ -31,7 +30,6 @@ async def create_quote(
     service_id_or_slug: str,
     request: QuoteCreateRequest,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    actor: OptionalCurrentActor = None,
 ) -> QuoteResponse:
     service = QuoteService(session)
     try:

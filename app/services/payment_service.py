@@ -27,6 +27,7 @@ from app.services.invoke_service import (
     InvokeGatewayTimeoutError,
     InvokeService,
 )
+from app.services.ledger_service import LedgerService
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,6 +99,7 @@ class PaymentService:
         self._settings = settings
         self._attempt_repo = PaymentAttemptRepository(session)
         self._invoke_service = InvokeService(session, http_client=http_client)
+        self._ledger_service = LedgerService(session)
 
     async def handle_paid_invoke(
         self,
@@ -217,6 +219,14 @@ class PaymentService:
             await self._session.commit()
             raise
         attempt.invocation_id = invocation.id
+        await self._ledger_service.record_paid_invocation(
+            provider_account_id=resolved.service.provider_account_id,
+            service_id=resolved.service.id,
+            invocation_id=invocation.id,
+            payment_attempt_id=attempt.id,
+            amount_minor=resolved.quote.amount_minor,
+            currency=resolved.quote.currency or "",
+        )
         await self._session.commit()
         return PaidInvokeSuccess(
             invocation=invocation,

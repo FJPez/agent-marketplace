@@ -1,6 +1,7 @@
 from app.db.models.account import Account
 from app.db.models.consumer_profile import ConsumerProfile
 from app.db.models.invocation import Invocation
+from app.db.models.ledger_entry import LedgerEntry
 from app.db.models.moderation_action import ModerationAction
 from app.db.models.payment_attempt import PaymentAttempt
 from app.db.models.pricing_model import PricingModel
@@ -17,6 +18,7 @@ __all__ = [
     "Account",
     "ConsumerProfile",
     "Invocation",
+    "LedgerEntry",
     "ModerationAction",
     "PaymentAttempt",
     "PricingModel",
