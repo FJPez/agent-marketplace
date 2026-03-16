@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -14,6 +15,7 @@ from app.core.enums import (
     PricingModelType,
     ServiceLifecycle,
 )
+from app.core.logging import EVENT_FIELD, PAYOUT_COUNT_FIELD, REQUEST_ID_FIELD
 from app.db.models import (
     Account,
     Invocation,
@@ -317,13 +319,15 @@ async def test_get_provider_ledger_returns_entries_newest_first(
 async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider_account_id, service_id = await _seed_provider_payout_data(db_session_factory)
 
-    response = await async_client.get(
-        "/v1/provider/payouts",
-        headers=_auth_headers(provider_account_id),
-    )
+    with caplog.at_level(logging.INFO, logger="app.services.payout_service"):
+        response = await async_client.get(
+            "/v1/provider/payouts",
+            headers={**_auth_headers(provider_account_id), "X-Request-ID": "payout-list-req"},
+        )
 
     assert response.status_code == 200
     assert response.json() == {
@@ -372,6 +376,12 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
             },
         ],
     }
+    record = next(
+        record for record in caplog.records if record.name == "app.services.payout_service"
+    )
+    assert getattr(record, EVENT_FIELD) == "payout.reporting_listed"
+    assert getattr(record, REQUEST_ID_FIELD) == "payout-list-req"
+    assert getattr(record, PAYOUT_COUNT_FIELD) == 2
 
 
 @pytest.mark.asyncio

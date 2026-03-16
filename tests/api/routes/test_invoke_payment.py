@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -14,6 +15,13 @@ from x402.http import encode_payment_signature_header
 
 from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
+from app.core.logging import (
+    EVENT_FIELD,
+    PAYOUT_ID_FIELD,
+    PAYOUT_STATUS_FIELD,
+    REQUEST_ID_FIELD,
+    TRANSFER_REFERENCE_FIELD,
+)
 from app.core.request_hash import hash_request_body
 from app.db.models import (
     Account,
@@ -660,6 +668,7 @@ async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
     consumer_account_id = await _create_consumer_account(db_session_factory)
@@ -685,16 +694,26 @@ async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
         payouts_enabled=True,
     )
 
-    response = await async_client.post(
-        "/v1/invoke/paid-invoke-service",
-        headers=_auth_headers(
-            consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-payout-success"),
-        ),
-        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
-    )
+    with caplog.at_level(logging.INFO, logger="app.services.payment_service"):
+        response = await async_client.post(
+            "/v1/invoke/paid-invoke-service",
+            headers={
+                **_auth_headers(
+                    consumer_account_id,
+                    payment_header=_payment_header(payment_identifier="payment-payout-success"),
+                ),
+                "X-Request-ID": "payout-success-req",
+            },
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+        )
 
     payouts = await _list_payouts(db_session_factory)
+    sent_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.payment_service"
+        and getattr(record, EVENT_FIELD, None) == "payout.sent"
+    )
 
     assert response.status_code == 200
     assert len(payout_executor.calls) == 1
@@ -707,6 +726,10 @@ async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
     assert payouts[0].status.value == "sent"
     assert payouts[0].transfer_reference == "0xpayoutsent"
     assert payouts[0].attempt_count == 1
+    assert getattr(sent_record, REQUEST_ID_FIELD) == "payout-success-req"
+    assert getattr(sent_record, PAYOUT_ID_FIELD) == payouts[0].id
+    assert getattr(sent_record, PAYOUT_STATUS_FIELD) == "sent"
+    assert getattr(sent_record, TRANSFER_REFERENCE_FIELD) == "0xpayoutsent"
 
 
 @pytest.mark.asyncio
@@ -714,6 +737,7 @@ async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_p
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
     consumer_account_id = await _create_consumer_account(db_session_factory)
@@ -738,22 +762,35 @@ async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_p
         payouts_enabled=True,
     )
 
-    response = await async_client.post(
-        "/v1/invoke/paid-invoke-service",
-        headers=_auth_headers(
-            consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-payout-failure"),
-        ),
-        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
-    )
+    with caplog.at_level(logging.ERROR, logger="app.services.payment_service"):
+        response = await async_client.post(
+            "/v1/invoke/paid-invoke-service",
+            headers={
+                **_auth_headers(
+                    consumer_account_id,
+                    payment_header=_payment_header(payment_identifier="payment-payout-failure"),
+                ),
+                "X-Request-ID": "payout-failure-req",
+            },
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+        )
 
     payouts = await _list_payouts(db_session_factory)
+    failed_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.payment_service"
+        and getattr(record, EVENT_FIELD, None) == "payout.failed"
+    )
 
     assert response.status_code == 200
     assert len(payouts) == 1
     assert payouts[0].status.value == "failed"
     assert payouts[0].error_message == "rpc unavailable"
     assert payouts[0].transfer_reference is None
+    assert getattr(failed_record, REQUEST_ID_FIELD) == "payout-failure-req"
+    assert getattr(failed_record, PAYOUT_ID_FIELD) == payouts[0].id
+    assert getattr(failed_record, PAYOUT_STATUS_FIELD) == "failed"
 
 
 @pytest.mark.asyncio

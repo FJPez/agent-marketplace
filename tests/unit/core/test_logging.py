@@ -2,12 +2,17 @@ import uuid
 
 from app.core.logging import (
     DURATION_MS_FIELD,
+    EVENT_FIELD,
     METHOD_FIELD,
     PATH_FIELD,
+    PAYOUT_ID_FIELD,
     REQUEST_ID_FIELD,
     REQUEST_ID_HEADER,
     STATUS_CODE_FIELD,
+    bind_request_id,
+    build_event_context,
     build_log_context,
+    reset_request_id,
     resolve_request_id,
 )
 
@@ -42,3 +47,17 @@ def test_build_log_context_uses_stable_request_fields() -> None:
         DURATION_MS_FIELD: 12,
     }
     assert REQUEST_ID_HEADER == "X-Request-ID"
+
+
+def test_build_event_context_uses_bound_request_id_and_extra_fields() -> None:
+    token = bind_request_id("req-456")
+    try:
+        context = build_event_context("payout.sent", payout_id=9)
+    finally:
+        reset_request_id(token)
+
+    assert context == {
+        EVENT_FIELD: "payout.sent",
+        REQUEST_ID_FIELD: "req-456",
+        PAYOUT_ID_FIELD: 9,
+    }

@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -7,6 +8,7 @@ from tests.helpers.auth import auth_headers_for_account_id, wallet_address_for_i
 
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.logging import EVENT_FIELD, QUOTE_ID_FIELD, REQUEST_ID_FIELD, SERVICE_ID_FIELD
 from app.db.models import (
     Account,
     ModerationAction,
@@ -158,6 +160,42 @@ async def test_create_quote_returns_snapshot_for_active_public_endpoint(
     assert (
         before_request + timedelta(minutes=5) <= expires_at <= after_request + timedelta(minutes=5)
     )
+
+
+@pytest.mark.asyncio
+async def test_create_quote_logs_correlated_quote_event(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="quote-log-service",
+        with_revision=True,
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.services.quote_service"):
+        response = await async_client.post(
+            "/v1/services/quote-log-service/quote",
+            headers={"X-Request-ID": "quote-req-1"},
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+        )
+
+    assert response.status_code == 201
+    record = next(
+        record for record in caplog.records if record.name == "app.services.quote_service"
+    )
+    assert getattr(record, EVENT_FIELD) == "quote.created"
+    assert getattr(record, REQUEST_ID_FIELD) == "quote-req-1"
+    assert getattr(record, SERVICE_ID_FIELD) == service_id
+    assert getattr(record, QUOTE_ID_FIELD) == response.json()["id"]
 
 
 @pytest.mark.asyncio

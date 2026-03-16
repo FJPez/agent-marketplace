@@ -7,6 +7,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import PayoutStatus, PricingModelType
+from app.core.logging import (
+    INVOCATION_ID_FIELD,
+    PAYMENT_ATTEMPT_ID_FIELD,
+    PAYOUT_ID_FIELD,
+    PAYOUT_STATUS_FIELD,
+    PROVIDER_ACCOUNT_ID_FIELD,
+    QUOTE_ID_FIELD,
+    SERVICE_ID_FIELD,
+    TRANSFER_REFERENCE_FIELD,
+    build_event_context,
+    get_logger,
+)
 from app.db.models import Account
 from app.integrations.payouts import PayoutExecutionError, SupportsPayoutExecutor
 from app.integrations.x402.facilitator_client import (
@@ -32,6 +44,8 @@ from app.services.invoke_service import (
     InvokeService,
 )
 from app.services.ledger_service import LedgerService, split_paid_invocation_amount
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -122,6 +136,15 @@ class PaymentService:
             request_hash=resolved.request_hash,
         )
         if existing is not None:
+            logger.info(
+                "paid invoke replayed",
+                extra=build_event_context(
+                    "payment.replayed",
+                    **{
+                        INVOCATION_ID_FIELD: existing.id,
+                    },
+                ),
+            )
             return PaidInvokeSuccess(
                 invocation=existing,
                 response_headers=await self._build_success_headers_for_invocation(existing.id),
@@ -196,6 +219,16 @@ class PaymentService:
         attempt.verify_outcome = verify_outcome
         attempt.facilitator_reference = _extract_reference(verify_outcome)
         if not _is_verify_success(verify_outcome):
+            logger.info(
+                "payment verification failed",
+                extra=build_event_context(
+                    "payment.verify_failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: resolved.quote.id,
+                    },
+                ),
+            )
             await self._session.commit()
             return self._challenge(payment_requirement, detail="payment could not be verified")
 
@@ -208,6 +241,16 @@ class PaymentService:
             verify_outcome,
         )
         if not _is_settle_success(settle_outcome):
+            logger.error(
+                "payment settlement failed",
+                extra=build_event_context(
+                    "payment.settle_failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: resolved.quote.id,
+                    },
+                ),
+            )
             await self._session.commit()
             raise InvokeBadGatewayError("payment settlement failed")
 
@@ -233,6 +276,19 @@ class PaymentService:
             payment_attempt_id=attempt.id,
             amount_minor=resolved.quote.amount_minor,
             currency=resolved.quote.currency or "",
+        )
+        logger.info(
+            "payment settled",
+            extra=build_event_context(
+                "payment.settled",
+                **{
+                    PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                    QUOTE_ID_FIELD: resolved.quote.id,
+                    INVOCATION_ID_FIELD: invocation.id,
+                    PROVIDER_ACCOUNT_ID_FIELD: resolved.service.provider_account_id,
+                    SERVICE_ID_FIELD: resolved.service.id,
+                },
+            ),
         )
         await self._record_provider_payout(
             provider_account_id=resolved.service.provider_account_id,
@@ -367,6 +423,21 @@ class PaymentService:
             status=PayoutStatus.READY,
             attempt_count=0,
         )
+        await self._session.flush()
+        logger.info(
+            "provider payout created",
+            extra=build_event_context(
+                "payout.ready",
+                **{
+                    PAYMENT_ATTEMPT_ID_FIELD: payment_attempt_id,
+                    PAYOUT_ID_FIELD: payout.id,
+                    PAYOUT_STATUS_FIELD: payout.status.value,
+                    PROVIDER_ACCOUNT_ID_FIELD: provider_account_id,
+                    INVOCATION_ID_FIELD: invocation_id,
+                    SERVICE_ID_FIELD: service_id,
+                },
+            ),
+        )
         if provider_amount_minor <= 0:
             payout.status = PayoutStatus.FAILED
             payout.error_message = "provider payout amount must be positive"
@@ -384,10 +455,39 @@ class PaymentService:
         except (PayoutExecutionError, ValueError, RuntimeError) as exc:
             payout.status = PayoutStatus.FAILED
             payout.error_message = str(exc)
+            logger.error(
+                "provider payout failed",
+                extra=build_event_context(
+                    "payout.failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: payment_attempt_id,
+                        PAYOUT_ID_FIELD: payout.id,
+                        PAYOUT_STATUS_FIELD: payout.status.value,
+                        PROVIDER_ACCOUNT_ID_FIELD: provider_account_id,
+                        INVOCATION_ID_FIELD: invocation_id,
+                        SERVICE_ID_FIELD: service_id,
+                    },
+                ),
+            )
             return
         payout.status = PayoutStatus.SENT
         payout.transfer_reference = _extract_reference(outcome)
         payout.error_message = None
+        logger.info(
+            "provider payout sent",
+            extra=build_event_context(
+                "payout.sent",
+                **{
+                    PAYMENT_ATTEMPT_ID_FIELD: payment_attempt_id,
+                    PAYOUT_ID_FIELD: payout.id,
+                    PAYOUT_STATUS_FIELD: payout.status.value,
+                    PROVIDER_ACCOUNT_ID_FIELD: provider_account_id,
+                    INVOCATION_ID_FIELD: invocation_id,
+                    SERVICE_ID_FIELD: service_id,
+                    TRANSFER_REFERENCE_FIELD: payout.transfer_reference,
+                },
+            ),
+        )
 
     async def _get_provider_wallet(self, *, provider_account_id: int) -> str | None:
         statement = select(Account.wallet_address).where(Account.id == provider_account_id)
