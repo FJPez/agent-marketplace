@@ -9,7 +9,6 @@ from typing import Literal
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from app.api.deps.auth import X_ACCOUNT_ID_HEADER
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
     build_rate_limit_key,
@@ -61,10 +60,9 @@ class InvokeGuardrails:
                 content={"detail": "request payload too large"},
             )
 
-        owner_key = self._resolve_owner_key(request)
         submission_key, request_fingerprint = self._build_submission_key(
             request,
-            owner_key=owner_key,
+            owner_key=build_rate_limit_key(request),
             body=body,
         )
 
@@ -94,14 +92,6 @@ class InvokeGuardrails:
 
     async def reset_rate_limits(self) -> None:
         await self.rate_limits_backend.reset()
-
-    def _resolve_owner_key(self, request: Request) -> str:
-        account_id = request.headers.get(X_ACCOUNT_ID_HEADER)
-        if account_id:
-            return f"account:{account_id}"
-
-        client_host = request.client.host if request.client is not None else "unknown"
-        return f"client:{client_host}"
 
     def _build_submission_key(
         self,
