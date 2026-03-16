@@ -133,6 +133,33 @@ codex-agent-plan/
 - service-health record persistence and checker scaffolding are landed as
   internal-only building blocks
 
+## Implemented Phase 3
+
+- service revisions create immutable revision snapshots with change tokens
+- contract mutations enforce `X-Change-Token` headers before update
+- fixed-per-call pricing models can be attached to service endpoints
+- publish transitions services from draft to active only when pricing rules pass
+- publish creates the active revision snapshot and current change token
+- discovery exposes public service list/detail views with tag and lifecycle filtering
+
+## Implemented Phase 4
+
+- quote flow generates quotes from published endpoint pricing
+- quote validation checks request hash, revision binding, change token, and expiry
+- moderation admin completion supports suspend and unsuspend lifecycle controls
+- delisted and moderated services are blocked from public availability
+- service-health completion records probe pass, fail, and error outcomes
+- publish readiness is gated on the latest successful health-check state
+
+## Implemented Phase 5
+
+- invoke core supports free invokes through provider upstream forwarding
+- provider forwarding uses HMAC-SHA256 request signing
+- invocation records persist request/response state with idempotency key handling
+- invoke request validation, timeout handling, and upstream error mapping are enforced
+- x402 payment adds `402 Payment Required` challenges and payment requirement generation
+- facilitator verify and settle flows persist payment attempts and complete paid invokes atomically
+
 ## Development setup
 
 ### Requirements
@@ -148,6 +175,9 @@ codex-agent-plan/
 uv python install 3.12
 uv sync
 ```
+
+Copy `.env.example` to `.env` for local development. The supported settings still
+live in `app/core/config.py` if you need the source of truth.
 
 ### Run the app
 
@@ -178,6 +208,58 @@ uv run ty check
 ```bash
 uv run alembic upgrade head
 ```
+
+## Operational notes
+
+- `.env.example` now documents the supported `APP_...` environment variables.
+- `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; startup and free routes
+  still work without it, but paid invoke attempts fail with a clear config error.
+- x402 v2 payment flows use `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
+  `PAYMENT-RESPONSE` headers.
+- `scripts/seed_demo.py` seeds a rerunnable demo provider, consumer, active
+  service, endpoints, pricing, upstreams, tags, and revision for manual testing.
+- `APP_DEMO_UPSTREAM_BASE_URL`, `APP_DEMO_FREE_UPSTREAM_PATH`, and
+  `APP_DEMO_PAID_UPSTREAM_PATH` let the demo seed target a real provider for
+  manual invoke testing instead of `provider.example.com`.
+- `make seed` runs that seed helper through `uv`.
+- A root `Makefile` wraps the common `uv` commands; `make run`, `make test`,
+  `make lint`, `make format`, `make typecheck`, and `make migrate` map directly
+  to the existing workflows.
+
+## Manual Paid Invoke
+
+For a live x402 v2 manual test:
+
+1. Create `.env` from `.env.example`.
+2. Set these x402 values for the recommended CDP facilitator path:
+   - `APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
+   - `APP_X402_CDP_API_KEY_ID=...`
+   - `APP_X402_CDP_API_KEY_SECRET=...`
+   - `APP_X402_PAY_TO_ADDRESS=...`
+   The payout address should be the provider wallet that should receive Base
+   Sepolia USDC.
+3. Point the seeded service at a reachable upstream with
+   `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
+   If you change those values, rerun the demo seed so the stored upstream rows
+   in the database are updated.
+4. Run migrations and seed data:
+   `uv run alembic upgrade head`
+   `make seed`
+5. Create a quote for the paid endpoint:
+   `POST /v1/services/demo-agent-service/quote`
+6. Invoke with `X-Account-Id` and `Idempotency-Key`. The first unpaid request
+   should return `402 Payment Required` with `PAYMENT-REQUIRED`.
+7. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
+   A successful paid invoke returns the upstream response plus
+   `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
+
+Quote prices remain in USD minor units at the API layer. The x402 integration
+converts that amount to USDC base units internally before verify/settle.
+
+For the full local demo walkthrough, including the mock upstream, seeded demo
+service, example client, `.env` setup, Base Sepolia wallet preparation, CDP
+facilitator credentials, and transaction verification, see
+[`docs/demo-setup.md`](/Users/freddieperrott/Development/uni-work/agent-marketplace/docs/demo-setup.md).
 
 ## Working style
 
@@ -240,19 +322,14 @@ app/integrations/x402/
 
 ## Current status
 
-Phase 2 is merged on `integration/phase-3`.
+Phase 5 is merged on `integration/phase-5`.
 
-The recommended next implementation order is:
+Phases 1-5 covering the core marketplace loop are complete.
 
-1. revisions and change tokens
-2. pricing and publish
-3. discovery
-4. quote flow
-5. service-health completion
-6. moderation-admin completion
-7. invoke core
-8. x402 payment
-9. ledger and reporting
+The remaining implementation order is:
+
+1. ledger and earnings
+2. payouts and reporting
 
 ## Contributing
 

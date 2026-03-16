@@ -15,7 +15,7 @@ class X402ResourceServerAdapter:
         header_value = encode_payment_required_header(
             PaymentRequired(accepts=[to_payment_requirements(payment_requirement)])
         )
-        return {"X-PAYMENT-REQUIRED": header_value}
+        return {"PAYMENT-REQUIRED": header_value}
 
     def build_payment_response_headers(
         self,
@@ -23,5 +23,5 @@ class X402ResourceServerAdapter:
         settle_outcome: dict[str, object],
     ) -> dict[str, str]:
         return {
-            "X-PAYMENT-RESPONSE": encode_payment_response_header(to_settle_response(settle_outcome))
+            "PAYMENT-RESPONSE": encode_payment_response_header(to_settle_response(settle_outcome))
         }

@@ -9,6 +9,7 @@ def test_build_payment_required_headers_uses_official_x402_encoding() -> None:
             "scheme": "exact",
             "asset": "usdc",
             "amount_minor": 500,
+            "payment_amount": 5_000_000,
             "currency": "USD",
             "pay_to": "0x000000000000000000000000000000000000c0de",
             "network": "base-sepolia",
@@ -18,12 +19,14 @@ def test_build_payment_required_headers_uses_official_x402_encoding() -> None:
         }
     )
 
-    decoded = decode_payment_required_header(headers["X-PAYMENT-REQUIRED"])
+    decoded = decode_payment_required_header(headers["PAYMENT-REQUIRED"])
+    accept = decoded.accepts[0].model_dump(by_alias=True, exclude_none=True)
 
     assert decoded.x402_version == 2
     assert len(decoded.accepts) == 1
-    assert decoded.accepts[0].network == "eip155:84532"
-    assert decoded.accepts[0].pay_to == "0x000000000000000000000000000000000000c0de"
+    assert accept["network"] == "eip155:84532"
+    assert accept["amount"] == "5000000"
+    assert accept["payTo"] == "0x000000000000000000000000000000000000c0de"
 
 
 def test_build_payment_response_headers_uses_official_x402_encoding() -> None:
@@ -36,7 +39,7 @@ def test_build_payment_response_headers_uses_official_x402_encoding() -> None:
         }
     )
 
-    decoded = decode_payment_response_header(headers["X-PAYMENT-RESPONSE"])
+    decoded = decode_payment_response_header(headers["PAYMENT-RESPONSE"])
 
     assert decoded.success is True
     assert decoded.transaction == "0xsettled"

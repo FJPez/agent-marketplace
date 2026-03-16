@@ -11,7 +11,12 @@ from app.core.config import Settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import Quote, Service, ServiceEndpoint
 from app.integrations.provider_gateway.signing import HmacAuthConfig
-from app.services.invoke_service import InvokeConflictError, ResolvedInvokeTarget
+from app.integrations.x402.facilitator_client import FacilitatorAuthError
+from app.services.invoke_service import (
+    InvokeBadGatewayError,
+    InvokeConflictError,
+    ResolvedInvokeTarget,
+)
 from app.services.payment_service import PaymentService
 
 if TYPE_CHECKING:
@@ -269,7 +274,7 @@ async def test_handle_paid_invoke_conflicts_before_verify_when_identifier_claim_
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            request_headers={"X-PAYMENT": _payment_header(payment_identifier="payment-1")},
+            request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
         )
 
     assert facilitator_client.verify_calls == 0
@@ -277,3 +282,41 @@ async def test_handle_paid_invoke_conflicts_before_verify_when_identifier_claim_
     assert session.flush_calls == 1
     assert session.begin_nested_calls == 1
     assert service._attempt_repo.add_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
+    class AuthFailingFacilitatorClient:
+        async def verify(
+            self,
+            *,
+            payment_requirement: dict[str, object],
+            payment_payload: dict[str, object],
+        ) -> dict[str, object]:
+            _ = payment_requirement
+            _ = payment_payload
+            raise FacilitatorAuthError("facilitator authentication failed")
+
+        async def settle(
+            self,
+            *,
+            payment_requirement: dict[str, object],
+            payment_payload: dict[str, object],
+        ) -> dict[str, object]:
+            _ = payment_requirement
+            _ = payment_payload
+            raise AssertionError("settle should not be called")
+
+    service = PaymentService(
+        cast("AsyncSession", object()),
+        http_client=cast("SupportsRequest", FakeHttpClient()),
+        facilitator_client=cast("SupportsFacilitatorClient", AuthFailingFacilitatorClient()),
+        x402_resource_server=cast("SupportsX402ResourceServer", FakeX402ResourceServer()),
+        settings=Settings(),
+    )
+
+    with pytest.raises(InvokeBadGatewayError, match="facilitator authentication failed"):
+        await service._verify(
+            payment_requirement={"amount_minor": 500},
+            payment_payload={"authorization": {"nonce": "payment-1"}},
+        )

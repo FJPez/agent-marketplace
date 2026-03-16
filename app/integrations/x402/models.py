@@ -5,20 +5,26 @@ from x402.schemas import SettleResponse
 
 
 def to_payment_requirements(payment_requirement: dict[str, object]) -> PaymentRequirements:
+    extra = {
+        "facilitator_url": payment_requirement["facilitator_url"],
+        "network": payment_requirement["network"],
+        "currency": payment_requirement["currency"],
+        "amount_minor": payment_requirement["amount_minor"],
+    }
+    if "name" in payment_requirement:
+        extra["name"] = payment_requirement["name"]
+    if "version" in payment_requirement:
+        extra["version"] = payment_requirement["version"]
+
     return PaymentRequirements.model_validate(
         {
             "scheme": str(payment_requirement["scheme"]),
             "network": str(payment_requirement["network_caip2"]),
             "asset": str(payment_requirement["asset"]),
-            "amount": str(payment_requirement["amount_minor"]),
+            "amount": str(_payment_amount(payment_requirement)),
             "payTo": str(payment_requirement["pay_to"]),
             "maxTimeoutSeconds": _int_value(payment_requirement["max_timeout_seconds"]),
-            "extra": {
-                "facilitator_url": payment_requirement["facilitator_url"],
-                "network": payment_requirement["network"],
-                "currency": payment_requirement["currency"],
-                "amount_minor": payment_requirement["amount_minor"],
-            },
+            "extra": extra,
         }
     )
 
@@ -34,3 +40,8 @@ def _int_value(value: object) -> int:
         return int(value)
     msg = "payment requirement contains a non-integer timeout"
     raise TypeError(msg)
+
+
+def _payment_amount(payment_requirement: dict[str, object]) -> int:
+    value = payment_requirement.get("payment_amount", payment_requirement["amount_minor"])
+    return _int_value(value)

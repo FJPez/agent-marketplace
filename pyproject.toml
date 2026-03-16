@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.16.0,<2.0.0",
     "asyncpg>=0.30.0,<1.0.0",
+    "cdp-sdk>=1.40.0",
     "fastapi[standard]>=0.116.0,<1.0.0",
     "jsonschema>=4.25.0,<5.0.0",
     "pydantic>=2.11.0,<3.0.0",
@@ -38,7 +39,7 @@ include = ["app", "tests"]
 error-on-warning = true
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --import-mode=importlib"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 

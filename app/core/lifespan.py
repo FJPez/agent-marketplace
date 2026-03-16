@@ -42,6 +42,8 @@ async def _init_app_state(state: AppState) -> None:
     state.facilitator_client = FacilitatorClient(
         url=state.settings.x402_facilitator_url,
         http_client=state.http_client,
+        cdp_api_key_id=state.settings.x402_cdp_api_key_id,
+        cdp_api_key_secret=state.settings.x402_cdp_api_key_secret,
     )
     state.x402_resource_server = X402ResourceServerAdapter()
 

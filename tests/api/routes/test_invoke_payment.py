@@ -28,6 +28,7 @@ from app.db.models import (
     ServiceRevision,
 )
 from app.integrations.x402.facilitator_client import FacilitatorUnavailableError
+from app.integrations.x402.resource_server import X402ResourceServerAdapter
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -42,7 +43,7 @@ def _auth_headers(
 ) -> dict[str, str]:
     headers = {"X-Account-Id": str(account_id), "Idempotency-Key": idempotency_key}
     if payment_header is not None:
-        headers["X-PAYMENT"] = payment_header
+        headers["PAYMENT-SIGNATURE"] = payment_header
     return headers
 
 
@@ -339,14 +340,14 @@ class _FakeX402ResourceServer:
         *,
         payment_requirement: dict[str, object],
     ) -> dict[str, str]:
-        return {"X-PAYMENT-REQUIRED": json.dumps(payment_requirement, sort_keys=True)}
+        return {"PAYMENT-REQUIRED": json.dumps(payment_requirement, sort_keys=True)}
 
     def build_payment_response_headers(
         self,
         *,
         settle_outcome: dict[str, object],
     ) -> dict[str, str]:
-        return {"X-PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
+        return {"PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
 
 
 class _UnavailableFacilitatorClient:
@@ -398,11 +399,12 @@ def _install_payment_state(
     *,
     upstream_client: _FakeHttpClient,
     facilitator_client: object,
+    x402_resource_server: object | None = None,
 ) -> None:
     state = get_app_state(app)
     state.http_client = upstream_client
     state.facilitator_client = facilitator_client
-    state.x402_resource_server = _FakeX402ResourceServer()
+    state.x402_resource_server = x402_resource_server or _FakeX402ResourceServer()
     state.settings.x402_pay_to_address = "0x000000000000000000000000000000000000c0de"
 
 
@@ -438,7 +440,7 @@ async def test_paid_invoke_without_payment_returns_402_and_creates_no_records(
 
     assert response.status_code == 402
     assert response.json() == {"detail": "payment required"}
-    assert "X-PAYMENT-REQUIRED" in response.headers
+    assert "PAYMENT-REQUIRED" in response.headers
     assert invocation_count == 0
     assert payment_attempt_count == 0
 
@@ -484,7 +486,7 @@ async def test_paid_invoke_with_valid_payment_returns_success_and_payment_respon
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
     assert response.json()["response_payload"] == {"result": "bonjour"}
-    assert "X-PAYMENT-RESPONSE" in response.headers
+    assert "PAYMENT-RESPONSE" in response.headers
     assert len(upstream_client.calls) == 1
     assert len(facilitator_client.verify_calls) == 1
     assert len(facilitator_client.settle_calls) == 1
@@ -560,13 +562,21 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
         responses=[Response(status_code=200, json={"result": "bonjour"})]
     )
     facilitator_client = _FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        verify_outcomes=[{"isValid": True, "reference": "verify-1"}],
+        settle_outcomes=[
+            {
+                "success": True,
+                "transaction": "0xsettled",
+                "network": "eip155:84532",
+                "payer": "0xpayer",
+            }
+        ],
     )
     _install_payment_state(
         app,
         upstream_client=upstream_client,
         facilitator_client=facilitator_client,
+        x402_resource_server=X402ResourceServerAdapter(),
     )
 
     first = await async_client.post(
@@ -578,6 +588,12 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
+    async with db_session_factory.begin() as session:
+        attempt = await session.scalar(
+            select(PaymentAttempt).where(PaymentAttempt.payment_identifier == "payment-1"),
+        )
+        assert attempt is not None
+        attempt.settle_outcome = {}
     second = await async_client.post(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
@@ -591,6 +607,7 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
+    assert "PAYMENT-RESPONSE" not in second.headers
     assert len(upstream_client.calls) == 1
 
 
@@ -829,7 +846,7 @@ async def test_verify_failure_returns_402(
 
     assert response.status_code == 402
     assert response.json() == {"detail": "payment could not be verified"}
-    assert "X-PAYMENT-REQUIRED" in response.headers
+    assert "PAYMENT-REQUIRED" in response.headers
 
 
 @pytest.mark.asyncio
