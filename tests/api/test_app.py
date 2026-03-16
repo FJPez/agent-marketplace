@@ -1,7 +1,10 @@
+from pathlib import Path
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import app.main as main_module
 from app.core import lifespan as lifespan_module
 from app.core.config import AppEnv, Settings
 from app.core.lifespan import get_app_state
@@ -42,3 +45,29 @@ def test_create_lifespan_cleans_up_state_on_startup_failure(
         pass
 
     assert not hasattr(app.state, "app_state")
+
+
+def test_create_app_fails_fast_for_cdp_facilitator_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_X402_CDP_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APP_X402_CDP_API_KEY_SECRET", raising=False)
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda: Settings(
+            x402_facilitator_url="https://api.cdp.coinbase.com/platform/v2/x402",
+        ),
+    )
+    app = create_app()
+
+    with (
+        pytest.raises(
+            RuntimeError,
+            match="APP_X402_CDP_API_KEY_ID and APP_X402_CDP_API_KEY_SECRET are required",
+        ),
+        TestClient(app),
+    ):
+        pass

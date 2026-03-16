@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import PricingModelType
-from app.integrations.x402.facilitator_client import FacilitatorUnavailableError
+from app.integrations.x402.facilitator_client import (
+    FacilitatorAuthError,
+    FacilitatorConfigError,
+    FacilitatorUnavailableError,
+)
 from app.integrations.x402.payment_identifier import (
     InvalidPaymentPayloadError,
     extract_payment_identifier,
@@ -270,6 +274,10 @@ class PaymentService:
                 payment_requirement=payment_requirement,
                 payment_payload=payment_payload,
             )
+        except FacilitatorConfigError as exc:
+            raise InvokeBadGatewayError(str(exc)) from exc
+        except FacilitatorAuthError as exc:
+            raise InvokeBadGatewayError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
             raise InvokeBadGatewayError("facilitator unavailable") from exc
 
@@ -284,6 +292,10 @@ class PaymentService:
                 payment_requirement=payment_requirement,
                 payment_payload=payment_payload,
             )
+        except FacilitatorConfigError as exc:
+            raise InvokeBadGatewayError(str(exc)) from exc
+        except FacilitatorAuthError as exc:
+            raise InvokeBadGatewayError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
             raise InvokeBadGatewayError("facilitator unavailable") from exc
 
