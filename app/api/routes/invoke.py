@@ -23,6 +23,7 @@ from app.services.payment_service import (
     PaymentRequiredChallenge,
     PaymentService,
     SupportsFacilitatorClient,
+    SupportsPayoutExecutor,
     SupportsX402ResourceServer,
 )
 
@@ -74,6 +75,18 @@ def _get_x402_resource_server(request: Request) -> SupportsX402ResourceServer:
     return x402_resource_server
 
 
+def _get_payout_executor(request: Request) -> SupportsPayoutExecutor | None:
+    payout_executor = get_app_state(request.app).payout_executor
+    if payout_executor is None:
+        return None
+    if not isinstance(payout_executor, SupportsPayoutExecutor):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="payout executor is not initialized",
+        )
+    return payout_executor
+
+
 @router.post("/invoke/{service_id_or_slug}", response_model=InvocationResponse)
 async def invoke_service(
     service_id_or_slug: str,
@@ -102,6 +115,7 @@ async def invoke_service(
                     facilitator_client=_get_facilitator_client(fastapi_request),
                     x402_resource_server=_get_x402_resource_server(fastapi_request),
                     settings=get_app_state(fastapi_request.app).settings,
+                    payout_executor=_get_payout_executor(fastapi_request),
                 )
                 for header_name, header_value in (
                     await payment_service._build_success_headers_for_invocation(replayed.id)
@@ -123,6 +137,7 @@ async def invoke_service(
                 facilitator_client=_get_facilitator_client(fastapi_request),
                 x402_resource_server=_get_x402_resource_server(fastapi_request),
                 settings=get_app_state(fastapi_request.app).settings,
+                payout_executor=_get_payout_executor(fastapi_request),
             )
             paid_result = await payment_service.handle_paid_invoke(
                 actor,

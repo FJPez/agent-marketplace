@@ -61,6 +61,10 @@ class PayoutRepository:
         self._session.add(payout)
         return payout
 
+    async def get_by_payment_attempt_id(self, *, payment_attempt_id: int) -> Payout | None:
+        statement = select(Payout).where(Payout.payment_attempt_id == payment_attempt_id)
+        return await self._session.scalar(statement)
+
     async def list_for_provider(
         self,
         *,

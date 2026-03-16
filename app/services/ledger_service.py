@@ -15,6 +15,12 @@ PLATFORM_FEE_BPS = 1000
 BPS_DENOMINATOR = 10_000
 
 
+def split_paid_invocation_amount(amount_minor: int) -> tuple[int, int]:
+    platform_fee_minor = (amount_minor * PLATFORM_FEE_BPS) // BPS_DENOMINATOR
+    provider_earning_minor = amount_minor - platform_fee_minor
+    return platform_fee_minor, provider_earning_minor
+
+
 class LedgerStore(Protocol):
     def add(
         self,
@@ -64,8 +70,7 @@ class LedgerService:
         amount_minor: int,
         currency: str,
     ) -> None:
-        platform_fee_minor = (amount_minor * PLATFORM_FEE_BPS) // BPS_DENOMINATOR
-        provider_earning_minor = amount_minor - platform_fee_minor
+        platform_fee_minor, provider_earning_minor = split_paid_invocation_amount(amount_minor)
         for entry_type, entry_amount in (
             (LedgerEntryType.CHARGE, amount_minor),
             (LedgerEntryType.PLATFORM_FEE, platform_fee_minor),

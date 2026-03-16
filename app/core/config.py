@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     x402_cdp_api_key_id: str | None = None
     x402_cdp_api_key_secret: str | None = None
     x402_pay_to_address: str | None = None
+    payouts_enabled: bool = False
+    payouts_rpc_url: str | None = None
+    payouts_chain_id: int = 84532
+    payouts_usdc_address: str | None = None
+    payouts_wallet_private_key: str | None = None
     api_rate_limit: str = "120/minute"
     invoke_rate_limit: str = "60/minute"
     quote_rate_limit: str = "30/minute"
@@ -45,6 +50,19 @@ class Settings(BaseSettings):
         if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
+        if self.payouts_enabled:
+            missing = [
+                field_name
+                for field_name, value in (
+                    ("payouts_rpc_url", self.payouts_rpc_url),
+                    ("payouts_usdc_address", self.payouts_usdc_address),
+                    ("payouts_wallet_private_key", self.payouts_wallet_private_key),
+                )
+                if not value
+            ]
+            if missing:
+                msg = f"payout settings are required when payouts are enabled: {', '.join(missing)}"
+                raise ValueError(msg)
         return self
 
 

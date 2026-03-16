@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.enums import PricingModelType
+from app.core.enums import PayoutStatus, PricingModelType
+from app.db.models import Account
+from app.integrations.payouts import PayoutExecutionError, SupportsPayoutExecutor
 from app.integrations.x402.facilitator_client import (
     FacilitatorAuthError,
     FacilitatorConfigError,
@@ -21,13 +24,14 @@ from app.integrations.x402.payment_requirements import (
     build_payment_requirement,
 )
 from app.repositories.payment_attempt_repo import PaymentAttemptRepository
+from app.repositories.payout_repo import PayoutRepository
 from app.services.invoke_service import (
     InvokeBadGatewayError,
     InvokeConflictError,
     InvokeGatewayTimeoutError,
     InvokeService,
 )
-from app.services.ledger_service import LedgerService
+from app.services.ledger_service import LedgerService, split_paid_invocation_amount
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -92,14 +96,17 @@ class PaymentService:
         facilitator_client: SupportsFacilitatorClient,
         x402_resource_server: SupportsX402ResourceServer,
         settings: Settings,
+        payout_executor: SupportsPayoutExecutor | None = None,
     ) -> None:
         self._session = session
         self._facilitator_client = facilitator_client
         self._x402_resource_server = x402_resource_server
         self._settings = settings
         self._attempt_repo = PaymentAttemptRepository(session)
+        self._payout_repo = PayoutRepository(session)
         self._invoke_service = InvokeService(session, http_client=http_client)
         self._ledger_service = LedgerService(session)
+        self._payout_executor = payout_executor
 
     async def handle_paid_invoke(
         self,
@@ -227,6 +234,14 @@ class PaymentService:
             amount_minor=resolved.quote.amount_minor,
             currency=resolved.quote.currency or "",
         )
+        await self._record_provider_payout(
+            provider_account_id=resolved.service.provider_account_id,
+            service_id=resolved.service.id,
+            invocation_id=invocation.id,
+            payment_attempt_id=attempt.id,
+            gross_amount_minor=resolved.quote.amount_minor,
+            currency=resolved.quote.currency or "",
+        )
         await self._session.commit()
         return PaidInvokeSuccess(
             invocation=invocation,
@@ -308,6 +323,79 @@ class PaymentService:
             raise InvokeBadGatewayError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
             raise InvokeBadGatewayError(str(exc)) from exc
+
+    async def _record_provider_payout(
+        self,
+        *,
+        provider_account_id: int,
+        service_id: int,
+        invocation_id: int,
+        payment_attempt_id: int,
+        gross_amount_minor: int,
+        currency: str,
+    ) -> None:
+        payout = await self._payout_repo.get_by_payment_attempt_id(
+            payment_attempt_id=payment_attempt_id,
+        )
+        if payout is not None:
+            return
+        _, provider_amount_minor = split_paid_invocation_amount(gross_amount_minor)
+        provider_wallet = await self._get_provider_wallet(provider_account_id=provider_account_id)
+        if provider_wallet is None:
+            self._payout_repo.add(
+                provider_account_id=provider_account_id,
+                service_id=service_id,
+                invocation_id=invocation_id,
+                payment_attempt_id=payment_attempt_id,
+                destination_wallet="",
+                amount_minor=provider_amount_minor,
+                currency=currency,
+                network=self._settings.x402_network,
+                status=PayoutStatus.FAILED,
+                error_message="provider wallet address is not configured",
+            )
+            return
+        payout = self._payout_repo.add(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            destination_wallet=provider_wallet,
+            amount_minor=provider_amount_minor,
+            currency=currency,
+            network=self._settings.x402_network,
+            status=PayoutStatus.READY,
+            attempt_count=0,
+        )
+        if provider_amount_minor <= 0:
+            payout.status = PayoutStatus.FAILED
+            payout.error_message = "provider payout amount must be positive"
+            return
+        if not self._settings.payouts_enabled or self._payout_executor is None:
+            return
+        payout.status = PayoutStatus.PENDING
+        payout.attempt_count += 1
+        try:
+            outcome = await self._payout_executor.send_payout(
+                destination_wallet=provider_wallet,
+                amount_minor=provider_amount_minor,
+                idempotency_key=f"payment-attempt:{payment_attempt_id}",
+            )
+        except (PayoutExecutionError, ValueError, RuntimeError) as exc:
+            payout.status = PayoutStatus.FAILED
+            payout.error_message = str(exc)
+            return
+        payout.status = PayoutStatus.SENT
+        payout.transfer_reference = _extract_reference(outcome)
+        payout.error_message = None
+
+    async def _get_provider_wallet(self, *, provider_account_id: int) -> str | None:
+        statement = select(Account.wallet_address).where(Account.id == provider_account_id)
+        wallet_address = await self._session.scalar(statement)
+        if wallet_address is None:
+            return None
+        normalized_wallet = wallet_address.strip()
+        return normalized_wallet or None
 
 
 def _is_verify_success(verify_outcome: dict[str, object]) -> bool:
