@@ -16,8 +16,30 @@ The paid retry still depends on the external facilitator. In my local run on Mar
 - `uv`
 - PostgreSQL on `localhost:5432`
   - You can use your own local Postgres, or `docker compose up -d postgres`
-- A Base Sepolia private key for the buyer wallet
-  - Export it as `CONSUMER_PRIVATE_KEY`
+- a Base Sepolia private key for the buyer wallet
+- a Base Sepolia address for the provider payout wallet
+
+## What You Need Before Starting
+
+You need two wallet roles for the full paid demo:
+
+- Buyer wallet:
+  - used by `examples/client.py`
+  - must be an EVM wallet on Base Sepolia
+  - you must have the private key locally as `CONSUMER_PRIVATE_KEY`
+- Provider payout wallet:
+  - set as `APP_X402_PAY_TO_ADDRESS`
+  - only the address is needed by the local API
+  - this is the wallet the payment requirement points to
+
+For the full paid retry path, the buyer wallet should be prepared for Base Sepolia:
+
+- add Base Sepolia in your wallet app if it is not already present
+- fund the buyer wallet with Base Sepolia ETH for gas
+- make sure the buyer wallet can hold Base Sepolia USDC
+- never commit the private key to the repo or put it in `.env.example`
+
+If you only want to test discovery, quoting, free invoke, and the initial `402 Payment Required` response, you do not need a fully funded buyer wallet.
 
 ## One-Time Setup
 
@@ -26,6 +48,67 @@ Install dependencies:
 ```bash
 uv sync
 ```
+
+Create your local `.env`:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` so it looks like this for the local demo:
+
+```dotenv
+APP_ENV=dev
+APP_TITLE=Agent Marketplace Backend
+APP_DEBUG=false
+APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace
+APP_QUOTE_TTL_SECONDS=300
+APP_X402_FACILITATOR_URL=https://x402.org/facilitator
+APP_X402_NETWORK=base-sepolia
+APP_X402_NETWORK_CAIP2=eip155:84532
+APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS
+APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000
+APP_DEMO_FREE_UPSTREAM_PATH=/free-ping
+APP_DEMO_PAID_UPSTREAM_PATH=/paid-summary
+```
+
+What each setting does:
+
+- `APP_ENV=dev`
+  - local development mode
+- `APP_TITLE=Agent Marketplace Backend`
+  - FastAPI app title
+- `APP_DEBUG=false`
+  - keep this `false` unless you explicitly want debug mode
+- `APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace`
+  - local Postgres connection string
+  - change only if your Postgres host, port, user, password, or db name differ
+- `APP_QUOTE_TTL_SECONDS=300`
+  - quotes expire after 5 minutes
+- `APP_X402_FACILITATOR_URL=https://x402.org/facilitator`
+  - the repo default and the common public facilitator URL used in this demo
+  - if you operate your own facilitator, replace this value
+- `APP_X402_NETWORK=base-sepolia`
+  - human-readable network name used by the app
+- `APP_X402_NETWORK_CAIP2=eip155:84532`
+  - CAIP-2 network identifier for Base Sepolia
+- `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS`
+  - provider payout address advertised in the x402 payment requirement
+  - must be a Base Sepolia EVM address
+- `APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000`
+  - points the seeded demo service at the local mock upstream
+- `APP_DEMO_FREE_UPSTREAM_PATH=/free-ping`
+  - free endpoint path on the mock upstream
+- `APP_DEMO_PAID_UPSTREAM_PATH=/paid-summary`
+  - paid endpoint path on the mock upstream
+
+Start Postgres if you need it:
+
+```bash
+docker compose up -d postgres
+```
+
+If port `5432` is already taken on your machine, use your existing local Postgres instead of the compose service.
 
 Apply migrations:
 
@@ -45,13 +128,9 @@ This starts a FastAPI app on `http://127.0.0.1:9000` and logs every incoming hea
 
 ## Seed the Demo Data
 
-In a second terminal, seed the demo service so it points at the local mock upstream:
+In a second terminal, seed the demo service:
 
 ```bash
-APP_X402_PAY_TO_ADDRESS=0x000000000000000000000000000000000000c0de \
-APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000 \
-APP_DEMO_FREE_UPSTREAM_PATH=/free-ping \
-APP_DEMO_PAID_UPSTREAM_PATH=/paid-summary \
 uv run python scripts/seed_demo.py
 ```
 
@@ -73,10 +152,6 @@ paid_endpoint_id=2
 In a third terminal:
 
 ```bash
-APP_X402_PAY_TO_ADDRESS=0x000000000000000000000000000000000000c0de \
-APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000 \
-APP_DEMO_FREE_UPSTREAM_PATH=/free-ping \
-APP_DEMO_PAID_UPSTREAM_PATH=/paid-summary \
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -93,6 +168,18 @@ export API_BASE_URL=http://127.0.0.1:8000
 
 uv run python examples/client.py
 ```
+
+What these values mean:
+
+- `CONSUMER_PRIVATE_KEY`
+  - buyer wallet private key for Base Sepolia
+  - used only by the example client
+- `CONSUMER_ACCOUNT_ID`
+  - marketplace consumer account id from the seed output
+- `API_BASE_URL`
+  - local marketplace API base URL
+
+The example client uses the installed Python x402 client and Base Sepolia network `eip155:84532`.
 
 The example client will:
 
@@ -120,6 +207,18 @@ If the facilitator is unavailable, you will see the retry fail with:
 
 That means the local app, seeding, routing, challenge generation, and x402 client retry are working, but the external facilitator could not complete the payment leg.
 
+## Common Defaults
+
+These are the values used by this repo unless you override them:
+
+- facilitator URL: `https://x402.org/facilitator`
+- network name: `base-sepolia`
+- network CAIP-2 id: `eip155:84532`
+- local API URL: `http://127.0.0.1:8000`
+- local mock upstream URL: `http://127.0.0.1:9000`
+- seeded service slug: `demo-agent-service`
+- seeded consumer account id: usually `2` on a clean local database
+
 ## Troubleshooting
 
 If `uv run pytest` fails on collection, the repo is configured to use `--import-mode=importlib` by default in `pyproject.toml`; just run `uv run pytest` normally.
@@ -131,8 +230,19 @@ If the paid retry fails before it reaches the app, confirm:
 - `CONSUMER_PRIVATE_KEY` is set
 - the app is returning `PAYMENT-REQUIRED`
 - `examples/client.py` is using `http://127.0.0.1:8000`
+- the buyer wallet is configured for Base Sepolia
+- the buyer wallet has any required testnet funds for the path you are attempting
 
 If the app cannot reach the mock upstream, confirm:
 
 - `examples/mock_upstream.py` is running on port `9000`
 - the API was started with `APP_DEMO_UPSTREAM_BASE_URL=http://127.0.0.1:9000`
+
+If the paid retry returns `502 {"detail":"facilitator unavailable"}`, the local demo still proved:
+
+- the quote path works
+- the free invoke path works
+- the paid challenge is generated correctly
+- the example x402 client signed and retried the paid request
+
+That specific error means the external facilitator did not complete verify/settle for the retry request.

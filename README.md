@@ -246,7 +246,8 @@ For a live x402 v2 manual test:
    `PAYMENT-RESPONSE`.
 
 For the full local demo walkthrough, including the mock upstream, seeded demo
-service, and example client, see
+service, example client, `.env` setup, Base Sepolia wallet preparation, and
+facilitator defaults, see
 [`docs/demo-setup.md`](/Users/freddieperrott/Development/uni-work/agent-marketplace/docs/demo-setup.md).
 
 ## Working style
