@@ -33,6 +33,7 @@ async def create_quote(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     actor: OptionalCurrentActor = None,
 ) -> QuoteResponse:
+    _ = actor
     service = QuoteService(session)
     try:
         quote = await service.create_quote(

@@ -1,9 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
@@ -15,6 +16,7 @@ from app.db.models import (
     ServiceEndpoint,
     ServiceRevision,
 )
+from app.main import create_app
 
 
 async def _create_provider_account(
@@ -223,6 +225,53 @@ async def test_create_quote_returns_not_found_for_missing_endpoint(
 
     assert response.status_code == 404
     assert response.json() == {"detail": "endpoint not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_quote_rate_limits_repeated_requests(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = migrated_database
+    monkeypatch.setenv("APP_API_RATE_LIMIT", "10/minute")
+    monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "1/minute")
+    monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
+
+    get_settings.cache_clear()
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="quote-service",
+        with_revision=True,
+    )
+    await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+
+    app = create_app()
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as rate_limited_client:
+            first = await rate_limited_client.post(
+                "/v1/services/quote-service/quote",
+                json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+            )
+            second = await rate_limited_client.post(
+                "/v1/services/quote-service/quote",
+                json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+            )
+    get_settings.cache_clear()
+
+    assert first.status_code == 201
+    assert second.status_code == 429
+    assert second.json() == {"detail": "rate limit exceeded"}
 
 
 @pytest.mark.asyncio
