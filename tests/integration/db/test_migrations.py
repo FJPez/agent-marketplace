@@ -9,6 +9,7 @@ DOMAIN_TABLES = {
     "accounts",
     "consumer_profiles",
     "invocations",
+    "ledger_entries",
     "moderation_actions",
     "payment_attempts",
     "pricing_models",
@@ -264,6 +265,31 @@ async def get_payment_attempt_table_specs(
         )
 
     return {column["name"]: column for column in columns}, foreign_keys, indexes
+
+
+async def get_ledger_entry_table_specs(
+    db_engine: AsyncEngine,
+) -> tuple[
+    dict[str, dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+]:
+    async with db_engine.connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_columns("ledger_entries"),
+        )
+        foreign_keys = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_foreign_keys("ledger_entries"),
+        )
+        indexes = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_indexes("ledger_entries"),
+        )
+        check_constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_check_constraints("ledger_entries"),
+        )
+
+    return {column["name"]: column for column in columns}, foreign_keys, indexes, check_constraints
 
 
 async def seed_identity_rows_at_revision_0001(db_engine: AsyncEngine) -> None:
@@ -801,3 +827,68 @@ def test_migrations_upgrade_creates_payment_attempts_table(
     assert any(index["column_names"] == ["consumer_account_id"] for index in indexes)
     assert any(index["column_names"] == ["quote_id"] for index in indexes)
     assert any(index["column_names"] == ["invocation_id"] for index in indexes)
+
+
+def test_ledger_earnings_migration_uses_branch_specific_revision_id(
+    alembic_config: Config,
+) -> None:
+    script = ScriptDirectory.from_config(alembic_config)
+    revision = script.get_revision("ledger_earnings_0009")
+
+    assert revision is not None
+    assert revision.revision == "ledger_earnings_0009"
+    assert revision.path.endswith("ledger_earnings_0009_create_ledger_entries.py")
+
+
+def test_migrations_upgrade_creates_ledger_entries_table(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    try:
+        columns, foreign_keys, indexes, check_constraints = asyncio.run(
+            get_ledger_entry_table_specs(db_engine),
+        )
+    finally:
+        command.downgrade(alembic_config, "base")
+
+    assert columns.keys() >= {
+        "id",
+        "provider_account_id",
+        "service_id",
+        "invocation_id",
+        "payment_attempt_id",
+        "entry_type",
+        "amount_minor",
+        "currency",
+        "created_at",
+    }
+    assert any(
+        foreign_key["referred_table"] == "accounts"
+        and foreign_key["constrained_columns"] == ["provider_account_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "services"
+        and foreign_key["constrained_columns"] == ["service_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "invocations"
+        and foreign_key["constrained_columns"] == ["invocation_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(
+        foreign_key["referred_table"] == "payment_attempts"
+        and foreign_key["constrained_columns"] == ["payment_attempt_id"]
+        for foreign_key in foreign_keys
+    )
+    assert any(index["column_names"] == ["provider_account_id"] for index in indexes)
+    assert any(index["column_names"] == ["service_id"] for index in indexes)
+    assert any(index["column_names"] == ["invocation_id"] for index in indexes)
+    assert any(index["column_names"] == ["payment_attempt_id"] for index in indexes)
+    assert any(
+        "provider_earning" in str(constraint.get("sqltext", "")) for constraint in check_constraints
+    )

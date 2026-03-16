@@ -35,6 +35,13 @@ class InvocationFailureReason(StrEnum):
     UPSTREAM_RESPONSE = "upstream_response"
 
 
+class LedgerEntryType(StrEnum):
+    CHARGE = "charge"
+    PLATFORM_FEE = "platform_fee"
+    PROVIDER_EARNING = "provider_earning"
+    REFUND = "refund"
+
+
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"
