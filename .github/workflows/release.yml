@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       target_environment:
@@ -20,20 +23,28 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.target_environment }}
+  group: release-${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.target_environment }}
+    environment: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
     env:
+      TARGET_ENVIRONMENT: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
+      SMOKE_BASE_URL: ${{ github.event_name == 'push' && vars.SMOKE_BASE_URL || inputs.smoke_base_url }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Validate release inputs
+        run: |
+          if [ -z "$SMOKE_BASE_URL" ]; then
+            echo "SMOKE_BASE_URL must be set for release jobs." >&2
+            exit 1
+          fi
       - name: Install Railway CLI
         run: npm install --global @railway/cli
       - name: Deploy to Railway
@@ -46,18 +57,19 @@ jobs:
           {
             echo "## Railway deploy started"
             echo
-            echo "- Environment: ${{ inputs.target_environment }}"
+            echo "- Environment: $TARGET_ENVIRONMENT"
             echo "- Railway service: api"
-            echo "- Smoke URL: ${{ inputs.smoke_base_url }}"
+            echo "- Smoke URL: $SMOKE_BASE_URL"
           } >> "$GITHUB_STEP_SUMMARY"
 
   smoke:
     needs: deploy
     if: ${{ always() && needs.deploy.result == 'success' }}
     runs-on: ubuntu-latest
-    environment: ${{ inputs.target_environment }}
+    environment: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
     env:
-      SMOKE_BASE_URL: ${{ inputs.smoke_base_url }}
+      TARGET_ENVIRONMENT: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
+      SMOKE_BASE_URL: ${{ github.event_name == 'push' && vars.SMOKE_BASE_URL || inputs.smoke_base_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -80,6 +92,6 @@ jobs:
           {
             echo "## Railway smoke checks passed"
             echo
-            echo "- Environment: ${{ inputs.target_environment }}"
-            echo "- Smoke URL: ${{ inputs.smoke_base_url }}"
+            echo "- Environment: $TARGET_ENVIRONMENT"
+            echo "- Smoke URL: $SMOKE_BASE_URL"
           } >> "$GITHUB_STEP_SUMMARY"
