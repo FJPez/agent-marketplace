@@ -255,11 +255,11 @@ For a live x402 v2 manual test:
 3. Enable payout execution and configure the treasury signer:
    - `APP_PAYOUTS_ENABLED=true`
    - `APP_PAYOUTS_RPC_URL=...`
-   - `APP_PAYMENT_TOKEN_ADDRESS=...`
    - `APP_TREASURY_PRIVATE_KEY=...`
    The app currently supports exactly one payment token per network. On Base
-   Sepolia that token is USDC, and consumer payments using any other token are
-   rejected before invoke execution or payout creation.
+   Sepolia that token is USDC, derived from `APP_X402_NETWORK_CAIP2`, and
+   consumer payments using any other token are rejected before invoke execution
+   or payout creation.
 4. Export different consumer and provider wallets before seeding or running the
    example clients:
    - `export CONSUMER_PRIVATE_KEY=0x...`
