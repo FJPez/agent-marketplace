@@ -132,7 +132,7 @@ def test_settings_derive_payment_token_from_network(
     assert settings.payment_token.symbol == "USDC"
 
 
-def test_settings_ignore_local_dotenv_without_explicit_env_file(
+def test_settings_load_local_dotenv_without_explicit_env_file(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -148,12 +148,98 @@ def test_settings_ignore_local_dotenv_without_explicit_env_file(
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("APP_ENV_FILE", raising=False)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("APP_SIWE_DOMAIN", raising=False)
 
     settings = Settings()
 
-    assert settings.jwt_secret_key == "test-secret-key-with-32-bytes-123"
-    assert settings.siwe_domain == "testserver"
+    assert settings.jwt_secret_key == "dotenv-secret-key-with-32-bytes-minimum"
+    assert settings.siwe_domain == "127.0.0.1"
+
+
+def test_settings_load_local_dotenv_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "\n".join(
+            [
+                "APP_JWT_SECRET_KEY=dotenv-secret-key-with-32-bytes-minimum",
+                "APP_SIWE_DOMAIN=127.0.0.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_ENV_FILE", raising=False)
+    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("APP_SIWE_DOMAIN", raising=False)
+
+    settings = Settings()
+
+    assert settings.jwt_secret_key == "dotenv-secret-key-with-32-bytes-minimum"
+    assert settings.siwe_domain == "127.0.0.1"
+
+
+def test_settings_environment_variables_override_local_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "\n".join(
+            [
+                "APP_JWT_SECRET_KEY=dotenv-secret-key-with-32-bytes-minimum",
+                "APP_SIWE_DOMAIN=127.0.0.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_ENV_FILE", raising=False)
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "env-secret-key-with-32-bytes-minimum")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "api.example.com")
+
+    settings = Settings()
+
+    assert settings.jwt_secret_key == "env-secret-key-with-32-bytes-minimum"
+    assert settings.siwe_domain == "api.example.com"
+
+
+def test_settings_use_app_env_file_instead_of_default_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    default_dotenv_path = tmp_path / ".env"
+    default_dotenv_path.write_text(
+        "\n".join(
+            [
+                "APP_JWT_SECRET_KEY=default-dotenv-secret-key-with-32-bytes",
+                "APP_SIWE_DOMAIN=default.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    custom_dotenv_path = tmp_path / ".env.custom"
+    custom_dotenv_path.write_text(
+        "\n".join(
+            [
+                "APP_JWT_SECRET_KEY=custom-dotenv-secret-key-with-32-bytes-okay",
+                "APP_SIWE_DOMAIN=custom.example.com",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV_FILE", str(custom_dotenv_path))
+    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("APP_SIWE_DOMAIN", raising=False)
+
+    settings = Settings()
+
+    assert settings.jwt_secret_key == "custom-dotenv-secret-key-with-32-bytes-okay"
+    assert settings.siwe_domain == "custom.example.com"
 
 
 def test_settings_reject_debug_in_deployment_environments(

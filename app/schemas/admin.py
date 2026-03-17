@@ -1,6 +1,6 @@
 from typing import Annotated, Self
 
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
 from app.db.models import ModerationAction
 from app.schemas.common import Id, Timestamp
@@ -9,6 +9,12 @@ Reason = StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)
 
 
 class ModerationActionRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [{"reason": "Endpoint is unavailable during provider maintenance."}]
+        }
+    )
+
     reason: Annotated[str, Reason]
 
 

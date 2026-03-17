@@ -18,10 +18,20 @@ class AccountResponse(BaseModel):
 
 
 class AccountUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"display_name": "Marketplace Demo"}]}
+    )
+
     display_name: DisplayName | None = None
 
 
 class WalletChangeInitiateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [{"wallet_address": "0x2222222222222222222222222222222222222222"}]
+        }
+    )
+
     wallet_address: str
 
 
@@ -31,6 +41,17 @@ class WalletChangeInitiateResponse(BaseModel):
 
 
 class WalletChangeConfirmRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "message": "127.0.0.1 wants you to confirm a wallet change...",
+                    "signature": "0xabcdef1234567890",
+                }
+            ]
+        }
+    )
+
     message: str
     signature: str
 

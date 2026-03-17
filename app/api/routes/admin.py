@@ -27,6 +27,13 @@ def _to_http_exception(exc: Exception) -> HTTPException:
     "/services/{service_id}/suspend",
     response_model=ModerationActionResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Suspend a service",
+    description="Creates a moderation action that suspends a service from marketplace use.",
+    responses={
+        201: {"description": "Service suspended successfully."},
+        404: {"description": "The requested service does not exist."},
+        409: {"description": "The requested service cannot transition to suspended."},
+    },
 )
 async def suspend_service(
     service_id: int,
@@ -50,6 +57,13 @@ async def suspend_service(
     "/services/{service_id}/restore",
     response_model=ModerationActionResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Restore a service",
+    description="Creates a moderation action that restores a previously suspended service.",
+    responses={
+        201: {"description": "Service restored successfully."},
+        404: {"description": "The requested service does not exist."},
+        409: {"description": "The requested service cannot transition to restored."},
+    },
 )
 async def restore_service(
     service_id: int,
@@ -73,6 +87,13 @@ async def restore_service(
     "/services/{service_id}/delist",
     response_model=ModerationActionResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Delist a service",
+    description="Creates a moderation action that delists a service from public discovery.",
+    responses={
+        201: {"description": "Service delisted successfully."},
+        404: {"description": "The requested service does not exist."},
+        409: {"description": "The requested service cannot transition to delisted."},
+    },
 )
 async def delist_service(
     service_id: int,
@@ -92,7 +113,13 @@ async def delist_service(
     return ModerationActionResponse.from_model(action)
 
 
-@router.get("/moderation/actions", response_model=list[ModerationActionResponse])
+@router.get(
+    "/moderation/actions",
+    response_model=list[ModerationActionResponse],
+    summary="List moderation actions",
+    description="Lists moderation actions recorded for a given service identifier.",
+    responses={200: {"description": "Moderation actions returned successfully."}},
+)
 async def list_moderation_actions(
     actor: AdminActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],

@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.enums import AccessMode, InvocationStatus
 from app.db.models import Invocation
@@ -9,6 +9,23 @@ from app.schemas.service import SchemaObject, Slug
 
 
 class InvokeRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "endpoint_key": "free-ping",
+                    "payload": {"message": "hello from the local demo"},
+                    "quote_id": None,
+                },
+                {
+                    "endpoint_key": "paid-summary",
+                    "payload": {"message": "Please summarize this paid request."},
+                    "quote_id": 1,
+                },
+            ]
+        }
+    )
+
     endpoint_key: Slug
     payload: SchemaObject
     quote_id: Id | None = None
