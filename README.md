@@ -223,8 +223,10 @@ uv run alembic upgrade head
 
 - `.env.example` includes the current `APP_...` settings used by local auth,
   guardrails, x402, and the demo seed path.
-- `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; startup and free routes
-  still work without it, but paid invoke attempts fail with a clear config error.
+- `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; it is the marketplace
+  settlement address exposed in x402 payment requirements. Startup and free
+  routes still work without it, but paid invoke attempts fail with a clear
+  config error.
 - x402 v2 payment flows use `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
   `PAYMENT-RESPONSE` headers.
 - `scripts/seed_demo.py` seeds a rerunnable demo provider-owned active service,
@@ -248,8 +250,8 @@ For a live x402 v2 manual test:
    - `APP_X402_CDP_API_KEY_ID=...`
    - `APP_X402_CDP_API_KEY_SECRET=...`
    - `APP_X402_PAY_TO_ADDRESS=...`
-   The payout address should be the provider wallet that should receive Base
-   Sepolia USDC.
+   This should be the marketplace settlement or treasury address that receives
+   the buyer's x402 payment on Base Sepolia, not the provider payout wallet.
 3. Point the seeded service at a reachable upstream with
    `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
    If you change those values, rerun the demo seed so the stored upstream rows
@@ -273,9 +275,15 @@ For a live x402 v2 manual test:
 9. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
    A successful paid invoke returns the upstream response plus
    `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
+10. Provider earnings are recorded as `READY` payout rows after settlement.
+    To execute the provider transfer, authenticate as the provider and call
+    `POST /v1/provider/payouts` with an `Idempotency-Key`. Use
+    `GET /v1/provider/payouts` to inspect the payout status lifecycle.
 
 Quote prices remain in USD minor units at the API layer. The x402 integration
 converts that amount to USDC base units internally before verify/settle.
+Settlement records provider earnings immediately, but token transfer to the
+provider now happens only through the explicit payout request flow.
 
 For the full local demo walkthrough, including the mock upstream, seeded demo
 service, example client, `.env` setup, Base Sepolia wallet preparation, CDP

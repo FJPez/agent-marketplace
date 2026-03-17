@@ -5,9 +5,16 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from app.core.config import Settings
-from app.core.enums import PayoutStatus
-from app.services.payout_service import AccountStore, PayoutService, PayoutStore
+from app.core.actor import ActorContext
+from app.core.enums import PayoutFailureCode, PayoutStatus
+from app.repositories.payout_repo import PayoutSummary
+from app.services.payout_service import (
+    AccountStore,
+    PayoutConflictError,
+    PayoutExecutionService,
+    PayoutReportingService,
+    PayoutStore,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,17 +23,38 @@ if TYPE_CHECKING:
 @dataclass
 class FakePayout:
     id: int
+    provider_account_id: int
+    service_id: int
+    invocation_id: int
+    payment_attempt_id: int
+    destination_wallet: str | None
+    amount_minor: int
+    currency: str
+    network: str
     status: PayoutStatus
     attempt_count: int
-    destination_wallet: str
+    request_idempotency_key: str | None = None
+    failure_code: PayoutFailureCode | None = None
     error_message: str | None = None
     transfer_reference: str | None = None
+    prepared_raw_transaction: str | None = None
+    chain_nonce: int | None = None
 
 
 class FakeSession:
     def __init__(self) -> None:
         self.flush_calls = 0
         self.commit_calls = 0
+        self.rollback_calls = 0
+        self.execute_params: list[dict[str, object] | None] = []
+
+    async def execute(
+        self,
+        statement: object,
+        params: dict[str, object] | None = None,
+    ) -> None:
+        _ = statement
+        self.execute_params.append(params)
 
     async def flush(self) -> None:
         self.flush_calls += 1
@@ -34,39 +62,113 @@ class FakeSession:
     async def commit(self) -> None:
         self.commit_calls += 1
 
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
+
 
 class FakePayoutRepository:
     def __init__(self) -> None:
-        self.lookup_result: FakePayout | None = None
-        self.add_calls: list[dict[str, object]] = []
         self.payouts: list[FakePayout] = []
+        self.summaries: list[PayoutSummary] = []
 
-    async def get_by_payment_attempt_id(self, *, payment_attempt_id: int) -> FakePayout | None:
-        _ = payment_attempt_id
-        return self.lookup_result
-
-    def add(self, **kwargs: object) -> FakePayout:
-        self.add_calls.append(kwargs)
-        status = kwargs["status"]
-        attempt_count = kwargs.get("attempt_count", 1)
-        destination_wallet = kwargs["destination_wallet"]
-        error_message = kwargs.get("error_message")
-        transfer_reference = kwargs.get("transfer_reference")
-        assert isinstance(status, PayoutStatus)
-        assert isinstance(attempt_count, int)
-        assert isinstance(destination_wallet, str)
-        assert error_message is None or isinstance(error_message, str)
-        assert transfer_reference is None or isinstance(transfer_reference, str)
+    def add(
+        self,
+        *,
+        provider_account_id: int,
+        service_id: int,
+        invocation_id: int,
+        payment_attempt_id: int,
+        destination_wallet: str | None,
+        amount_minor: int,
+        currency: str,
+        network: str,
+        status: PayoutStatus,
+        transfer_reference: str | None = None,
+        request_idempotency_key: str | None = None,
+        failure_code: PayoutFailureCode | None = None,
+        error_message: str | None = None,
+        attempt_count: int = 1,
+        prepared_raw_transaction: str | None = None,
+        chain_nonce: int | None = None,
+    ) -> FakePayout:
         payout = FakePayout(
             id=len(self.payouts) + 1,
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            destination_wallet=destination_wallet,
+            amount_minor=amount_minor,
+            currency=currency,
+            network=network,
             status=status,
             attempt_count=attempt_count,
-            destination_wallet=destination_wallet,
+            request_idempotency_key=request_idempotency_key,
+            failure_code=failure_code,
             error_message=error_message,
             transfer_reference=transfer_reference,
+            prepared_raw_transaction=prepared_raw_transaction,
+            chain_nonce=chain_nonce,
         )
         self.payouts.append(payout)
         return payout
+
+    async def get_by_payment_attempt_id(self, *, payment_attempt_id: int) -> FakePayout | None:
+        return next(
+            (payout for payout in self.payouts if payout.payment_attempt_id == payment_attempt_id),
+            None,
+        )
+
+    async def list_for_provider(
+        self,
+        *,
+        provider_account_id: int,
+        status: PayoutStatus | None = None,
+    ) -> list[FakePayout]:
+        payouts = [
+            payout for payout in self.payouts if payout.provider_account_id == provider_account_id
+        ]
+        if status is not None:
+            payouts = [payout for payout in payouts if payout.status is status]
+        return list(reversed(payouts))
+
+    async def list_for_provider_request(
+        self,
+        *,
+        provider_account_id: int,
+        request_idempotency_key: str,
+    ) -> list[FakePayout]:
+        payouts = [
+            payout
+            for payout in self.payouts
+            if payout.provider_account_id == provider_account_id
+            and payout.request_idempotency_key == request_idempotency_key
+        ]
+        return list(reversed(payouts))
+
+    async def list_ready_for_provider_for_update(
+        self, *, provider_account_id: int
+    ) -> list[FakePayout]:
+        return [
+            payout
+            for payout in self.payouts
+            if payout.provider_account_id == provider_account_id
+            and payout.status is PayoutStatus.READY
+            and payout.request_idempotency_key is None
+        ]
+
+    async def list_pending(self) -> list[FakePayout]:
+        return [payout for payout in self.payouts if payout.status is PayoutStatus.PENDING]
+
+    async def get_max_chain_nonce(self) -> int | None:
+        nonces = [payout.chain_nonce for payout in self.payouts if payout.chain_nonce is not None]
+        if not nonces:
+            return None
+        return max(nonces)
+
+    async def summarize_for_provider(self, *, provider_account_id: int) -> list[PayoutSummary]:
+        _ = provider_account_id
+        return self.summaries
 
 
 class FakeAccountRepository:
@@ -81,128 +183,415 @@ class FakeAccountRepository:
 
 
 class FakePayoutExecutor:
-    def __init__(self, session: FakeSession, repo: FakePayoutRepository) -> None:
-        self._session = session
-        self._repo = repo
-        self.calls: list[dict[str, object]] = []
+    def __init__(self, *, current_nonce: int = 0, fail_send: bool = False) -> None:
+        self._current_nonce = current_nonce
+        self._fail_send = fail_send
+        self.prepare_calls: list[dict[str, object]] = []
+        self.send_calls: list[dict[str, object]] = []
 
-    async def send_payout(
+    async def current_nonce(self) -> int:
+        return self._current_nonce
+
+    async def prepare_payout(
         self,
         *,
         destination_wallet: str,
         amount_minor: int,
         idempotency_key: str,
+        nonce: int,
     ) -> dict[str, object]:
-        assert self._session.commit_calls == 1
-        assert self._repo.payouts[0].status is PayoutStatus.PENDING
-        self.calls.append(
+        self.prepare_calls.append(
             {
                 "destination_wallet": destination_wallet,
                 "amount_minor": amount_minor,
                 "idempotency_key": idempotency_key,
+                "nonce": nonce,
             }
         )
-        return {"reference": "0xpayoutsent"}
+        return {
+            "raw_transaction": f"0xraw{nonce}",
+            "reference": f"0xref{nonce}",
+        }
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> dict[str, object]:
+        self.send_calls.append(
+            {
+                "raw_transaction": raw_transaction,
+                "reference": reference,
+            }
+        )
+        if self._fail_send:
+            msg = "rpc unavailable"
+            raise RuntimeError(msg)
+        return {"reference": reference}
 
 
-def _settings(*, payouts_enabled: bool) -> Settings:
-    return Settings.model_construct(
-        payouts_enabled=payouts_enabled,
-        x402_network="base-sepolia",
-    )
+def _actor(account_id: int = 1) -> ActorContext:
+    return ActorContext(account_id=account_id)
 
 
 @pytest.mark.asyncio
-async def test_record_provider_payout_commits_pending_before_send() -> None:
+async def test_record_ready_payout_returns_existing_payment_attempt_match() -> None:
     session = FakeSession()
     payout_repo = FakePayoutRepository()
-    executor = FakePayoutExecutor(session, payout_repo)
-    service = PayoutService(
+    existing = payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        destination_wallet=None,
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.READY,
+        attempt_count=0,
+    )
+    service = PayoutExecutionService(
         cast("AsyncSession", session),
         payout_repo=cast("PayoutStore", payout_repo),
-        account_repo=cast(
-            "AccountStore",
-            FakeAccountRepository("0x00000000000000000000000000000000000000aa"),
-        ),
-        settings=_settings(payouts_enabled=True),
-        payout_executor=executor,
     )
 
-    await service.record_provider_payout(
+    payout = await service.record_ready_payout(
         provider_account_id=1,
         service_id=2,
         invocation_id=3,
         payment_attempt_id=4,
         gross_amount_minor=500,
         currency="USDC",
+        network="base-sepolia",
+    )
+
+    assert payout is existing
+    assert session.flush_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_record_ready_payout_persists_provider_share_as_ready_row() -> None:
+    session = FakeSession()
+    payout_repo = FakePayoutRepository()
+    service = PayoutExecutionService(
+        cast("AsyncSession", session),
+        payout_repo=cast("PayoutStore", payout_repo),
+    )
+
+    payout = await service.record_ready_payout(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        gross_amount_minor=500,
+        currency="USDC",
+        network="base-sepolia",
     )
 
     assert session.flush_calls == 1
-    assert session.commit_calls == 2
-    assert payout_repo.add_calls[0]["amount_minor"] == 450
-    assert executor.calls == [
-        {
-            "destination_wallet": "0x00000000000000000000000000000000000000aa",
-            "amount_minor": 450,
-            "idempotency_key": "payment-attempt:4",
-        }
-    ]
-    assert payout_repo.payouts[0].status is PayoutStatus.SENT
-    assert payout_repo.payouts[0].transfer_reference == "0xpayoutsent"
-    assert payout_repo.payouts[0].attempt_count == 1
+    assert session.commit_calls == 0
+    assert payout.amount_minor == 450
+    assert payout.status is PayoutStatus.READY
+    assert payout.destination_wallet is None
+    assert payout.attempt_count == 0
 
 
 @pytest.mark.asyncio
-async def test_record_provider_payout_marks_missing_wallet_failed_and_commits() -> None:
+async def test_record_ready_payout_marks_invalid_amount_failed() -> None:
     session = FakeSession()
     payout_repo = FakePayoutRepository()
-    service = PayoutService(
+    service = PayoutExecutionService(
         cast("AsyncSession", session),
         payout_repo=cast("PayoutStore", payout_repo),
-        account_repo=cast("AccountStore", FakeAccountRepository(None)),
-        settings=_settings(payouts_enabled=True),
-        payout_executor=None,
     )
 
-    await service.record_provider_payout(
+    payout = await service.record_ready_payout(
         provider_account_id=1,
         service_id=2,
         invocation_id=3,
         payment_attempt_id=4,
-        gross_amount_minor=500,
+        gross_amount_minor=0,
         currency="USDC",
+        network="base-sepolia",
     )
 
-    assert session.commit_calls == 1
-    assert payout_repo.payouts[0].status is PayoutStatus.FAILED
-    assert payout_repo.payouts[0].destination_wallet == ""
-    assert payout_repo.payouts[0].error_message == "provider wallet address is not configured"
+    assert payout.amount_minor == 0
+    assert payout.status is PayoutStatus.FAILED
+    assert payout.failure_code is PayoutFailureCode.INVALID_AMOUNT
+    assert payout.error_message == "provider payout amount must be positive"
 
 
 @pytest.mark.asyncio
-async def test_record_provider_payout_persists_ready_when_executor_disabled() -> None:
+async def test_request_provider_payouts_claims_ready_rows_sends_and_reloads_result() -> None:
     session = FakeSession()
     payout_repo = FakePayoutRepository()
-    service = PayoutService(
+    payout_repo.add(
+        provider_account_id=1,
+        service_id=10,
+        invocation_id=100,
+        payment_attempt_id=1000,
+        destination_wallet="0x00000000000000000000000000000000000000bb",
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.SENT,
+        chain_nonce=11,
+    )
+    payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        destination_wallet=None,
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.READY,
+        attempt_count=0,
+    )
+    payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=5,
+        payment_attempt_id=6,
+        destination_wallet=None,
+        amount_minor=900,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.READY,
+        attempt_count=0,
+    )
+    executor = FakePayoutExecutor(current_nonce=9)
+    service = PayoutExecutionService(
         cast("AsyncSession", session),
         payout_repo=cast("PayoutStore", payout_repo),
         account_repo=cast(
             "AccountStore",
             FakeAccountRepository("0x00000000000000000000000000000000000000aa"),
         ),
-        settings=_settings(payouts_enabled=False),
-        payout_executor=None,
+        payout_executor=executor,
     )
 
-    await service.record_provider_payout(
+    result = await service.request_provider_payouts(_actor(), idempotency_key="payout-request-1")
+
+    assert result.idempotency_key == "payout-request-1"
+    assert result.requested_count == 2
+    assert result.sent_count == 2
+    assert result.failed_count == 0
+    assert session.flush_calls == 1
+    assert session.commit_calls == 3
+    assert session.execute_params == [{"lock_key": 84_532_001}]
+    assert executor.prepare_calls == [
+        {
+            "destination_wallet": "0x00000000000000000000000000000000000000aa",
+            "amount_minor": 450,
+            "idempotency_key": "payout-request-1",
+            "nonce": 12,
+        },
+        {
+            "destination_wallet": "0x00000000000000000000000000000000000000aa",
+            "amount_minor": 900,
+            "idempotency_key": "payout-request-1",
+            "nonce": 13,
+        },
+    ]
+    assert executor.send_calls == [
+        {
+            "raw_transaction": "0xraw12",
+            "reference": "0xref12",
+        },
+        {
+            "raw_transaction": "0xraw13",
+            "reference": "0xref13",
+        },
+    ]
+    assert [payout.status for payout in result.payouts] == [PayoutStatus.SENT, PayoutStatus.SENT]
+    assert [payout.transfer_reference for payout in result.payouts] == ["0xref13", "0xref12"]
+    assert {payout.request_idempotency_key for payout in result.payouts} == {"payout-request-1"}
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_replays_existing_request_without_executor_calls() -> None:
+    session = FakeSession()
+    payout_repo = FakePayoutRepository()
+    payout_repo.add(
         provider_account_id=1,
         service_id=2,
         invocation_id=3,
         payment_attempt_id=4,
-        gross_amount_minor=500,
+        destination_wallet="0x00000000000000000000000000000000000000aa",
+        amount_minor=450,
         currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.SENT,
+        request_idempotency_key="payout-request-1",
+        transfer_reference="0xref12",
+    )
+    executor = FakePayoutExecutor(current_nonce=9)
+    service = PayoutExecutionService(
+        cast("AsyncSession", session),
+        payout_repo=cast("PayoutStore", payout_repo),
+        account_repo=cast(
+            "AccountStore",
+            FakeAccountRepository("0x00000000000000000000000000000000000000aa"),
+        ),
+        payout_executor=executor,
     )
 
+    result = await service.request_provider_payouts(_actor(), idempotency_key="payout-request-1")
+
+    assert result.requested_count == 1
+    assert executor.prepare_calls == []
+    assert executor.send_calls == []
+    assert session.commit_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_rejects_missing_wallet() -> None:
+    session = FakeSession()
+    payout_repo = FakePayoutRepository()
+    payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        destination_wallet=None,
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.READY,
+        attempt_count=0,
+    )
+    service = PayoutExecutionService(
+        cast("AsyncSession", session),
+        payout_repo=cast("PayoutStore", payout_repo),
+        account_repo=cast("AccountStore", FakeAccountRepository(None)),
+        payout_executor=FakePayoutExecutor(current_nonce=9),
+    )
+
+    with pytest.raises(PayoutConflictError, match="provider wallet address is not configured"):
+        await service.request_provider_payouts(_actor(), idempotency_key="payout-request-1")
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_rejects_pending_reconciliation() -> None:
+    session = FakeSession()
+    payout_repo = FakePayoutRepository()
+    payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        destination_wallet="0x00000000000000000000000000000000000000aa",
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.PENDING,
+        request_idempotency_key="payout-request-0",
+        attempt_count=1,
+    )
+    service = PayoutExecutionService(
+        cast("AsyncSession", session),
+        payout_repo=cast("PayoutStore", payout_repo),
+        account_repo=cast(
+            "AccountStore",
+            FakeAccountRepository("0x00000000000000000000000000000000000000aa"),
+        ),
+        payout_executor=FakePayoutExecutor(current_nonce=9),
+    )
+
+    with pytest.raises(PayoutConflictError, match="payouts pending reconciliation"):
+        await service.request_provider_payouts(_actor(), idempotency_key="payout-request-1")
+
+
+@pytest.mark.asyncio
+async def test_reconcile_pending_payouts_reuses_prepared_transactions() -> None:
+    session = FakeSession()
+    payout_repo = FakePayoutRepository()
+    payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        destination_wallet="0x00000000000000000000000000000000000000aa",
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.PENDING,
+        request_idempotency_key="payout-request-1",
+        attempt_count=1,
+        prepared_raw_transaction="0xraw12",
+        transfer_reference="0xref12",
+        chain_nonce=12,
+    )
+    executor = FakePayoutExecutor(current_nonce=99)
+    service = PayoutExecutionService(
+        cast("AsyncSession", session),
+        payout_repo=cast("PayoutStore", payout_repo),
+        payout_executor=executor,
+    )
+
+    reconciled = await service.reconcile_pending_payouts()
+
+    assert executor.prepare_calls == []
+    assert executor.send_calls == [
+        {
+            "raw_transaction": "0xraw12",
+            "reference": "0xref12",
+        }
+    ]
     assert session.commit_calls == 1
-    assert payout_repo.payouts[0].status is PayoutStatus.READY
-    assert payout_repo.payouts[0].attempt_count == 0
+    assert reconciled[0].status is PayoutStatus.SENT
+    assert reconciled[0].failure_code is None
+
+
+@pytest.mark.asyncio
+async def test_reporting_service_lists_payouts_and_summaries() -> None:
+    session = FakeSession()
+    payout_repo = FakePayoutRepository()
+    sent = payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=3,
+        payment_attempt_id=4,
+        destination_wallet="0x00000000000000000000000000000000000000aa",
+        amount_minor=450,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.SENT,
+    )
+    ready = payout_repo.add(
+        provider_account_id=1,
+        service_id=2,
+        invocation_id=5,
+        payment_attempt_id=6,
+        destination_wallet=None,
+        amount_minor=900,
+        currency="USDC",
+        network="base-sepolia",
+        status=PayoutStatus.READY,
+        attempt_count=0,
+    )
+    payout_repo.summaries = [
+        PayoutSummary(
+            currency="USDC",
+            total_count=2,
+            ready_count=1,
+            pending_count=0,
+            sent_count=1,
+            failed_count=0,
+            total_amount_minor=1_350,
+            sent_amount_minor=450,
+        )
+    ]
+    service = PayoutReportingService(
+        cast("AsyncSession", session),
+        payout_repo=cast("PayoutStore", payout_repo),
+    )
+
+    payouts = await service.get_provider_payouts(_actor())
+    summaries = await service.get_provider_payout_summaries(_actor())
+
+    assert payouts == [ready, sent]
+    assert summaries == payout_repo.summaries

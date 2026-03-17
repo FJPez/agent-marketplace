@@ -1,24 +1,43 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
 from app.core.enums import PayoutStatus
+from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
+from app.integrations.payouts import SupportsPayoutExecutor
 from app.schemas.finance import (
     ProviderEarningsSummaryResponse,
     ProviderEarningsTotalResponse,
     ProviderLedgerEntryResponse,
     ProviderLedgerResponse,
     ProviderPayoutListResponse,
+    ProviderPayoutRequestResponse,
     ProviderPayoutResponse,
     ProviderPayoutSummaryResponse,
 )
 from app.services.ledger_service import LedgerService
-from app.services.payout_service import PayoutService
+from app.services.payout_service import (
+    PayoutConflictError,
+    PayoutExecutionService,
+    PayoutReportingService,
+)
 
 router = APIRouter(prefix="/provider", tags=["finance"])
+
+
+def _get_payout_executor(request: Request) -> SupportsPayoutExecutor | None:
+    payout_executor = get_app_state(request.app).payout_executor
+    if payout_executor is None:
+        return None
+    if not isinstance(payout_executor, SupportsPayoutExecutor):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="payout executor is not initialized",
+        )
+    return payout_executor
 
 
 @router.get("/earnings", response_model=ProviderEarningsSummaryResponse)
@@ -51,10 +70,33 @@ async def get_provider_payouts(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     payout_status: Annotated[PayoutStatus | None, Query(alias="status")] = None,
 ) -> ProviderPayoutListResponse:
-    service = PayoutService(session)
+    service = PayoutReportingService(session)
     payouts = await service.get_provider_payouts(actor, status=payout_status)
-    summary = await service.get_provider_payout_summary(actor)
+    summaries = await service.get_provider_payout_summaries(actor)
     return ProviderPayoutListResponse(
-        summary=None if summary is None else ProviderPayoutSummaryResponse.from_summary(summary),
+        summary=(
+            None
+            if len(summaries) != 1
+            else ProviderPayoutSummaryResponse.from_summary(summaries[0])
+        ),
+        summaries=[ProviderPayoutSummaryResponse.from_summary(summary) for summary in summaries],
         payouts=[ProviderPayoutResponse.from_model(payout) for payout in payouts],
     )
+
+
+@router.post("/payouts", response_model=ProviderPayoutRequestResponse)
+async def request_provider_payouts(
+    actor: CurrentActor,
+    fastapi_request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+) -> ProviderPayoutRequestResponse:
+    service = PayoutExecutionService(
+        session,
+        payout_executor=_get_payout_executor(fastapi_request),
+    )
+    try:
+        result = await service.request_provider_payouts(actor, idempotency_key=idempotency_key)
+    except PayoutConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return ProviderPayoutRequestResponse.from_result(result)

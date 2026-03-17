@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -16,6 +17,7 @@ from app.core.enums import (
     PricingModelType,
     ServiceLifecycle,
 )
+from app.core.lifespan import get_app_state
 from app.core.logging import EVENT_FIELD, PAYOUT_COUNT_FIELD, REQUEST_ID_FIELD
 from app.db.models import (
     Account,
@@ -121,7 +123,7 @@ async def _seed_provider_finance_data(
             invocation_id=invocation.id,
             idempotency_key="finance-key",
             payment_identifier="payment-finance",
-            payment_requirement={"amount_minor": 500},
+            payment_requirement={"amount_minor": 500, "payment_amount": 5_000_000},
             payment_payload={"payment_identifier": "payment-finance"},
             verify_outcome={"ok": True},
             settle_outcome={"ok": True},
@@ -203,7 +205,7 @@ async def _seed_provider_payout_data(
             invocation_id=retry_invocation.id,
             idempotency_key="finance-key-retry",
             payment_identifier="payment-finance-retry",
-            payment_requirement={"amount_minor": 500},
+            payment_requirement={"amount_minor": 500, "payment_amount": 5_000_000},
             payment_payload={"payment_identifier": "payment-finance-retry"},
             verify_outcome={"ok": True},
             settle_outcome={"ok": True},
@@ -225,8 +227,12 @@ async def _seed_provider_payout_data(
                     network="base-sepolia",
                     status=PayoutStatus.SENT,
                     transfer_reference="0xsent",
+                    request_idempotency_key="request-sent",
+                    failure_code=None,
                     error_message=None,
                     attempt_count=1,
+                    prepared_raw_transaction=None,
+                    chain_nonce=8,
                 ),
                 Payout(
                     provider_account_id=provider_account_id,
@@ -239,13 +245,182 @@ async def _seed_provider_payout_data(
                     network="base-sepolia",
                     status=PayoutStatus.FAILED,
                     transfer_reference=None,
+                    request_idempotency_key="request-failed",
+                    failure_code="executor_error",
                     error_message="rpc unavailable",
                     attempt_count=2,
+                    prepared_raw_transaction="0xrawtx",
+                    chain_nonce=9,
                 ),
             ]
         )
 
     return provider_account_id, service_id
+
+
+async def _seed_provider_ready_payout_data(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    wallet_address: str = "0x00000000000000000000000000000000000000aa",
+) -> tuple[int, int]:
+    provider_account_id, service_id = await _seed_provider_finance_data(db_session_factory)
+
+    async with db_session_factory.begin() as session:
+        provider_account = await session.get(Account, provider_account_id)
+        assert provider_account is not None
+        provider_account.wallet_address = wallet_address
+        consumer_account = await session.scalar(
+            select(Account).where(Account.id != provider_account_id).order_by(Account.id)
+        )
+        invocation = await session.scalar(
+            select(Invocation).where(Invocation.service_id == service_id).order_by(Invocation.id)
+        )
+        assert invocation is not None
+        quote = await session.scalar(
+            select(Quote).where(Quote.service_id == service_id).order_by(Quote.id)
+        )
+        payment_attempt = await session.scalar(
+            select(PaymentAttempt)
+            .where(PaymentAttempt.invocation_id == invocation.id)
+            .order_by(PaymentAttempt.id)
+        )
+        endpoint = await session.scalar(
+            select(ServiceEndpoint)
+            .where(ServiceEndpoint.service_id == service_id)
+            .order_by(ServiceEndpoint.id)
+        )
+        assert consumer_account is not None
+        assert quote is not None
+        assert payment_attempt is not None
+        assert endpoint is not None
+
+        ready_invocation = Invocation(
+            consumer_account_id=consumer_account.id,
+            service_id=service_id,
+            endpoint_id=endpoint.id,
+            endpoint_key="translate",
+            access_mode=AccessMode.PAID,
+            quote_id=quote.id,
+            idempotency_key="finance-ready-key",
+            request_hash="f" * 64,
+            status=InvocationStatus.SUCCEEDED,
+            response_payload={"result": "ready"},
+            upstream_status_code=200,
+            error_message=None,
+            failure_reason=None,
+        )
+        session.add(ready_invocation)
+        await session.flush()
+
+        ready_attempt = PaymentAttempt(
+            consumer_account_id=consumer_account.id,
+            quote_id=quote.id,
+            invocation_id=ready_invocation.id,
+            idempotency_key="finance-ready-key",
+            payment_identifier="payment-finance-ready",
+            payment_requirement={"amount_minor": 500, "payment_amount": 5_000_000},
+            payment_payload={"payment_identifier": "payment-finance-ready"},
+            verify_outcome={"ok": True},
+            settle_outcome={"ok": True},
+            facilitator_reference="settle-finance-ready",
+        )
+        session.add(ready_attempt)
+        await session.flush()
+
+        session.add_all(
+            [
+                Payout(
+                    provider_account_id=provider_account_id,
+                    service_id=service_id,
+                    invocation_id=invocation.id,
+                    payment_attempt_id=payment_attempt.id,
+                    destination_wallet=None,
+                    amount_minor=4_500_000,
+                    currency="USDC",
+                    network="base-sepolia",
+                    status=PayoutStatus.READY,
+                    transfer_reference=None,
+                    request_idempotency_key=None,
+                    failure_code=None,
+                    error_message=None,
+                    attempt_count=0,
+                    prepared_raw_transaction=None,
+                    chain_nonce=None,
+                ),
+                Payout(
+                    provider_account_id=provider_account_id,
+                    service_id=service_id,
+                    invocation_id=ready_invocation.id,
+                    payment_attempt_id=ready_attempt.id,
+                    destination_wallet=None,
+                    amount_minor=4_500_000,
+                    currency="USDC",
+                    network="base-sepolia",
+                    status=PayoutStatus.READY,
+                    transfer_reference=None,
+                    request_idempotency_key=None,
+                    failure_code=None,
+                    error_message=None,
+                    attempt_count=0,
+                    prepared_raw_transaction=None,
+                    chain_nonce=None,
+                ),
+            ]
+        )
+
+    return provider_account_id, service_id
+
+
+@dataclass
+class _SuccessfulPayoutExecutor:
+    prepare_calls: list[dict[str, object]] = field(default_factory=list)
+    send_calls: list[dict[str, object]] = field(default_factory=list)
+
+    async def current_nonce(self) -> int:
+        return 9
+
+    async def prepare_payout(
+        self,
+        *,
+        destination_wallet: str,
+        amount_minor: int,
+        idempotency_key: str,
+        nonce: int,
+    ) -> dict[str, object]:
+        self.prepare_calls.append(
+            {
+                "destination_wallet": destination_wallet,
+                "amount_minor": amount_minor,
+                "idempotency_key": idempotency_key,
+                "nonce": nonce,
+            }
+        )
+        return {
+            "raw_transaction": f"0xrawtx{nonce}",
+            "reference": f"0xsent{nonce}",
+            "network": "base-sepolia",
+            "token_address": "0x0000000000000000000000000000000000000001",
+        }
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> dict[str, object]:
+        self.send_calls.append(
+            {
+                "raw_transaction": raw_transaction,
+                "reference": reference,
+            }
+        )
+        return {"reference": reference}
+
+
+def _install_payout_state(app: FastAPI, *, payout_executor: object) -> None:
+    state = get_app_state(app)
+    state.settings.payouts_enabled = True
+    state.payout_executor = payout_executor
 
 
 @pytest.mark.asyncio
@@ -266,6 +441,31 @@ async def test_provider_payouts_route_requires_bearer_token(
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Authorization header is required"}
+
+
+@pytest.mark.asyncio
+async def test_provider_payout_request_route_requires_bearer_token(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.post("/v1/provider/payouts")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authorization header is required"}
+
+
+@pytest.mark.asyncio
+async def test_provider_payout_request_requires_idempotency_key(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers=_auth_headers(provider_account_id),
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -332,7 +532,7 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["summary"] == {
+    expected_summary = {
         "currency": "USDC",
         "total_count": 2,
         "ready_count": 0,
@@ -342,14 +542,17 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
         "total_amount_minor": 8_900_000,
         "sent_amount_minor": 4_500_000,
     }
+    assert body["summaries"] == [expected_summary]
+    assert body["summary"] == expected_summary
     payouts = body["payouts"]
     assert len(payouts) == 2
     assert payouts[0]["service_id"] == service_id
     assert payouts[0]["status"] == "failed"
     assert payouts[0]["amount_minor"] == 4_400_000
     assert payouts[0]["destination_wallet"] == "0x00000000000000000000000000000000000000aa"
-    assert payouts[0]["transfer_reference"] is None
-    assert payouts[0]["error_message"] == "rpc unavailable"
+    assert payouts[0]["failure_code"] == "executor_error"
+    assert "transfer_reference" not in payouts[0]
+    assert "error_message" not in payouts[0]
     assert payouts[0]["attempt_count"] == 2
     assert isinstance(payouts[0]["id"], int)
     assert isinstance(payouts[0]["invocation_id"], int)
@@ -358,8 +561,9 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
     assert payouts[1]["status"] == "sent"
     assert payouts[1]["amount_minor"] == 4_500_000
     assert payouts[1]["destination_wallet"] == "0x00000000000000000000000000000000000000aa"
-    assert payouts[1]["transfer_reference"] == "0xsent"
-    assert payouts[1]["error_message"] is None
+    assert payouts[1]["failure_code"] is None
+    assert "transfer_reference" not in payouts[1]
+    assert "error_message" not in payouts[1]
     assert payouts[1]["attempt_count"] == 1
     assert isinstance(payouts[1]["id"], int)
     assert isinstance(payouts[1]["invocation_id"], int)
@@ -385,8 +589,101 @@ async def test_get_provider_payouts_filters_by_status(
     )
 
     assert response.status_code == 200
-    assert response.json()["summary"]["failed_count"] == 1
+    assert response.json()["summaries"][0]["failed_count"] == 1
     assert [item["status"] for item in response.json()["payouts"]] == ["failed"]
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_claims_ready_rows_and_replays_by_idempotency_key(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+    payout_executor = _SuccessfulPayoutExecutor()
+    _install_payout_state(app, payout_executor=payout_executor)
+
+    first = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "payout-request-1"},
+    )
+    second = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "payout-request-1"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["idempotency_key"] == "payout-request-1"
+    assert first.json()["requested_count"] == 2
+    assert first.json()["sent_count"] == 2
+    assert first.json()["failed_count"] == 0
+    assert len(first.json()["payouts"]) == 2
+    assert {item["status"] for item in first.json()["payouts"]} == {"sent"}
+    assert payout_executor.prepare_calls == [
+        {
+            "destination_wallet": "0x00000000000000000000000000000000000000aa",
+            "amount_minor": 4_500_000,
+            "idempotency_key": "payout-request-1",
+            "nonce": 9,
+        },
+        {
+            "destination_wallet": "0x00000000000000000000000000000000000000aa",
+            "amount_minor": 4_500_000,
+            "idempotency_key": "payout-request-1",
+            "nonce": 10,
+        },
+    ]
+    assert payout_executor.send_calls == [
+        {
+            "raw_transaction": "0xrawtx9",
+            "reference": "0xsent9",
+        },
+        {
+            "raw_transaction": "0xrawtx10",
+            "reference": "0xsent10",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_returns_conflict_when_no_ready_rows(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_payout_data(db_session_factory)
+    _install_payout_state(app, payout_executor=_SuccessfulPayoutExecutor())
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "payout-request-empty"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "no ready payouts available"}
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_returns_conflict_when_wallet_missing(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(
+        db_session_factory,
+        wallet_address="",
+    )
+    _install_payout_state(app, payout_executor=_SuccessfulPayoutExecutor())
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "payout-request-wallet"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "provider wallet address is not configured"}
 
 
 @pytest.mark.asyncio

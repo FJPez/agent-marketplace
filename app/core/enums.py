@@ -49,6 +49,12 @@ class PayoutStatus(StrEnum):
     FAILED = "failed"
 
 
+class PayoutFailureCode(StrEnum):
+    EXECUTOR_ERROR = "executor_error"
+    INVALID_AMOUNT = "invalid_amount"
+    WALLET_NOT_CONFIGURED = "wallet_not_configured"
+
+
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"

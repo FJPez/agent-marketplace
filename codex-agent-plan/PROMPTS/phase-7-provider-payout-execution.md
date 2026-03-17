@@ -19,12 +19,15 @@
 
 ## Objective
 
-Implement actual provider payout execution so provider earnings can move from internal ledger state into real payout attempts and payout status progression.
+Implement provider-requested payout execution so settled earnings move into
+durable `READY` payout rows first, then progress through real payout attempts
+and payout status changes when the provider explicitly requests payout.
 
 ## In scope
 
-- execution path for provider payouts based on ledger/earnings state
-- payout initiation service logic
+- execution path for provider payouts based on settled earnings state
+- payout initiation service logic driven by an explicit provider request
+- settlement-time creation of `READY` payout rows without inline token transfer
 - use of the provider’s registered payout wallet or payout destination
 - payout status lifecycle updates such as:
   - PENDING
@@ -41,6 +44,8 @@ Implement actual provider payout execution so provider earnings can move from in
 - build on top of existing ledger and earnings structures
 - do not duplicate ledger calculations in payout code
 - payout execution must be idempotent or strongly duplicate-safe
+- paid invoke settlement must not broadcast payouts inline
+- payout requests should claim `READY` rows durably before broadcast
 - keep route handlers thin if routes are added
 - place payout orchestration in services
 - place persistence in repositories
@@ -79,7 +84,7 @@ Prefer small, reviewable commits in roughly this order:
 
 ## Acceptance criteria
 
-- provider payouts can actually be executed from recognised earnings state
+- provider payouts can actually be executed from recognised `READY` earnings state
 - payout state updates are clear and reliable
 - duplicate payout risk is handled safely
 - tests pass

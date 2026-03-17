@@ -2,11 +2,12 @@ from typing import Self
 
 from pydantic import BaseModel
 
-from app.core.enums import PayoutStatus
+from app.core.enums import PayoutFailureCode, PayoutStatus
 from app.db.models import LedgerEntry, Payout
 from app.repositories.ledger_entry_repo import LedgerSummary
 from app.repositories.payout_repo import PayoutSummary
 from app.schemas.common import Id, Timestamp
+from app.services.payout_service import PayoutRequestResult
 
 
 class ProviderLedgerEntryResponse(BaseModel):
@@ -64,22 +65,18 @@ class ProviderPayoutResponse(BaseModel):
     service_id: Id
     invocation_id: Id
     payment_attempt_id: Id
-    destination_wallet: str
+    destination_wallet: str | None
     amount_minor: int
     currency: str
     network: str
     status: PayoutStatus
-    transfer_reference: str | None
-    error_message: str | None
+    failure_code: PayoutFailureCode | None
     attempt_count: int
     created_at: Timestamp
     updated_at: Timestamp
 
     @classmethod
     def from_model(cls, payout: Payout) -> Self:
-        sanitized_error = None
-        if payout.error_message is not None:
-            sanitized_error = payout.error_message[:200]
         return cls(
             id=payout.id,
             service_id=payout.service_id,
@@ -90,8 +87,7 @@ class ProviderPayoutResponse(BaseModel):
             currency=payout.currency,
             network=payout.network,
             status=payout.status,
-            transfer_reference=payout.transfer_reference,
-            error_message=sanitized_error,
+            failure_code=payout.failure_code,
             attempt_count=payout.attempt_count,
             created_at=payout.created_at,
             updated_at=payout.updated_at,
@@ -124,4 +120,23 @@ class ProviderPayoutSummaryResponse(BaseModel):
 
 class ProviderPayoutListResponse(BaseModel):
     summary: ProviderPayoutSummaryResponse | None
+    summaries: list[ProviderPayoutSummaryResponse]
     payouts: list[ProviderPayoutResponse]
+
+
+class ProviderPayoutRequestResponse(BaseModel):
+    idempotency_key: str
+    requested_count: int
+    sent_count: int
+    failed_count: int
+    payouts: list[ProviderPayoutResponse]
+
+    @classmethod
+    def from_result(cls, result: PayoutRequestResult) -> Self:
+        return cls(
+            idempotency_key=result.idempotency_key,
+            requested_count=result.requested_count,
+            sent_count=result.sent_count,
+            failed_count=result.failed_count,
+            payouts=[ProviderPayoutResponse.from_model(payout) for payout in result.payouts],
+        )

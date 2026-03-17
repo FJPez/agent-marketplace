@@ -20,7 +20,6 @@ from app.core.logging import (
     PAYOUT_ID_FIELD,
     PAYOUT_STATUS_FIELD,
     REQUEST_ID_FIELD,
-    TRANSFER_REFERENCE_FIELD,
 )
 from app.core.request_hash import hash_request_body
 from app.db.models import (
@@ -371,36 +370,70 @@ class _FakeX402ResourceServer:
 
 class _SuccessfulPayoutExecutor:
     def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
+        self.prepare_calls: list[dict[str, object]] = []
+        self.send_calls: list[dict[str, object]] = []
 
-    async def send_payout(
+    async def prepare_payout(
         self,
         *,
         destination_wallet: str,
         amount_minor: int,
         idempotency_key: str,
+        nonce: int,
     ) -> dict[str, object]:
-        self.calls.append(
+        self.prepare_calls.append(
             {
                 "destination_wallet": destination_wallet,
                 "amount_minor": amount_minor,
                 "idempotency_key": idempotency_key,
+                "nonce": nonce,
             }
         )
-        return {"reference": "0xpayoutsent"}
+        return {
+            "raw_transaction": "0xrawtx",
+            "reference": "0xpayoutsent",
+            "network": "base-sepolia",
+            "token_address": "0x0000000000000000000000000000000000000001",
+        }
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> dict[str, object]:
+        self.send_calls.append(
+            {
+                "raw_transaction": raw_transaction,
+                "reference": reference,
+            }
+        )
+        return {"reference": reference}
 
 
 class _FailingPayoutExecutor:
-    async def send_payout(
+    async def prepare_payout(
         self,
         *,
         destination_wallet: str,
         amount_minor: int,
         idempotency_key: str,
+        nonce: int,
     ) -> dict[str, object]:
         _ = destination_wallet
         _ = amount_minor
         _ = idempotency_key
+        _ = nonce
+        raise RuntimeError("rpc unavailable")
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> dict[str, object]:
+        _ = raw_transaction
+        _ = reference
         raise RuntimeError("rpc unavailable")
 
 
@@ -664,7 +697,7 @@ async def test_successful_paid_invoke_replays_by_idempotency_key_without_second_
 
 
 @pytest.mark.asyncio
-async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
+async def test_successful_paid_invoke_records_ready_provider_payout_when_enabled(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -708,36 +741,33 @@ async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
         )
 
     payouts = await _list_payouts(db_session_factory)
-    sent_record = next(
+    ready_record = next(
         record
         for record in caplog.records
         if record.name == "app.services.payout_service"
-        and getattr(record, EVENT_FIELD, None) == "payout.sent"
+        and getattr(record, EVENT_FIELD, None) == "payout.ready"
     )
 
     assert response.status_code == 200
-    assert len(payout_executor.calls) == 1
+    assert payout_executor.prepare_calls == []
+    assert payout_executor.send_calls == []
     assert len(payouts) == 1
-    assert payout_executor.calls[0] == {
-        "destination_wallet": "0x00000000000000000000000000000000000000aa",
-        "amount_minor": 450,
-        "idempotency_key": f"payment-attempt:{payouts[0].payment_attempt_id}",
-    }
-    assert payouts[0].status.value == "sent"
-    assert payouts[0].transfer_reference == "0xpayoutsent"
-    assert payouts[0].attempt_count == 1
-    assert getattr(sent_record, REQUEST_ID_FIELD) == "payout-success-req"
-    assert getattr(sent_record, PAYOUT_ID_FIELD) == payouts[0].id
-    assert getattr(sent_record, PAYOUT_STATUS_FIELD) == "sent"
-    assert getattr(sent_record, TRANSFER_REFERENCE_FIELD) == "0xpayoutsent"
+    assert payouts[0].status.value == "ready"
+    assert payouts[0].destination_wallet is None
+    assert payouts[0].amount_minor == 4_500_000
+    assert payouts[0].currency == "USDC"
+    assert payouts[0].network == "base-sepolia"
+    assert payouts[0].attempt_count == 0
+    assert getattr(ready_record, REQUEST_ID_FIELD) == "payout-success-req"
+    assert getattr(ready_record, PAYOUT_ID_FIELD) == payouts[0].id
+    assert getattr(ready_record, PAYOUT_STATUS_FIELD) == "ready"
 
 
 @pytest.mark.asyncio
-async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_payout(
+async def test_paid_invoke_records_asset_denominated_provider_payout_amount(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
     consumer_account_id = await _create_consumer_account(db_session_factory)
@@ -749,6 +779,7 @@ async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_p
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
+    payout_executor = _SuccessfulPayoutExecutor()
     _install_payment_state(
         app,
         upstream_client=_FakeHttpClient(
@@ -758,43 +789,43 @@ async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_p
             verify_outcomes=[{"ok": True, "reference": "verify-1"}],
             settle_outcomes=[{"ok": True, "reference": "settle-1"}],
         ),
-        payout_executor=_FailingPayoutExecutor(),
+        payout_executor=payout_executor,
         payouts_enabled=True,
     )
 
-    with caplog.at_level(logging.ERROR, logger="app.services.payout_service"):
-        response = await async_client.post(
-            "/v1/invoke/paid-invoke-service",
-            headers={
-                **_auth_headers(
-                    consumer_account_id,
-                    payment_header=_payment_header(payment_identifier="payment-payout-failure"),
-                ),
-                "X-Request-ID": "payout-failure-req",
-            },
-            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
-        )
-
-    payouts = await _list_payouts(db_session_factory)
-    failed_record = next(
-        record
-        for record in caplog.records
-        if record.name == "app.services.payout_service"
-        and getattr(record, EVENT_FIELD, None) == "payout.failed"
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers={
+            **_auth_headers(
+                consumer_account_id,
+                payment_header=_payment_header(payment_identifier="payment-payout-failure"),
+            ),
+            "X-Request-ID": "payout-failure-req",
+        },
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
 
+    attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-payout-failure",
+    )
+    payouts = await _list_payouts(db_session_factory)
+
     assert response.status_code == 200
+    assert attempt is not None
     assert len(payouts) == 1
-    assert payouts[0].status.value == "failed"
-    assert payouts[0].error_message == "rpc unavailable"
+    assert payout_executor.prepare_calls == []
+    assert payout_executor.send_calls == []
+    assert payouts[0].status.value == "ready"
+    assert payouts[0].currency == "USDC"
+    assert payouts[0].amount_minor == 4_500_000
+    assert attempt.payment_requirement["payment_amount"] == 5_000_000
     assert payouts[0].transfer_reference is None
-    assert getattr(failed_record, REQUEST_ID_FIELD) == "payout-failure-req"
-    assert getattr(failed_record, PAYOUT_ID_FIELD) == payouts[0].id
-    assert getattr(failed_record, PAYOUT_STATUS_FIELD) == "failed"
+    assert payouts[0].destination_wallet is None
 
 
 @pytest.mark.asyncio
-async def test_paid_invoke_replay_does_not_send_duplicate_provider_payout(
+async def test_paid_invoke_replay_does_not_create_duplicate_provider_payout(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -842,7 +873,8 @@ async def test_paid_invoke_replay_does_not_send_duplicate_provider_payout(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(payout_executor.calls) == 1
+    assert payout_executor.prepare_calls == []
+    assert payout_executor.send_calls == []
     assert len(payouts) == 1
 
 

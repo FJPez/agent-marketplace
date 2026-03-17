@@ -185,6 +185,8 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
             currency="USDC",
             network="base-sepolia",
             status=PayoutStatus.SENT,
+            request_idempotency_key="payout-request-1",
+            chain_nonce=9,
         )
         first.transfer_reference = "0xsent"
         second = repo.add(
@@ -197,6 +199,8 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
             currency="USDC",
             network="base-sepolia",
             status=PayoutStatus.FAILED,
+            request_idempotency_key="payout-request-1",
+            chain_nonce=10,
         )
         second.error_message = "rpc unavailable"
 
@@ -207,11 +211,19 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
             provider_account_id=provider_account_id,
             status=PayoutStatus.FAILED,
         )
-        summary = await repo.summarize_for_provider(provider_account_id=provider_account_id)
+        replay = await repo.list_for_provider_request(
+            provider_account_id=provider_account_id,
+            request_idempotency_key="payout-request-1",
+        )
+        summaries = await repo.summarize_for_provider(provider_account_id=provider_account_id)
+        max_chain_nonce = await repo.get_max_chain_nonce()
 
     assert [payout.status.value for payout in payouts] == ["failed", "sent"]
     assert failed[0].error_message == "rpc unavailable"
-    assert summary is not None
+    assert [payout.id for payout in replay] == [second.id, first.id]
+    assert max_chain_nonce == 10
+    assert len(summaries) == 1
+    summary = summaries[0]
     assert summary.currency == "USDC"
     assert summary.total_count == 2
     assert summary.sent_count == 1
@@ -262,6 +274,8 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
 
     async with db_session_factory() as session:
         repo = PayoutRepository(session)
-        summary = await repo.summarize_for_provider(provider_account_id=provider_account_id)
+        summaries = await repo.summarize_for_provider(provider_account_id=provider_account_id)
 
-    assert summary is not None
+    assert len(summaries) == 2
+    assert [summary.currency for summary in summaries] == ["USDC", "USDT"]
+    assert [summary.total_amount_minor for summary in summaries] == [4_500_000, 100]

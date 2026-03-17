@@ -8,7 +8,7 @@ This demo gives you a local end-to-end path for:
 - paid `402 Payment Required`
 - signed paid retry with the Python x402 client
 - payment settlement through the CDP facilitator
-- Base Sepolia transaction verification for the buyer and provider wallets
+- Base Sepolia transaction verification for the buyer and settlement wallet
 
 ## Prerequisites
 
@@ -17,21 +17,25 @@ This demo gives you a local end-to-end path for:
 - PostgreSQL on `localhost:5432`
   - You can use your own local Postgres, or `docker compose up -d postgres`
 - a Base Sepolia private key for the buyer wallet
+- a Base Sepolia address for the marketplace settlement wallet
 - a Base Sepolia address for the provider payout wallet
 - a CDP secret API key id and secret for the facilitator
 
 ## What You Need Before Starting
 
-You need two wallet roles for the full paid demo:
+You need three wallet roles for the full paid demo:
 
 - Buyer wallet:
   - used by `examples/client.py`
   - must be an EVM wallet on Base Sepolia
   - you must have the private key locally as `CONSUMER_PRIVATE_KEY`
-- Provider payout wallet:
+- Marketplace settlement wallet:
   - set as `APP_X402_PAY_TO_ADDRESS`
-  - only the address is needed by the local API
-  - this is the wallet the payment requirement points to
+  - only the address is needed for paid invoke settlement
+  - this is the wallet the x402 payment requirement points to
+- Provider payout wallet:
+  - stored on the provider account profile
+  - receives funds only when the provider later requests payout
 
 For the full paid retry path, the buyer wallet should be prepared for Base Sepolia:
 
@@ -41,8 +45,8 @@ For the full paid retry path, the buyer wallet should be prepared for Base Sepol
 - never commit the private key to the repo or put it in `.env.example`
 
 The provider payout wallet should also be a Base Sepolia EVM address. It does
-not need a private key in this repo; only the address is required so the app can
-advertise where the x402 payment should settle.
+not need a private key in this repo; only the address is required so the payout
+request flow knows where to send provider funds.
 
 You also need CDP facilitator credentials:
 
@@ -98,7 +102,12 @@ APP_X402_NETWORK=base-sepolia
 APP_X402_NETWORK_CAIP2=eip155:84532
 APP_X402_CDP_API_KEY_ID=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
 APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n
-APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS
+APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_SETTLEMENT_ADDRESS
+APP_PAYOUTS_ENABLED=false
+APP_PAYOUTS_RPC_URL=https://sepolia.base.org
+APP_PAYOUTS_CHAIN_ID=84532
+APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000
+APP_PAYOUTS_WALLET_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY
 APP_API_RATE_LIMIT=120/minute
 APP_INVOKE_RATE_LIMIT=60/minute
 APP_QUOTE_RATE_LIMIT=30/minute
@@ -149,9 +158,20 @@ What each setting does:
 - `APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n`
   - CDP private key material used to sign facilitator JWTs
   - literal `\n` escapes are supported
-- `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_PROVIDER_ADDRESS`
-  - provider payout address advertised in the x402 payment requirement
+- `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_SETTLEMENT_ADDRESS`
+  - marketplace settlement address advertised in the x402 payment requirement
   - must be a Base Sepolia EVM address
+- `APP_PAYOUTS_ENABLED=false`
+  - leave this `false` if you only want to test paid settlement
+  - set it to `true` only when you also want to test provider payout execution
+- `APP_PAYOUTS_RPC_URL=https://sepolia.base.org`
+  - Base Sepolia RPC used for provider payout execution
+- `APP_PAYOUTS_CHAIN_ID=84532`
+  - chain id used for payout transactions
+- `APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000`
+  - USDC token contract used for provider payout execution
+- `APP_PAYOUTS_WALLET_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY`
+  - treasury signer used when `POST /v1/provider/payouts` executes provider payouts
 - `APP_API_RATE_LIMIT=120/minute`
   - base rate limit for authenticated API traffic
 - `APP_INVOKE_RATE_LIMIT=60/minute`
@@ -282,6 +302,12 @@ On success the example client also logs:
 - the decoded settlement payload
 - the transaction hash you can inspect on Base Sepolia
 
+After a successful paid retry, provider earnings are recorded internally as
+`READY` payouts. If `APP_PAYOUTS_ENABLED=true`, authenticate as the provider and
+call `POST /v1/provider/payouts` with an `Idempotency-Key` to execute the
+provider transfer. Use `GET /v1/provider/payouts` to inspect the resulting
+status change.
+
 On failure the example client logs:
 
 - the HTTP status code for the failed paid retry
@@ -323,10 +349,10 @@ When the paid retry succeeds, take the `transaction` value from the decoded
 - explorer: `https://sepolia-explorer.base.org`
 - confirm the transaction hash exists
 - confirm the buyer wallet is the payer
-- confirm the provider payout address matches `APP_X402_PAY_TO_ADDRESS`
+- confirm the settlement address matches `APP_X402_PAY_TO_ADDRESS`
 
-If you want to see value movement clearly, compare the buyer and provider
-wallets in the explorer before and after the paid retry.
+If you later request provider payout execution, compare the treasury settlement
+wallet and the provider wallet before and after `POST /v1/provider/payouts`.
 
 If the facilitator cannot authenticate or settle, you will see the retry fail
 with one of these app errors:
@@ -380,7 +406,7 @@ If the paid retry reaches the app but returns `502 {"detail":"facilitator unavai
 - the facilitator URL is reachable from your machine
 - CDP is not returning a transient `5xx`
 - the buyer wallet has Base Sepolia ETH and USDC
-- the provider payout address is a valid Base Sepolia EVM address
+- the settlement address is a valid Base Sepolia EVM address
 
 If the paid retry returns a more specific body such as
 `facilitator verify failed: ...` or `facilitator settle failed: ...`, use that

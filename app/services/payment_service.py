@@ -37,7 +37,7 @@ from app.services.invoke_service import (
     InvokeService,
 )
 from app.services.ledger_service import LedgerService
-from app.services.payout_service import PayoutService
+from app.services.payout_service import PayoutExecutionService
 
 logger = get_logger(__name__)
 
@@ -47,7 +47,6 @@ if TYPE_CHECKING:
     from app.core.actor import ActorContext
     from app.core.config import Settings
     from app.db.models import Invocation
-    from app.integrations.payouts import SupportsPayoutExecutor
     from app.integrations.provider_gateway.client import SupportsRequest
     from app.services.invoke_service import ResolvedInvokeTarget
 
@@ -105,7 +104,6 @@ class PaymentService:
         facilitator_client: SupportsFacilitatorClient,
         x402_resource_server: SupportsX402ResourceServer,
         settings: Settings,
-        payout_executor: SupportsPayoutExecutor | None = None,
     ) -> None:
         self._session = session
         self._facilitator_client = facilitator_client
@@ -114,7 +112,6 @@ class PaymentService:
         self._attempt_repo = PaymentAttemptRepository(session)
         self._invoke_service = InvokeService(session, http_client=http_client)
         self._ledger_service = LedgerService(session)
-        self._payout_executor = payout_executor
 
     async def handle_paid_invoke(
         self,
@@ -141,7 +138,7 @@ class PaymentService:
             )
             return PaidInvokeSuccess(
                 invocation=existing,
-                response_headers=await self._build_success_headers_for_invocation(existing.id),
+                response_headers=await self.build_success_headers_for_invocation(existing.id),
             )
 
         if resolved.quote is None:
@@ -284,20 +281,19 @@ class PaymentService:
                 },
             ),
         )
-        await self._session.commit()
-        payout_service = PayoutService(
+        payout_service = PayoutExecutionService(
             self._session,
-            settings=self._settings,
-            payout_executor=self._payout_executor,
         )
-        await payout_service.record_provider_payout(
+        await payout_service.record_ready_payout(
             provider_account_id=resolved.service.provider_account_id,
             service_id=resolved.service.id,
             invocation_id=invocation.id,
             payment_attempt_id=attempt.id,
-            gross_amount_minor=resolved.quote.amount_minor,
-            currency=resolved.quote.currency or "",
+            gross_amount_minor=_get_payment_amount(payment_requirement),
+            currency="USDC",
+            network=self._settings.x402_network,
         )
+        await self._session.commit()
         return PaidInvokeSuccess(
             invocation=invocation,
             response_headers=self._build_response_headers(settle_outcome),
@@ -337,7 +333,7 @@ class PaymentService:
             settle_outcome=settle_outcome,
         )
 
-    async def _build_success_headers_for_invocation(self, invocation_id: int) -> dict[str, str]:
+    async def build_success_headers_for_invocation(self, invocation_id: int) -> dict[str, str]:
         attempt = await self._attempt_repo.get_by_invocation_id(invocation_id=invocation_id)
         if attempt is None or attempt.settle_outcome is None:
             return {}
@@ -396,3 +392,11 @@ def _extract_reference(outcome: dict[str, object]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def _get_payment_amount(payment_requirement: dict[str, object]) -> int:
+    value = payment_requirement.get("payment_amount")
+    if isinstance(value, int):
+        return value
+    msg = "payment requirement is missing payment_amount"
+    raise InvokeBadGatewayError(msg)

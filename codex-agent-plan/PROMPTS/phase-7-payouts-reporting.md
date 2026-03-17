@@ -17,15 +17,18 @@
 
 ## Objective
 
-Implement payout reporting so providers can inspect payout history and payout statuses using the actual payout execution model as the source of truth.
+Implement payout reporting so providers can inspect payout history, per-currency
+summaries, and payout statuses using the actual request-based payout execution
+model as the source of truth.
 
 ## In scope
 
 - `payouts` model/table owned by this branch if not already present
 - payout record persistence and retrieval
 - provider payout list endpoint
+- provider payout request replay visibility where useful
 - payout status visibility
-- payout summary or aggregation support where useful
+- per-currency payout summary or aggregation support where useful
 - tests for payout reporting behaviour introduced here
 
 ## Required implementation details
@@ -38,6 +41,7 @@ Implement payout reporting so providers can inspect payout history and payout st
 - keep names short and meaningful
 - do not add unrelated refactors
 - ensure providers only see their own payout records
+- avoid leaking raw executor error text or transfer internals in provider responses
 
 ## Out of scope
 
@@ -68,6 +72,7 @@ Prefer small, reviewable commits in roughly this order:
 
 - payout records can be retrieved by the correct provider
 - payout statuses are visible and reliable
+- mixed-currency payout summaries are complete
 - tests pass
 - no actual payout execution logic is duplicated in this branch
 
