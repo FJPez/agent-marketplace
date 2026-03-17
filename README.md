@@ -251,36 +251,42 @@ For a live x402 v2 manual test:
    - `APP_X402_CDP_API_KEY_SECRET=...`
    - `APP_X402_PAY_TO_ADDRESS=...`
    This should be the marketplace settlement or treasury address that receives
-   the buyer's x402 payment on Base Sepolia, not the provider payout wallet.
-3. Point the seeded service at a reachable upstream with
+   the buyer's x402 payment on Base Sepolia. For the full payout demo, this
+   should match the treasury signer configured by
+   `APP_PAYOUTS_WALLET_PRIVATE_KEY`.
+3. Enable payout execution and configure the treasury signer:
+   - `APP_PAYOUTS_ENABLED=true`
+   - `APP_PAYOUTS_RPC_URL=...`
+   - `APP_PAYOUTS_USDC_ADDRESS=...`
+   - `APP_PAYOUTS_WALLET_PRIVATE_KEY=...`
+4. Export different consumer and provider wallets before seeding or running the
+   example clients:
+   - `export CONSUMER_PRIVATE_KEY=0x...`
+   - `export PROVIDER_PRIVATE_KEY=0x...`
+   - `export API_BASE_URL=http://127.0.0.1:8000`
+   - `export SIWE_DOMAIN=127.0.0.1`
+   The consumer and provider keys must resolve to different Base Sepolia
+   wallets.
+5. Point the seeded service at a reachable upstream with
    `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
    If you change those values, rerun the demo seed so the stored upstream rows
    in the database are updated.
-4. Run migrations and seed data:
+6. Run migrations and seed data:
    `uv run alembic upgrade head`
    `make seed`
-5. Authenticate the buyer wallet with the same private key the example x402
-   client uses:
-   `GET /v1/auth/nonce?address=<wallet>`
-   sign the returned nonce in a SIWE message whose domain matches
-   `APP_SIWE_DOMAIN`
-   `POST /v1/auth/verify`
-6. Optionally create an API key for repeated manual calls:
-   `POST /v1/auth/api-keys`
-7. Create a quote for the paid endpoint:
-   `POST /v1/services/demo-agent-service/quote`
-8. Invoke with `Authorization: Bearer <jwt-or-api-key>` and `Idempotency-Key`. The first
-   unpaid request should return `402 Payment Required` with
-   `PAYMENT-REQUIRED`.
-9. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
-   A successful paid invoke returns the upstream response plus
-   `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
-10. Provider earnings are recorded as `READY` payout rows after settlement.
-    To execute the provider transfer, authenticate as the provider with a JWT
-    and call `POST /v1/provider/payouts` with an `Idempotency-Key`. Reusing the
-    same key resumes or replays that provider's payout batch safely. Use
-    `GET /v1/provider/payouts` to inspect the filtered payout list plus
-    per-currency summaries for the same status scope.
+7. Run the local upstream and API:
+   `make demo-upstream`
+   `make demo-api`
+8. Run the consumer flow:
+   `make demo-client`
+   This authenticates with `CONSUMER_PRIVATE_KEY`, creates a quote, invokes the
+   free endpoint, pays for the paid endpoint, and prints the
+   `PAYMENT-RESPONSE` settlement details.
+9. Run the provider payout flow:
+   `make demo-provider`
+   This authenticates with `PROVIDER_PRIVATE_KEY`, lists provider payouts,
+   calls `POST /v1/provider/payouts`, and lists payouts again so you can see
+   the resulting status change.
 
 Quote prices remain in USD minor units at the API layer. The x402 integration
 converts that amount to USDC base units internally before verify/settle.

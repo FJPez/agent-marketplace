@@ -9,6 +9,7 @@ This demo gives you a local end-to-end path for:
 - signed paid retry with the Python x402 client
 - payment settlement through the CDP facilitator
 - Base Sepolia transaction verification for the buyer and settlement wallet
+- provider payout execution from the treasury wallet to a different provider wallet
 
 ## Prerequisites
 
@@ -17,8 +18,8 @@ This demo gives you a local end-to-end path for:
 - PostgreSQL on `localhost:5432`
   - You can use your own local Postgres, or `docker compose up -d postgres`
 - a Base Sepolia private key for the buyer wallet
+- a Base Sepolia private key for the provider wallet
 - a Base Sepolia address for the marketplace settlement wallet
-- a Base Sepolia address for the provider payout wallet
 - a CDP secret API key id and secret for the facilitator
 
 ## What You Need Before Starting
@@ -29,13 +30,15 @@ You need three wallet roles for the full paid demo:
   - used by `examples/client.py`
   - must be an EVM wallet on Base Sepolia
   - you must have the private key locally as `CONSUMER_PRIVATE_KEY`
+- Provider wallet:
+  - used by `scripts/seed_demo.py` and `examples/provider_client.py`
+  - must be a different EVM wallet on Base Sepolia
+  - you must have the private key locally as `PROVIDER_PRIVATE_KEY`
 - Marketplace settlement wallet:
   - set as `APP_X402_PAY_TO_ADDRESS`
-  - only the address is needed for paid invoke settlement
+  - should match the address controlled by `APP_PAYOUTS_WALLET_PRIVATE_KEY`
   - this is the wallet the x402 payment requirement points to
-- Provider payout wallet:
-  - stored on the provider account profile
-  - receives funds only when the provider later requests payout
+  - this is also the wallet that later sends provider payouts
 
 For the full paid retry path, the buyer wallet should be prepared for Base Sepolia:
 
@@ -44,9 +47,12 @@ For the full paid retry path, the buyer wallet should be prepared for Base Sepol
 - fund the buyer wallet with Base Sepolia USDC
 - never commit the private key to the repo or put it in `.env.example`
 
-The provider payout wallet should also be a Base Sepolia EVM address. It does
-not need a private key in this repo; only the address is required so the payout
-request flow knows where to send provider funds.
+The provider wallet should also be prepared for Base Sepolia:
+
+- fund the provider wallet with Base Sepolia ETH for wallet-auth and any manual checks
+- keep `PROVIDER_PRIVATE_KEY` local only
+- the seed script derives the provider account wallet address from `PROVIDER_PRIVATE_KEY`
+- `CONSUMER_PRIVATE_KEY` and `PROVIDER_PRIVATE_KEY` must resolve to different wallets
 
 You also need CDP facilitator credentials:
 
@@ -103,7 +109,7 @@ APP_X402_NETWORK_CAIP2=eip155:84532
 APP_X402_CDP_API_KEY_ID=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
 APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n
 APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_SETTLEMENT_ADDRESS
-APP_PAYOUTS_ENABLED=false
+APP_PAYOUTS_ENABLED=true
 APP_PAYOUTS_RPC_URL=https://sepolia.base.org
 APP_PAYOUTS_CHAIN_ID=84532
 APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000
@@ -161,9 +167,8 @@ What each setting does:
 - `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_SETTLEMENT_ADDRESS`
   - marketplace settlement address advertised in the x402 payment requirement
   - must be a Base Sepolia EVM address
-- `APP_PAYOUTS_ENABLED=false`
-  - leave this `false` if you only want to test paid settlement
-  - set it to `true` only when you also want to test provider payout execution
+- `APP_PAYOUTS_ENABLED=true`
+  - required for the full consumer-to-provider payout demo
 - `APP_PAYOUTS_RPC_URL=https://sepolia.base.org`
   - Base Sepolia RPC used for provider payout execution
 - `APP_PAYOUTS_CHAIN_ID=84532`
@@ -172,6 +177,7 @@ What each setting does:
   - USDC token contract used for provider payout execution
 - `APP_PAYOUTS_WALLET_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY`
   - treasury signer used when `POST /v1/provider/payouts` executes provider payouts
+  - should correspond to `APP_X402_PAY_TO_ADDRESS` for a coherent treasury flow
 - `APP_API_RATE_LIMIT=120/minute`
   - base rate limit for authenticated API traffic
 - `APP_INVOKE_RATE_LIMIT=60/minute`
@@ -209,6 +215,31 @@ Important:
 - the demo service stores upstream targets in the database, so changing `.env`
   alone is not enough
 
+## Export Demo Wallets
+
+Before you run `make seed`, `make demo-client`, or `make demo-provider`, export:
+
+```bash
+export CONSUMER_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_CONSUMER_PRIVATE_KEY
+export PROVIDER_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_PROVIDER_PRIVATE_KEY
+export API_BASE_URL=http://127.0.0.1:8000
+export SIWE_DOMAIN=127.0.0.1
+```
+
+These values mean:
+
+- `CONSUMER_PRIVATE_KEY`
+  - buyer wallet private key for Base Sepolia
+  - used by the consumer example for wallet auth and x402 payment signing
+- `PROVIDER_PRIVATE_KEY`
+  - provider wallet private key for Base Sepolia
+  - used by the seed script to set the provider account wallet
+  - used by the provider example for wallet auth and payout execution
+- `API_BASE_URL`
+  - local marketplace API base URL
+- `SIWE_DOMAIN`
+  - should match the host used by `API_BASE_URL`
+
 ## Start the Mock Upstream
 
 In one terminal:
@@ -238,12 +269,13 @@ paid_endpoint_id=2
 demo_upstream_base_url=http://127.0.0.1:9000
 demo_free_upstream_path=/free-ping
 demo_paid_upstream_path=/paid-summary
-demo_provider_wallet=0x00000000000000000000000000000000000000a1
+demo_provider_wallet=0xYOUR_PROVIDER_WALLET
+configured_consumer_wallet=0xYOUR_CONSUMER_WALLET
 ```
 
-The seed now prepares only the provider-owned demo service. The example client
-authenticates as whichever wallet matches `CONSUMER_PRIVATE_KEY`, so there is
-no seeded consumer account id to export.
+The seed prepares only the provider-owned demo service. The seeded provider
+wallet comes from `PROVIDER_PRIVATE_KEY`, while the consumer continues to
+authenticate dynamically from `CONSUMER_PRIVATE_KEY`.
 
 Pricing note:
 
@@ -265,25 +297,13 @@ make demo-api
 
 The API will be available at `http://127.0.0.1:8000`.
 
-## Run the Example Client
+## Run the Consumer Example Client
 
 In a fourth terminal:
 
 ```bash
-export CONSUMER_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_PRIVATE_KEY
-export API_BASE_URL=http://127.0.0.1:8000
-
 make demo-client
 ```
-
-What these values mean:
-
-- `CONSUMER_PRIVATE_KEY`
-  - buyer wallet private key for Base Sepolia
-  - used by the example client for both wallet auth and x402 payment signing
-- `API_BASE_URL`
-  - local marketplace API base URL
-  - the host should match `APP_SIWE_DOMAIN` unless you explicitly set `SIWE_DOMAIN`
 
 The example client uses the installed Python x402 client and Base Sepolia network `eip155:84532`.
 
@@ -301,13 +321,27 @@ On success the example client also logs:
 - the raw `PAYMENT-RESPONSE` header
 - the decoded settlement payload
 - the transaction hash you can inspect on Base Sepolia
+- a reminder to run `make demo-provider` next
 
 After a successful paid retry, provider earnings are recorded internally as
-`READY` payouts. If `APP_PAYOUTS_ENABLED=true`, authenticate as the provider
-with a JWT and call `POST /v1/provider/payouts` with an `Idempotency-Key` to
-execute the provider transfer. Reusing the same key safely resumes or replays
-that provider's payout batch. Use `GET /v1/provider/payouts` to inspect the
-resulting payout list and per-currency summaries.
+`READY` payouts for the wallet derived from `PROVIDER_PRIVATE_KEY`.
+
+## Run the Provider Example Client
+
+In a fifth terminal:
+
+```bash
+make demo-provider
+```
+
+The provider example client will:
+
+1. Authenticate as the provider using `PROVIDER_PRIVATE_KEY`
+2. Call `GET /v1/provider/payouts` before execution
+3. Call `POST /v1/provider/payouts` with a fresh `Idempotency-Key`
+4. Call `GET /v1/provider/payouts` again after execution
+
+This gives you the full flow from consumer payment to provider withdrawal.
 
 On failure the example client logs:
 
@@ -343,6 +377,9 @@ You should see:
 - a successful paid retry with `200`
 - a `PAYMENT-RESPONSE` header
 - a decoded settlement payload with `transaction` and `network`
+- provider payout summaries that show `READY` rows before `make demo-provider`
+- a provider payout request response after `make demo-provider`
+- provider payout summaries that show terminal payout rows after the provider step
 
 When the paid retry succeeds, take the `transaction` value from the decoded
 `PAYMENT-RESPONSE` and verify it on the Base Sepolia explorer:
@@ -352,7 +389,7 @@ When the paid retry succeeds, take the `transaction` value from the decoded
 - confirm the buyer wallet is the payer
 - confirm the settlement address matches `APP_X402_PAY_TO_ADDRESS`
 
-If you later request provider payout execution, compare the treasury settlement
+When the provider payout request succeeds, compare the treasury settlement
 wallet and the provider wallet before and after `POST /v1/provider/payouts`.
 
 If the facilitator cannot authenticate or settle, you will see the retry fail
@@ -438,3 +475,17 @@ If the paid retry returns `502 {"detail":"facilitator unavailable"}`, the local 
 - the example x402 client signed and retried the paid request
 
 That specific error means the external facilitator did not complete verify/settle for the retry request.
+
+If `make seed` fails immediately, confirm:
+
+- `PROVIDER_PRIVATE_KEY` is exported in the shell running `make seed`
+- `PROVIDER_PRIVATE_KEY` resolves to a valid EVM private key
+- `PROVIDER_PRIVATE_KEY` and `CONSUMER_PRIVATE_KEY` are not the same wallet
+
+If `make demo-provider` returns `409 {"detail":"no ready payouts available"}`, confirm:
+
+- `make demo-client` completed a successful paid retry first
+- `APP_PAYOUTS_ENABLED=true`
+- the seeded provider wallet from `make seed` matches the wallet used by `PROVIDER_PRIVATE_KEY`
+
+If `make demo-provider` returns `409 {"detail":"provider wallet address is not configured"}`, rerun `make seed` in a shell where `PROVIDER_PRIVATE_KEY` is exported correctly.
