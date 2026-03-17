@@ -12,3 +12,27 @@ services:
       retries: 5
     ports:
       - "5432:5432"
+  app:
+    build:
+      context: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agent_marketplace
+      APP_JWT_SECRET_KEY: test-secret-key-with-32-bytes-123
+      APP_SIWE_DOMAIN: localhost
+      PORT: 8000
+    ports:
+      - "18000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
