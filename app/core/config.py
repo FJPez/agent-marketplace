@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     wallet_change_cooldown: int = 604800
     api_key_prefix: str = "amp_"
     quote_ttl_seconds: int = 300
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout: float = 30.0
+    db_pool_recycle: int = 1800
+    http_connect_timeout: float = 5.0
+    http_read_timeout: float = 15.0
+    http_write_timeout: float = 15.0
+    http_pool_timeout: float = 5.0
+    http_max_connections: int = 100
+    http_max_keepalive_connections: int = 20
     x402_facilitator_url: str = "https://x402.org/facilitator"
     x402_network: str = "base-sepolia"
     x402_network_caip2: str = "eip155:84532"
