@@ -7,6 +7,7 @@ os.environ["APP_JWT_SECRET_KEY"] = "test-secret-key-with-32-bytes-123"
 os.environ["APP_SIWE_DOMAIN"] = "testserver"
 os.environ.pop("APP_ENV_FILE", None)
 
+import coredis
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -53,6 +54,26 @@ def use_dedicated_test_database() -> Generator[None, None, None]:
 def db_settings(use_dedicated_test_database: None) -> Settings:
     _ = use_dedicated_test_database
     return Settings(database_url=require_test_database_url(Settings().database_url))
+
+
+async def _flush_redis_database(redis_url: str) -> None:
+    redis_client = coredis.Redis.from_url(redis_url, decode_responses=True)
+    try:
+        await redis_client.flushdb()
+    finally:
+        redis_client.connection_pool.disconnect()
+
+
+@pytest.fixture
+def test_redis_url() -> Generator[str, None, None]:
+    redis_url = os.environ.get("TEST_REDIS_URL")
+    assert redis_url is not None
+
+    asyncio.run(_flush_redis_database(redis_url))
+    try:
+        yield redis_url
+    finally:
+        asyncio.run(_flush_redis_database(redis_url))
 
 
 @pytest.fixture

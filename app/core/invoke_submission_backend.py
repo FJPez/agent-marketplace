@@ -105,14 +105,16 @@ class RedisInvokeSubmissionBackend:
     async def release(self, submission_key: str, request_fingerprint: str) -> None:
         await self._redis_client.eval(
             _COMPARE_AND_DELETE_SCRIPT,
-            keys=[self._build_key(submission_key)],
-            args=[request_fingerprint],
+            keys=(self._build_key(submission_key),),
+            args=(request_fingerprint,),
         )
 
     async def reset(self) -> None:
-        keys = [key async for key in self._redis_client.scan_iter(match=f"{self._key_prefix}:*")]
+        keys = [
+            key async for key in self._redis_client.scan_iter(match=f"{self._key_prefix}:*")
+        ]
         if keys:
-            await self._redis_client.delete(*keys)
+            await self._redis_client.delete(tuple(keys))
 
 
 def create_invoke_submission_backend(
