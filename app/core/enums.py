@@ -3,6 +3,7 @@ from enum import StrEnum
 
 class AppEnv(StrEnum):
     DEV = "dev"
+    STAGING = "staging"
     TEST = "test"
     PROD = "prod"
 

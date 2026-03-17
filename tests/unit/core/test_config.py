@@ -126,3 +126,84 @@ def test_settings_ignore_local_dotenv_without_explicit_env_file(
 
     assert settings.jwt_secret_key == "test-secret-key-with-32-bytes-123"
     assert settings.siwe_domain == "testserver"
+
+
+def test_settings_reject_debug_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_DEBUG", "true")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+
+    with pytest.raises(ValidationError, match="debug must be false"):
+        Settings()
+
+
+def test_settings_require_non_local_database_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv(
+        "APP_DATABASE_URL",
+        "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace",
+    )
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
+
+    with pytest.raises(ValidationError, match="database_url must point to a non-local database"):
+        Settings()
+
+
+def test_settings_require_non_default_siwe_domain_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "testserver")
+
+    with pytest.raises(ValidationError, match="siwe_domain must be explicitly set"):
+        Settings()
+
+
+def test_settings_require_cdp_credentials_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    monkeypatch.setenv("APP_X402_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
+    monkeypatch.delenv("APP_X402_CDP_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APP_X402_CDP_API_KEY_SECRET", raising=False)
+
+    with pytest.raises(ValidationError, match="x402_cdp_api_key_id and x402_cdp_api_key_secret"):
+        Settings()
+
+
+def test_settings_accept_valid_deployment_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv(
+        "APP_DATABASE_URL", "postgresql+asyncpg://db.internal:5432/agent_marketplace"
+    )
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
+
+    settings = Settings()
+
+    assert settings.env is AppEnv.STAGING
+    assert settings.debug is False
