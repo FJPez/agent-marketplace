@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from limits import RateLimitItem, parse
-from limits.aio.storage import MemoryStorage
+from limits.aio.storage import MemoryStorage, RedisStorage
 from limits.aio.strategies import FixedWindowRateLimiter
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.security import hash_api_key
 
 if TYPE_CHECKING:
@@ -40,7 +40,19 @@ def _parse_limit(limit_value: str) -> RateLimitItem:
     return parse(limit_value)
 
 
-class RateLimitsBackend:
+class RateLimitsBackend(Protocol):
+    async def hit(
+        self,
+        limit_value: str,
+        *,
+        key: str,
+        scope: str,
+    ) -> bool: ...
+
+    async def reset(self) -> None: ...
+
+
+class MemoryRateLimitsBackend:
     def __init__(self) -> None:
         self._storage = MemoryStorage()
         self._limiter = FixedWindowRateLimiter(self._storage)
@@ -59,6 +71,37 @@ class RateLimitsBackend:
         await self._storage.reset()
 
 
-@lru_cache
+class RedisRateLimitsBackend:
+    def __init__(self, redis_url: str, *, key_prefix: str = "agent-marketplace") -> None:
+        self._storage = RedisStorage(
+            redis_url,
+            implementation="coredis",
+            key_prefix=f"{key_prefix}:rate-limits",
+        )
+        self._limiter = FixedWindowRateLimiter(self._storage)
+
+    async def hit(
+        self,
+        limit_value: str,
+        *,
+        key: str,
+        scope: str,
+    ) -> bool:
+        item = _parse_limit(limit_value)
+        return await self._limiter.hit(item, scope, key)
+
+    async def reset(self) -> None:
+        await self._storage.reset()
+
+
+def create_rate_limits_backend(settings: Settings) -> RateLimitsBackend:
+    if settings.redis_url:
+        return RedisRateLimitsBackend(
+            settings.redis_url,
+            key_prefix=f"agent-marketplace:{settings.env.value}",
+        )
+    return MemoryRateLimitsBackend()
+
+
 def get_rate_limits_backend() -> RateLimitsBackend:
-    return RateLimitsBackend()
+    return create_rate_limits_backend(get_settings())

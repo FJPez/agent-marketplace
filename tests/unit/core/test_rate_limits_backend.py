@@ -1,11 +1,11 @@
+import importlib
+import importlib.util
+
 import pytest
 from starlette.requests import Request
 
-from app.core.rate_limits_backend import (
-    RateLimitsBackend,
-    build_actor_rate_limit_key,
-    build_client_rate_limit_key,
-)
+from app.core.config import Settings
+from app.core.rate_limits_backend import build_actor_rate_limit_key, build_client_rate_limit_key
 
 
 def _build_request(
@@ -48,7 +48,12 @@ def test_build_actor_rate_limit_key_hashes_api_key_tokens() -> None:
 
 @pytest.mark.asyncio
 async def test_rate_limits_backend_reset_clears_recorded_hits() -> None:
-    backend = RateLimitsBackend()
+    module = importlib.import_module("app.core.rate_limits_backend")
+    backend_type = getattr(module, "MemoryRateLimitsBackend", None)
+
+    assert backend_type is not None
+
+    backend = backend_type()
     request = _build_request()
     key = build_client_rate_limit_key(request)
 
@@ -60,3 +65,51 @@ async def test_rate_limits_backend_reset_clears_recorded_hits() -> None:
     assert first_allowed is True
     assert second_allowed is False
     assert third_allowed is True
+
+
+def test_create_rate_limits_backend_defaults_to_memory_without_redis_url() -> None:
+    module = importlib.import_module("app.core.rate_limits_backend")
+    backend_factory = getattr(module, "create_rate_limits_backend", None)
+    memory_backend_type = getattr(module, "MemoryRateLimitsBackend", None)
+
+    assert callable(backend_factory)
+    assert memory_backend_type is not None
+
+    backend = backend_factory(
+        Settings(
+            jwt_secret_key="test-secret-key-with-32-bytes-123",
+            redis_url=None,
+        )
+    )
+
+    assert isinstance(backend, memory_backend_type)
+
+
+def test_create_rate_limits_backend_supports_redis_backends() -> None:
+    module = importlib.import_module("app.core.rate_limits_backend")
+    backend_factory = getattr(module, "create_rate_limits_backend", None)
+    redis_backend_type = getattr(module, "RedisRateLimitsBackend", None)
+
+    assert callable(backend_factory)
+    assert redis_backend_type is not None
+
+    backend = backend_factory(
+        Settings(
+            jwt_secret_key="test-secret-key-with-32-bytes-123",
+            redis_url="redis://localhost:6379/0",
+        )
+    )
+
+    assert isinstance(backend, redis_backend_type)
+
+
+def test_rate_limits_backend_module_exposes_backend_abstractions() -> None:
+    spec = importlib.util.find_spec("app.core.rate_limits_backend")
+
+    assert spec is not None
+
+    module = importlib.import_module("app.core.rate_limits_backend")
+
+    assert getattr(module, "MemoryRateLimitsBackend", None) is not None
+    assert getattr(module, "RedisRateLimitsBackend", None) is not None
+    assert callable(getattr(module, "create_rate_limits_backend", None))

@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     http_pool_timeout: float = 5.0
     http_max_connections: int = 100
     http_max_keepalive_connections: int = 20
+    redis_url: str | None = None
     x402_facilitator_url: str = "https://x402.org/facilitator"
     x402_network: str = "base-sepolia"
     x402_network_caip2: str = "eip155:84532"
