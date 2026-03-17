@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps.auth import CurrentActor
+from app.api.deps.auth import CurrentActor, CurrentJwtActor
 from app.core.enums import PayoutStatus
 from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
@@ -72,21 +72,28 @@ async def get_provider_payouts(
 ) -> ProviderPayoutListResponse:
     service = PayoutReportingService(session)
     payouts = await service.get_provider_payouts(actor, status=payout_status)
-    summaries = await service.get_provider_payout_summaries(actor)
+    summaries = await service.get_provider_payout_summaries(actor, status=payout_status)
     return ProviderPayoutListResponse(
-        summary=(
-            None
-            if len(summaries) != 1
-            else ProviderPayoutSummaryResponse.from_summary(summaries[0])
-        ),
-        summaries=[ProviderPayoutSummaryResponse.from_summary(summary) for summary in summaries],
+        summaries=[
+            ProviderPayoutSummaryResponse.from_values(
+                currency=summary.currency,
+                total_count=summary.total_count,
+                ready_count=summary.ready_count,
+                pending_count=summary.pending_count,
+                sent_count=summary.sent_count,
+                failed_count=summary.failed_count,
+                total_amount_minor=summary.total_amount_minor,
+                sent_amount_minor=summary.sent_amount_minor,
+            )
+            for summary in summaries
+        ],
         payouts=[ProviderPayoutResponse.from_model(payout) for payout in payouts],
     )
 
 
 @router.post("/payouts", response_model=ProviderPayoutRequestResponse)
 async def request_provider_payouts(
-    actor: CurrentActor,
+    actor: CurrentJwtActor,
     fastapi_request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
@@ -99,4 +106,10 @@ async def request_provider_payouts(
         result = await service.request_provider_payouts(actor, idempotency_key=idempotency_key)
     except PayoutConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return ProviderPayoutRequestResponse.from_result(result)
+    return ProviderPayoutRequestResponse.from_values(
+        idempotency_key=result.idempotency_key,
+        requested_count=result.requested_count,
+        sent_count=result.sent_count,
+        failed_count=result.failed_count,
+        payouts=[ProviderPayoutResponse.from_model(payout) for payout in result.payouts],
+    )

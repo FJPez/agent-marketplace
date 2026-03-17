@@ -3,6 +3,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from app.core.enums import LedgerEntryType
+from app.core.logging import (
+    INVOCATION_ID_FIELD,
+    PAYMENT_ATTEMPT_ID_FIELD,
+    PROVIDER_ACCOUNT_ID_FIELD,
+    SERVICE_ID_FIELD,
+    build_event_context,
+    get_logger,
+)
 from app.repositories.ledger_entry_repo import LedgerEntryRepository, LedgerSummary
 
 if TYPE_CHECKING:
@@ -13,6 +21,7 @@ if TYPE_CHECKING:
 
 PLATFORM_FEE_BPS = 1000
 BPS_DENOMINATOR = 10_000
+logger = get_logger(__name__)
 
 
 def split_paid_invocation_amount(amount_minor: int) -> tuple[int, int]:
@@ -85,6 +94,18 @@ class LedgerService:
                 amount_minor=entry_amount,
                 currency=currency,
             )
+        logger.info(
+            "ledger entries recorded",
+            extra=build_event_context(
+                "ledger.recorded",
+                **{
+                    PROVIDER_ACCOUNT_ID_FIELD: provider_account_id,
+                    SERVICE_ID_FIELD: service_id,
+                    INVOCATION_ID_FIELD: invocation_id,
+                    PAYMENT_ATTEMPT_ID_FIELD: payment_attempt_id,
+                },
+            ),
+        )
 
     async def get_provider_ledger(self, actor: ActorContext) -> list[LedgerEntry]:
         return await self._ledger_repo.list_for_provider(provider_account_id=actor.account_id)

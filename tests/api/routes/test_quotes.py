@@ -190,7 +190,10 @@ async def test_create_quote_logs_correlated_quote_event(
 
     assert response.status_code == 201
     record = next(
-        record for record in caplog.records if record.name == "app.services.quote_service"
+        record
+        for record in caplog.records
+        if record.name == "app.services.quote_service"
+        and getattr(record, EVENT_FIELD, None) == "quote.created"
     )
     assert getattr(record, EVENT_FIELD) == "quote.created"
     assert getattr(record, REQUEST_ID_FIELD) == "quote-req-1"

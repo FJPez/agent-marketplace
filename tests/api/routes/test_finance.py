@@ -19,8 +19,10 @@ from app.core.enums import (
 )
 from app.core.lifespan import get_app_state
 from app.core.logging import EVENT_FIELD, PAYOUT_COUNT_FIELD, REQUEST_ID_FIELD
+from app.core.security import hash_api_key
 from app.db.models import (
     Account,
+    ApiKey,
     Invocation,
     PaymentAttempt,
     Payout,
@@ -29,12 +31,17 @@ from app.db.models import (
     ServiceEndpoint,
     ServiceRevision,
 )
+from app.integrations.payouts import PreparedPayout, SentPayout
 from app.repositories.ledger_entry_repo import LedgerEntryRepository
 from app.services.ledger_service import LedgerService
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
     return auth_headers_for_account_id(account_id)
+
+
+def _api_key_headers() -> dict[str, str]:
+    return {"Authorization": "Bearer amp_test-key"}
 
 
 async def _seed_provider_finance_data(
@@ -163,6 +170,22 @@ async def _seed_provider_finance_data(
         return provider_account.id, service.id
 
 
+async def _seed_provider_api_key(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+) -> None:
+    async with db_session_factory.begin() as session:
+        session.add(
+            ApiKey(
+                account_id=account_id,
+                name="provider-key",
+                key_prefix="amp_",
+                key_hash=hash_api_key("amp_test-key"),
+            )
+        )
+
+
 async def _seed_provider_payout_data(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[int, int]:
@@ -269,13 +292,11 @@ async def _seed_provider_ready_payout_data(
         provider_account = await session.get(Account, provider_account_id)
         assert provider_account is not None
         provider_account.wallet_address = wallet_address
-        consumer_account = await session.scalar(
-            select(Account).where(Account.id != provider_account_id).order_by(Account.id)
-        )
         invocation = await session.scalar(
             select(Invocation).where(Invocation.service_id == service_id).order_by(Invocation.id)
         )
         assert invocation is not None
+        consumer_account = await session.get(Account, invocation.consumer_account_id)
         quote = await session.scalar(
             select(Quote).where(Quote.service_id == service_id).order_by(Quote.id)
         )
@@ -386,7 +407,7 @@ class _SuccessfulPayoutExecutor:
         amount_minor: int,
         idempotency_key: str,
         nonce: int,
-    ) -> dict[str, object]:
+    ) -> PreparedPayout:
         self.prepare_calls.append(
             {
                 "destination_wallet": destination_wallet,
@@ -395,26 +416,30 @@ class _SuccessfulPayoutExecutor:
                 "nonce": nonce,
             }
         )
-        return {
-            "raw_transaction": f"0xrawtx{nonce}",
-            "reference": f"0xsent{nonce}",
-            "network": "base-sepolia",
-            "token_address": "0x0000000000000000000000000000000000000001",
-        }
+        return PreparedPayout(
+            raw_transaction=f"0xrawtx{nonce}",
+            reference=f"0xsent{nonce}",
+            network="base-sepolia",
+            token_address="0x0000000000000000000000000000000000000001",
+        )
 
     async def send_prepared_payout(
         self,
         *,
         raw_transaction: str,
         reference: str,
-    ) -> dict[str, object]:
+    ) -> SentPayout:
         self.send_calls.append(
             {
                 "raw_transaction": raw_transaction,
                 "reference": reference,
             }
         )
-        return {"reference": reference}
+        return SentPayout(
+            reference=reference,
+            network="base-sepolia",
+            token_address="0x0000000000000000000000000000000000000001",
+        )
 
 
 def _install_payout_state(app: FastAPI, *, payout_executor: object) -> None:
@@ -469,6 +494,25 @@ async def test_provider_payout_request_requires_idempotency_key(
 
 
 @pytest.mark.asyncio
+async def test_provider_payout_request_rejects_api_key_auth(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+    await _seed_provider_api_key(db_session_factory, account_id=provider_account_id)
+    _install_payout_state(app, payout_executor=_SuccessfulPayoutExecutor())
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_api_key_headers(), "Idempotency-Key": "payout-request-api-key"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "jwt authentication required"}
+
+
+@pytest.mark.asyncio
 async def test_get_provider_earnings_returns_currency_totals(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -517,7 +561,7 @@ async def test_get_provider_ledger_returns_entries_newest_first(
 
 
 @pytest.mark.asyncio
-async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
+async def test_get_provider_payouts_returns_provider_scoped_records_and_summaries(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
     caplog: pytest.LogCaptureFixture,
@@ -543,7 +587,7 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
         "sent_amount_minor": 4_500_000,
     }
     assert body["summaries"] == [expected_summary]
-    assert body["summary"] == expected_summary
+    assert "summary" not in body
     payouts = body["payouts"]
     assert len(payouts) == 2
     assert payouts[0]["service_id"] == service_id
@@ -569,7 +613,10 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
     assert isinstance(payouts[1]["invocation_id"], int)
     assert isinstance(payouts[1]["payment_attempt_id"], int)
     record = next(
-        record for record in caplog.records if record.name == "app.services.payout_service"
+        record
+        for record in caplog.records
+        if record.name == "app.services.payout_service"
+        and getattr(record, EVENT_FIELD, None) == "payout.reporting_listed"
     )
     assert getattr(record, EVENT_FIELD) == "payout.reporting_listed"
     assert getattr(record, REQUEST_ID_FIELD) == "payout-list-req"
@@ -589,8 +636,20 @@ async def test_get_provider_payouts_filters_by_status(
     )
 
     assert response.status_code == 200
-    assert response.json()["summaries"][0]["failed_count"] == 1
-    assert [item["status"] for item in response.json()["payouts"]] == ["failed"]
+    body = response.json()
+    assert body["summaries"] == [
+        {
+            "currency": "USDC",
+            "total_count": 1,
+            "ready_count": 0,
+            "pending_count": 0,
+            "sent_count": 0,
+            "failed_count": 1,
+            "total_amount_minor": 4_400_000,
+            "sent_amount_minor": 0,
+        }
+    ]
+    assert [item["status"] for item in body["payouts"]] == ["failed"]
 
 
 @pytest.mark.asyncio

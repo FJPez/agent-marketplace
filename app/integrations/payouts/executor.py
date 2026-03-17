@@ -25,6 +25,21 @@ class PayoutExecutionError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedPayout:
+    raw_transaction: str
+    reference: str
+    network: str
+    token_address: str
+
+
+@dataclass(frozen=True, slots=True)
+class SentPayout:
+    reference: str
+    network: str
+    token_address: str
+
+
 @runtime_checkable
 class SupportsPayoutExecutor(Protocol):
     async def current_nonce(self) -> int: ...
@@ -36,14 +51,14 @@ class SupportsPayoutExecutor(Protocol):
         amount_minor: int,
         idempotency_key: str,
         nonce: int,
-    ) -> dict[str, object]: ...
+    ) -> PreparedPayout: ...
 
     async def send_prepared_payout(
         self,
         *,
         raw_transaction: str,
         reference: str,
-    ) -> dict[str, object]: ...
+    ) -> SentPayout: ...
 
 
 @dataclass(slots=True, repr=False)
@@ -63,7 +78,7 @@ class BaseSepoliaUsdcPayoutExecutor:
         amount_minor: int,
         idempotency_key: str,
         nonce: int,
-    ) -> dict[str, object]:
+    ) -> PreparedPayout:
         if amount_minor <= 0:
             msg = "payout amount must be positive"
             raise PayoutExecutionError(msg)
@@ -83,7 +98,7 @@ class BaseSepoliaUsdcPayoutExecutor:
         *,
         raw_transaction: str,
         reference: str,
-    ) -> dict[str, object]:
+    ) -> SentPayout:
         return await asyncio.to_thread(
             self._send_prepared_payout_sync,
             raw_transaction=raw_transaction,
@@ -102,7 +117,7 @@ class BaseSepoliaUsdcPayoutExecutor:
         destination_wallet: str,
         amount_minor: int,
         nonce: int,
-    ) -> dict[str, object]:
+    ) -> PreparedPayout:
         web3 = Web3(HTTPProvider(self.rpc_url))
         sender = Account.from_key(self.private_key)
         sender_address = Web3.to_checksum_address(sender.address)
@@ -122,19 +137,19 @@ class BaseSepoliaUsdcPayoutExecutor:
             }
         )
         signed = web3.eth.account.sign_transaction(transaction, private_key=self.private_key)
-        return {
-            "raw_transaction": signed.raw_transaction.hex(),
-            "reference": signed.hash.hex(),
-            "network": "base-sepolia",
-            "token_address": token_address,
-        }
+        return PreparedPayout(
+            raw_transaction=signed.raw_transaction.hex(),
+            reference=signed.hash.hex(),
+            network="base-sepolia",
+            token_address=token_address,
+        )
 
     def _send_prepared_payout_sync(
         self,
         *,
         raw_transaction: str,
         reference: str,
-    ) -> dict[str, object]:
+    ) -> SentPayout:
         web3 = Web3(HTTPProvider(self.rpc_url))
         try:
             tx_hash = web3.eth.send_raw_transaction(_decode_hex_bytes(raw_transaction))
@@ -143,11 +158,11 @@ class BaseSepoliaUsdcPayoutExecutor:
             if "already known" not in message and "already imported" not in message:
                 raise PayoutExecutionError(str(exc)) from exc
             tx_hash = _decode_hex_bytes(reference)
-        return {
-            "reference": tx_hash.hex(),
-            "network": "base-sepolia",
-            "token_address": Web3.to_checksum_address(self.token_address),
-        }
+        return SentPayout(
+            reference=tx_hash.hex(),
+            network="base-sepolia",
+            token_address=Web3.to_checksum_address(self.token_address),
+        )
 
 
 def _decode_hex_bytes(value: str) -> bytes:

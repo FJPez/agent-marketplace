@@ -19,7 +19,7 @@ from app.db.models import (
     ServiceEndpoint,
     ServiceRevision,
 )
-from app.repositories.payout_repo import PayoutRepository
+from app.repositories.payout_repo import PayoutExecutionRepository, PayoutReportingRepository
 
 
 async def _seed_payout_dependencies(
@@ -174,8 +174,8 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
     ) = await _seed_payout_dependencies(db_session_factory)
 
     async with db_session_factory.begin() as session:
-        repo = PayoutRepository(session)
-        first = repo.add(
+        execution_repo = PayoutExecutionRepository(session)
+        first = execution_repo.add(
             provider_account_id=provider_account_id,
             service_id=service_id,
             invocation_id=invocation_id,
@@ -189,7 +189,7 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
             chain_nonce=9,
         )
         first.transfer_reference = "0xsent"
-        second = repo.add(
+        second = execution_repo.add(
             provider_account_id=provider_account_id,
             service_id=service_id,
             invocation_id=retry_invocation_id,
@@ -205,23 +205,26 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
         second.error_message = "rpc unavailable"
 
     async with db_session_factory() as session:
-        repo = PayoutRepository(session)
-        payouts = await repo.list_for_provider(provider_account_id=provider_account_id)
-        failed = await repo.list_for_provider(
+        reporting_repo = PayoutReportingRepository(session)
+        execution_repo = PayoutExecutionRepository(session)
+        payouts = await reporting_repo.list_for_provider(provider_account_id=provider_account_id)
+        failed = await reporting_repo.list_for_provider(
             provider_account_id=provider_account_id,
             status=PayoutStatus.FAILED,
         )
-        replay = await repo.list_for_provider_request(
+        replay = await execution_repo.list_for_provider_request(
             provider_account_id=provider_account_id,
             request_idempotency_key="payout-request-1",
         )
-        summaries = await repo.summarize_for_provider(provider_account_id=provider_account_id)
-        max_chain_nonce = await repo.get_max_chain_nonce()
+        summaries = await reporting_repo.summarize_for_provider(
+            provider_account_id=provider_account_id
+        )
+        max_chain_nonce = await execution_repo.get_max_claimed_chain_nonce()
 
     assert [payout.status.value for payout in payouts] == ["failed", "sent"]
     assert failed[0].error_message == "rpc unavailable"
-    assert [payout.id for payout in replay] == [second.id, first.id]
-    assert max_chain_nonce == 10
+    assert [payout.id for payout in replay] == [first.id, second.id]
+    assert max_chain_nonce == 9
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary.currency == "USDC"
@@ -248,8 +251,8 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
     ) = await _seed_payout_dependencies(db_session_factory)
 
     async with db_session_factory.begin() as session:
-        repo = PayoutRepository(session)
-        repo.add(
+        execution_repo = PayoutExecutionRepository(session)
+        execution_repo.add(
             provider_account_id=provider_account_id,
             service_id=service_id,
             invocation_id=invocation_id,
@@ -260,7 +263,7 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
             network="base-sepolia",
             status=PayoutStatus.SENT,
         )
-        repo.add(
+        execution_repo.add(
             provider_account_id=provider_account_id,
             service_id=service_id,
             invocation_id=retry_invocation_id,
@@ -273,8 +276,10 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
         )
 
     async with db_session_factory() as session:
-        repo = PayoutRepository(session)
-        summaries = await repo.summarize_for_provider(provider_account_id=provider_account_id)
+        reporting_repo = PayoutReportingRepository(session)
+        summaries = await reporting_repo.summarize_for_provider(
+            provider_account_id=provider_account_id
+        )
 
     assert len(summaries) == 2
     assert [summary.currency for summary in summaries] == ["USDC", "USDT"]

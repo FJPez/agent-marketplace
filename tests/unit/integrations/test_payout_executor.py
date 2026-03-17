@@ -4,7 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
-from app.integrations.payouts.executor import BaseSepoliaUsdcPayoutExecutor, PayoutExecutionError
+from app.integrations.payouts.executor import (
+    BaseSepoliaUsdcPayoutExecutor,
+    PayoutExecutionError,
+    PreparedPayout,
+    SentPayout,
+)
 
 
 def _executor() -> BaseSepoliaUsdcPayoutExecutor:
@@ -46,7 +51,12 @@ async def test_prepare_payout_passes_nonce_to_sync_helper() -> None:
         BaseSepoliaUsdcPayoutExecutor,
         "_prepare_payout_sync",
         autospec=True,
-        return_value={"raw_transaction": "0xraw", "reference": "0xref"},
+        return_value=PreparedPayout(
+            raw_transaction="0xraw",
+            reference="0xref",
+            network="base-sepolia",
+            token_address="0x" + "ab" * 20,
+        ),
     ) as prepare_sync:
         result = await executor.prepare_payout(
             destination_wallet="0x" + "aa" * 20,
@@ -55,7 +65,12 @@ async def test_prepare_payout_passes_nonce_to_sync_helper() -> None:
             nonce=7,
         )
 
-    assert result == {"raw_transaction": "0xraw", "reference": "0xref"}
+    assert result == PreparedPayout(
+        raw_transaction="0xraw",
+        reference="0xref",
+        network="base-sepolia",
+        token_address="0x" + "ab" * 20,
+    )
     prepare_sync.assert_called_once_with(
         executor,
         destination_wallet="0x" + "aa" * 20,
@@ -72,14 +87,22 @@ async def test_send_prepared_payout_passes_reference_to_sync_helper() -> None:
         BaseSepoliaUsdcPayoutExecutor,
         "_send_prepared_payout_sync",
         autospec=True,
-        return_value={"reference": "0xref"},
+        return_value=SentPayout(
+            reference="0xref",
+            network="base-sepolia",
+            token_address="0x" + "ab" * 20,
+        ),
     ) as send_sync:
         result = await executor.send_prepared_payout(
             raw_transaction="0xraw",
             reference="0xref",
         )
 
-    assert result == {"reference": "0xref"}
+    assert result == SentPayout(
+        reference="0xref",
+        network="base-sepolia",
+        token_address="0x" + "ab" * 20,
+    )
     send_sync.assert_called_once_with(
         executor,
         raw_transaction="0xraw",

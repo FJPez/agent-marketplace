@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-from sqlalchemy import text
-
 from app.core.enums import PayoutFailureCode, PayoutStatus
 from app.core.logging import (
     INVOCATION_ID_FIELD,
@@ -18,9 +16,13 @@ from app.core.logging import (
     build_event_context,
     get_logger,
 )
-from app.integrations.payouts import PayoutExecutionError, SupportsPayoutExecutor
+from app.integrations.payouts import PayoutExecutionError, PreparedPayout, SupportsPayoutExecutor
 from app.repositories.account_repo import AccountRepository
-from app.repositories.payout_repo import PayoutRepository, PayoutSummary
+from app.repositories.payout_repo import (
+    PayoutExecutionRepository,
+    PayoutReportingRepository,
+    PayoutSummary,
+)
 from app.services.ledger_service import split_paid_invocation_amount
 
 if TYPE_CHECKING:
@@ -30,7 +32,6 @@ if TYPE_CHECKING:
     from app.db.models import Account, Payout
 
 logger = get_logger(__name__)
-_PAYOUT_TREASURY_LOCK_KEY = 84_532_001
 
 
 class PayoutConflictError(Exception):
@@ -55,7 +56,23 @@ class PayoutRequestResult:
         return sum(1 for payout in self.payouts if payout.status is PayoutStatus.FAILED)
 
 
-class PayoutStore(Protocol):
+class PayoutReportingStore(Protocol):
+    async def list_for_provider(
+        self,
+        *,
+        provider_account_id: int,
+        status: PayoutStatus | None = None,
+    ) -> list[Payout]: ...
+
+    async def summarize_for_provider(
+        self,
+        *,
+        provider_account_id: int,
+        status: PayoutStatus | None = None,
+    ) -> list[PayoutSummary]: ...
+
+
+class PayoutExecutionStore(Protocol):
     def add(
         self,
         *,
@@ -79,33 +96,29 @@ class PayoutStore(Protocol):
 
     async def get_by_payment_attempt_id(self, *, payment_attempt_id: int) -> Payout | None: ...
 
-    async def list_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[Payout]: ...
+    async def claim_treasury_lock(self) -> None: ...
 
     async def list_for_provider_request(
         self,
         *,
         provider_account_id: int,
         request_idempotency_key: str,
+        for_update: bool = False,
     ) -> list[Payout]: ...
 
-    async def list_ready_for_provider_for_update(
-        self, *, provider_account_id: int
-    ) -> list[Payout]: ...
-
-    async def list_pending(self) -> list[Payout]: ...
-
-    async def get_max_chain_nonce(self) -> int | None: ...
-
-    async def summarize_for_provider(
+    async def list_in_flight_for_provider(
         self,
         *,
         provider_account_id: int,
-    ) -> list[PayoutSummary]: ...
+    ) -> list[Payout]: ...
+
+    async def claim_ready_for_provider(
+        self,
+        *,
+        provider_account_id: int,
+    ) -> list[Payout]: ...
+
+    async def get_max_claimed_chain_nonce(self) -> int | None: ...
 
 
 class AccountStore(Protocol):
@@ -117,10 +130,9 @@ class PayoutReportingService:
         self,
         session: AsyncSession,
         *,
-        payout_repo: PayoutStore | None = None,
+        payout_repo: PayoutReportingStore | None = None,
     ) -> None:
-        self._session = session
-        self._payout_repo = payout_repo or PayoutRepository(session)
+        self._payout_repo = payout_repo or PayoutReportingRepository(session)
 
     async def get_provider_payouts(
         self,
@@ -145,8 +157,16 @@ class PayoutReportingService:
         )
         return payouts
 
-    async def get_provider_payout_summaries(self, actor: ActorContext) -> list[PayoutSummary]:
-        return await self._payout_repo.summarize_for_provider(provider_account_id=actor.account_id)
+    async def get_provider_payout_summaries(
+        self,
+        actor: ActorContext,
+        *,
+        status: PayoutStatus | None = None,
+    ) -> list[PayoutSummary]:
+        return await self._payout_repo.summarize_for_provider(
+            provider_account_id=actor.account_id,
+            status=status,
+        )
 
 
 class PayoutExecutionService:
@@ -154,12 +174,12 @@ class PayoutExecutionService:
         self,
         session: AsyncSession,
         *,
-        payout_repo: PayoutStore | None = None,
+        payout_repo: PayoutExecutionStore | None = None,
         account_repo: AccountStore | None = None,
         payout_executor: SupportsPayoutExecutor | None = None,
     ) -> None:
         self._session = session
-        self._payout_repo = payout_repo or PayoutRepository(session)
+        self._payout_repo = payout_repo or PayoutExecutionRepository(session)
         self._account_repo = account_repo or AccountRepository(session)
         self._payout_executor = payout_executor
 
@@ -219,93 +239,131 @@ class PayoutExecutionService:
         *,
         idempotency_key: str,
     ) -> PayoutRequestResult:
-        replay = await self._payout_repo.list_for_provider_request(
-            provider_account_id=actor.account_id,
-            request_idempotency_key=idempotency_key,
-        )
-        if replay:
-            logger.info(
-                "provider payout request replayed",
-                extra=build_event_context(
-                    "payout.request_replayed",
-                    **{
-                        PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
-                        PAYOUT_COUNT_FIELD: len(replay),
-                    },
-                ),
-            )
-            return PayoutRequestResult(idempotency_key=idempotency_key, payouts=replay)
+        if self._payout_executor is None:
+            raise PayoutConflictError("payout executor is not configured")
 
         provider_wallet = await self._get_provider_wallet(provider_account_id=actor.account_id)
         if provider_wallet is None:
             raise PayoutConflictError("provider wallet address is not configured")
 
-        pending = await self._payout_repo.list_pending()
-        if pending:
-            raise PayoutConflictError("payouts pending reconciliation")
-
-        ready_payouts = await self._claim_ready_payouts(
+        await self._payout_repo.claim_treasury_lock()
+        existing_batch = await self._payout_repo.list_for_provider_request(
             provider_account_id=actor.account_id,
-            destination_wallet=provider_wallet,
-            idempotency_key=idempotency_key,
+            request_idempotency_key=idempotency_key,
+            for_update=True,
         )
-        if not ready_payouts:
+        if existing_batch:
+            batch_count = len(existing_batch)
+            is_terminal = self._batch_is_terminal(existing_batch)
+            await self._session.rollback()
+            replay_batch = await self._payout_repo.list_for_provider_request(
+                provider_account_id=actor.account_id,
+                request_idempotency_key=idempotency_key,
+            )
+            if is_terminal:
+                logger.info(
+                    "provider payout request replayed",
+                    extra=build_event_context(
+                        "payout.request_replayed",
+                        **{
+                            PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
+                            PAYOUT_COUNT_FIELD: batch_count,
+                        },
+                    ),
+                )
+                return PayoutRequestResult(
+                    idempotency_key=idempotency_key,
+                    payouts=_order_payouts_for_response(replay_batch),
+                )
+
+            logger.info(
+                "provider payout request resumed",
+                extra=build_event_context(
+                    "payout.request_resumed",
+                    **{
+                        PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
+                        PAYOUT_COUNT_FIELD: batch_count,
+                    },
+                ),
+            )
+            resumed_batch = replay_batch
+            pending_batch = [
+                payout for payout in resumed_batch if payout.status is PayoutStatus.PENDING
+            ]
+            if pending_batch:
+                await self._send_batch(pending_batch)
+            return PayoutRequestResult(
+                idempotency_key=idempotency_key,
+                payouts=_order_payouts_for_response(resumed_batch),
+            )
+
+        in_flight = await self._payout_repo.list_in_flight_for_provider(
+            provider_account_id=actor.account_id,
+        )
+        if in_flight:
+            await self._session.rollback()
+            raise PayoutConflictError("provider payout batch already in progress")
+
+        ready_batch = await self._payout_repo.claim_ready_for_provider(
+            provider_account_id=actor.account_id,
+        )
+        if not ready_batch:
+            await self._session.rollback()
             raise PayoutConflictError("no ready payouts available")
 
+        try:
+            await self._prepare_batch(
+                ready_batch,
+                destination_wallet=provider_wallet,
+                idempotency_key=idempotency_key,
+            )
+        except (PayoutExecutionError, RuntimeError, ValueError) as exc:
+            await self._session.rollback()
+            logger.error(
+                "provider payout preparation failed",
+                extra=build_event_context(
+                    "payout.prepare_failed",
+                    **{
+                        PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
+                        PAYOUT_COUNT_FIELD: len(ready_batch),
+                    },
+                ),
+            )
+            raise PayoutConflictError("payout could not be prepared") from exc
+
+        await self._session.flush()
+        await self._session.commit()
         logger.info(
             "provider payout request claimed",
             extra=build_event_context(
                 "payout.request_claimed",
                 **{
                     PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
-                    PAYOUT_COUNT_FIELD: len(ready_payouts),
+                    PAYOUT_COUNT_FIELD: len(ready_batch),
                 },
             ),
         )
-        await self._send_claimed_payouts(ready_payouts)
-        recorded_payouts = await self._payout_repo.list_for_provider_request(
+        await self._send_batch(ready_batch)
+        final_batch = await self._payout_repo.list_for_provider_request(
             provider_account_id=actor.account_id,
             request_idempotency_key=idempotency_key,
         )
-        return PayoutRequestResult(idempotency_key=idempotency_key, payouts=recorded_payouts)
-
-    async def reconcile_pending_payouts(self) -> list[Payout]:
-        pending_payouts = await self._payout_repo.list_pending()
-        if not pending_payouts:
-            return []
-        logger.info(
-            "provider payout reconciliation started",
-            extra=build_event_context(
-                "payout.reconciliation_started",
-                **{
-                    PAYOUT_COUNT_FIELD: len(pending_payouts),
-                },
-            ),
+        return PayoutRequestResult(
+            idempotency_key=idempotency_key,
+            payouts=_order_payouts_for_response(final_batch),
         )
-        await self._send_claimed_payouts(pending_payouts)
-        return pending_payouts
 
-    async def _claim_ready_payouts(
+    async def _prepare_batch(
         self,
+        payouts: list[Payout],
         *,
-        provider_account_id: int,
         destination_wallet: str,
         idempotency_key: str,
-    ) -> list[Payout]:
-        if self._payout_executor is None:
-            raise PayoutConflictError("payout executor is not configured")
-        await self._session.execute(
-            text("SELECT pg_advisory_xact_lock(:lock_key)"),
-            {"lock_key": _PAYOUT_TREASURY_LOCK_KEY},
-        )
-        payouts = await self._payout_repo.list_ready_for_provider_for_update(
-            provider_account_id=provider_account_id,
-        )
-        if not payouts:
-            await self._session.rollback()
-            return []
+    ) -> None:
+        assert self._payout_executor is not None
+
         current_nonce = await self._payout_executor.current_nonce()
-        max_chain_nonce = await self._payout_repo.get_max_chain_nonce()
+        max_chain_nonce = await self._payout_repo.get_max_claimed_chain_nonce()
         next_nonce = (
             current_nonce if max_chain_nonce is None else max(current_nonce, max_chain_nonce + 1)
         )
@@ -316,44 +374,30 @@ class PayoutExecutionService:
                 idempotency_key=idempotency_key,
                 nonce=next_nonce,
             )
-            payout.destination_wallet = destination_wallet
-            payout.request_idempotency_key = idempotency_key
-            payout.chain_nonce = next_nonce
-            payout.prepared_raw_transaction = _extract_raw_transaction(prepared)
-            payout.transfer_reference = _extract_reference(prepared)
-            payout.status = PayoutStatus.PENDING
-            payout.attempt_count += 1
-            payout.failure_code = None
-            payout.error_message = None
+            self._apply_prepared_payout(
+                payout,
+                destination_wallet=destination_wallet,
+                idempotency_key=idempotency_key,
+                nonce=next_nonce,
+                prepared=prepared,
+            )
             next_nonce += 1
-        await self._session.flush()
-        await self._session.commit()
-        return payouts
 
-    async def _send_claimed_payouts(self, payouts: list[Payout]) -> None:
-        if self._payout_executor is None:
-            raise PayoutConflictError("payout executor is not configured")
+    async def _send_batch(self, payouts: list[Payout]) -> None:
+        assert self._payout_executor is not None
 
         for payout in payouts:
-            raw_transaction = payout.prepared_raw_transaction
-            reference = payout.transfer_reference
-            if raw_transaction is None or reference is None:
-                payout.status = PayoutStatus.FAILED
-                payout.failure_code = PayoutFailureCode.EXECUTOR_ERROR
-                payout.error_message = "prepared payout transaction is incomplete"
-                await self._session.commit()
-                continue
             try:
                 outcome = await self._payout_executor.send_prepared_payout(
-                    raw_transaction=raw_transaction,
-                    reference=reference,
+                    raw_transaction=payout.prepared_raw_transaction or "",
+                    reference=payout.transfer_reference or "",
                 )
             except (PayoutExecutionError, RuntimeError, ValueError) as exc:
                 payout.status = PayoutStatus.PENDING
                 payout.failure_code = PayoutFailureCode.EXECUTOR_ERROR
                 payout.error_message = str(exc)
                 logger.error(
-                    "provider payout pending reconciliation",
+                    "provider payout remains pending",
                     extra=build_event_context(
                         "payout.failed",
                         **{
@@ -369,7 +413,7 @@ class PayoutExecutionService:
                 continue
 
             payout.status = PayoutStatus.SENT
-            payout.transfer_reference = _extract_reference(outcome) or payout.transfer_reference
+            payout.transfer_reference = outcome.reference
             payout.failure_code = None
             payout.error_message = None
             logger.info(
@@ -396,17 +440,28 @@ class PayoutExecutionService:
         normalized_wallet = account.wallet_address.strip()
         return normalized_wallet or None
 
+    def _apply_prepared_payout(
+        self,
+        payout: Payout,
+        *,
+        destination_wallet: str,
+        idempotency_key: str,
+        nonce: int,
+        prepared: PreparedPayout,
+    ) -> None:
+        payout.destination_wallet = destination_wallet
+        payout.request_idempotency_key = idempotency_key
+        payout.chain_nonce = nonce
+        payout.prepared_raw_transaction = prepared.raw_transaction
+        payout.transfer_reference = prepared.reference
+        payout.status = PayoutStatus.PENDING
+        payout.attempt_count += 1
+        payout.failure_code = None
+        payout.error_message = None
 
-def _extract_reference(outcome: dict[str, object]) -> str | None:
-    for key in ("reference", "transaction"):
-        value = outcome.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    def _batch_is_terminal(self, payouts: list[Payout]) -> bool:
+        return all(payout.status in {PayoutStatus.SENT, PayoutStatus.FAILED} for payout in payouts)
 
 
-def _extract_raw_transaction(outcome: dict[str, object]) -> str | None:
-    value = outcome.get("raw_transaction")
-    if isinstance(value, str) and value:
-        return value
-    return None
+def _order_payouts_for_response(payouts: list[Payout]) -> list[Payout]:
+    return sorted(payouts, key=lambda payout: payout.id, reverse=True)
