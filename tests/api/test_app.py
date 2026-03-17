@@ -28,6 +28,10 @@ def test_create_app_starts_with_lifespan_state() -> None:
         assert state.db_engine is not None
         assert state.db_session_factory is not None
         assert state.http_client is not None
+        assert hasattr(state, "redis_client")
+        assert hasattr(state, "rate_limits_backend")
+        assert hasattr(state, "invoke_submission_backend")
+        assert state.redis_client is None
         assert state.facilitator_client is not None
         assert state.x402_resource_server is not None
         assert state.telemetry is None
@@ -124,6 +128,28 @@ def test_create_app_applies_runtime_resource_settings(
         assert getattr(http_pool, "_max_keepalive_connections", None) == 15
 
 
+def test_create_app_initializes_redis_client_and_guardrail_backends_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda: Settings(
+            jwt_secret_key="test-secret-key-with-32-bytes-123",
+            redis_url="redis://localhost:6379/0",
+        ),
+    )
+    app = create_app()
+
+    with TestClient(app):
+        state = get_app_state(app)
+        assert state.redis_client is not None
+        assert state.rate_limits_backend is not None
+        assert state.invoke_submission_backend is not None
+
+
 def test_health_ready_returns_service_unavailable_without_db_session_factory() -> None:
     app = create_app()
 
@@ -149,6 +175,7 @@ def test_create_app_initializes_payout_executor_for_deployed_environments(
             env=AppEnv.STAGING,
             jwt_secret_key="test-secret-key-with-32-bytes-123",
             database_url="postgresql+asyncpg://db.internal:5432/agent_marketplace",
+            redis_url="redis://cache.internal:6379/0",
             siwe_domain="staging.example.com",
             payouts_enabled=True,
             payouts_rpc_url="https://rpc.example.com",

@@ -89,6 +89,7 @@ class Settings(BaseSettings):
     http_pool_timeout: float = 5.0
     http_max_connections: int = 100
     http_max_keepalive_connections: int = 20
+    redis_url: str | None = None
     x402_facilitator_url: str = "https://x402.org/facilitator"
     x402_network: str = "base-sepolia"
     x402_network_caip2: str = "eip155:84532"
@@ -155,6 +156,9 @@ class Settings(BaseSettings):
         database_host = parsed_database_url.hostname
         if self.database_url == _DEFAULT_DATABASE_URL or database_host in _LOCAL_DATABASE_HOSTS:
             msg = "database_url must point to a non-local database when env is staging or prod"
+            raise ValueError(msg)
+        if not self.redis_url:
+            msg = "redis_url must be set when env is staging or prod"
             raise ValueError(msg)
         if not self.payouts_enabled:
             msg = "payouts_enabled must be true when env is staging or prod"

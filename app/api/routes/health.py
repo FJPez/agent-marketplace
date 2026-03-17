@@ -26,8 +26,8 @@ def read_health_live() -> HealthResponse:
 async def read_health_ready(request: Request) -> HealthResponse | JSONResponse:
     try:
         return await get_readiness_response(get_app_state(request.app))
-    except ReadinessCheckError:
+    except ReadinessCheckError as exc:
         return JSONResponse(
             status_code=503,
-            content={"detail": "database unavailable"},
+            content={"detail": str(exc)},
         )

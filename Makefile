@@ -54,7 +54,7 @@ docker-build:
 	docker build -t $(IMAGE) .
 
 docker-run:
-	$(COMPOSE) up --build -d --wait postgres app
+	$(COMPOSE) up --build -d --wait postgres redis app
 
 docker-stop:
 	$(COMPOSE) down
