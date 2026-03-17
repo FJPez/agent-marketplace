@@ -107,6 +107,17 @@ def test_head_migration_points_service_provider_fk_at_accounts(
     assert provider_fk["referred_columns"] == ["id"]
 
 
+def test_head_migration_uses_bigint_for_payout_amount_minor(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    columns = asyncio.run(get_column_specs(db_engine, "payouts"))
+
+    assert type(columns["amount_minor"]["type"]).__name__.upper() == "BIGINT"
+
+
 async def _seed_head_state_for_downgrade(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as connection:
         result = await connection.execute(

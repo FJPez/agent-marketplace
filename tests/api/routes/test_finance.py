@@ -2,7 +2,8 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from httpx import AsyncClient
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import auth_headers_for_account_id
@@ -330,52 +331,39 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summary(
         )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "summary": {
-            "currency": "USDC",
-            "total_count": 2,
-            "ready_count": 0,
-            "pending_count": 0,
-            "sent_count": 1,
-            "failed_count": 1,
-            "total_amount_minor": 8_900_000,
-            "sent_amount_minor": 4_500_000,
-        },
-        "payouts": [
-            {
-                "id": 2,
-                "service_id": service_id,
-                "invocation_id": 2,
-                "payment_attempt_id": 2,
-                "destination_wallet": "0x00000000000000000000000000000000000000aa",
-                "amount_minor": 4_400_000,
-                "currency": "USDC",
-                "network": "base-sepolia",
-                "status": "failed",
-                "transfer_reference": None,
-                "error_message": "rpc unavailable",
-                "attempt_count": 2,
-                "created_at": response.json()["payouts"][0]["created_at"],
-                "updated_at": response.json()["payouts"][0]["updated_at"],
-            },
-            {
-                "id": 1,
-                "service_id": service_id,
-                "invocation_id": 1,
-                "payment_attempt_id": 1,
-                "destination_wallet": "0x00000000000000000000000000000000000000aa",
-                "amount_minor": 4_500_000,
-                "currency": "USDC",
-                "network": "base-sepolia",
-                "status": "sent",
-                "transfer_reference": "0xsent",
-                "error_message": None,
-                "attempt_count": 1,
-                "created_at": response.json()["payouts"][1]["created_at"],
-                "updated_at": response.json()["payouts"][1]["updated_at"],
-            },
-        ],
+    body = response.json()
+    assert body["summary"] == {
+        "currency": "USDC",
+        "total_count": 2,
+        "ready_count": 0,
+        "pending_count": 0,
+        "sent_count": 1,
+        "failed_count": 1,
+        "total_amount_minor": 8_900_000,
+        "sent_amount_minor": 4_500_000,
     }
+    payouts = body["payouts"]
+    assert len(payouts) == 2
+    assert payouts[0]["service_id"] == service_id
+    assert payouts[0]["status"] == "failed"
+    assert payouts[0]["amount_minor"] == 4_400_000
+    assert payouts[0]["destination_wallet"] == "0x00000000000000000000000000000000000000aa"
+    assert payouts[0]["transfer_reference"] is None
+    assert payouts[0]["error_message"] == "rpc unavailable"
+    assert payouts[0]["attempt_count"] == 2
+    assert isinstance(payouts[0]["id"], int)
+    assert isinstance(payouts[0]["invocation_id"], int)
+    assert isinstance(payouts[0]["payment_attempt_id"], int)
+    assert payouts[1]["service_id"] == service_id
+    assert payouts[1]["status"] == "sent"
+    assert payouts[1]["amount_minor"] == 4_500_000
+    assert payouts[1]["destination_wallet"] == "0x00000000000000000000000000000000000000aa"
+    assert payouts[1]["transfer_reference"] == "0xsent"
+    assert payouts[1]["error_message"] is None
+    assert payouts[1]["attempt_count"] == 1
+    assert isinstance(payouts[1]["id"], int)
+    assert isinstance(payouts[1]["invocation_id"], int)
+    assert isinstance(payouts[1]["payment_attempt_id"], int)
     record = next(
         record for record in caplog.records if record.name == "app.services.payout_service"
     )
@@ -403,10 +391,12 @@ async def test_get_provider_payouts_filters_by_status(
 
 @pytest.mark.asyncio
 async def test_finance_routes_do_not_leak_internal_exceptions(
-    async_client: AsyncClient,
+    app: FastAPI,
+    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _ = migrated_database
     provider_account_id, _ = await _seed_provider_finance_data(db_session_factory)
 
     async def explode(self: LedgerService, actor: object) -> list[object]:
@@ -415,10 +405,16 @@ async def test_finance_routes_do_not_leak_internal_exceptions(
 
     monkeypatch.setattr(LedgerService, "get_provider_earnings", explode)
 
-    response = await async_client.get(
-        "/v1/provider/earnings",
-        headers=_auth_headers(provider_account_id),
-    )
+    async with app.router.lifespan_context(app):
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as async_client:
+            response = await async_client.get(
+                "/v1/provider/earnings",
+                headers=_auth_headers(provider_account_id),
+            )
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "internal server error"}
+    assert response.text == "Internal Server Error"

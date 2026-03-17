@@ -694,7 +694,7 @@ async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
         payouts_enabled=True,
     )
 
-    with caplog.at_level(logging.INFO, logger="app.services.payment_service"):
+    with caplog.at_level(logging.INFO, logger="app.services.payout_service"):
         response = await async_client.post(
             "/v1/invoke/paid-invoke-service",
             headers={
@@ -711,7 +711,7 @@ async def test_successful_paid_invoke_sends_provider_payout_when_enabled(
     sent_record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.payment_service"
+        if record.name == "app.services.payout_service"
         and getattr(record, EVENT_FIELD, None) == "payout.sent"
     )
 
@@ -762,7 +762,7 @@ async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_p
         payouts_enabled=True,
     )
 
-    with caplog.at_level(logging.ERROR, logger="app.services.payment_service"):
+    with caplog.at_level(logging.ERROR, logger="app.services.payout_service"):
         response = await async_client.post(
             "/v1/invoke/paid-invoke-service",
             headers={
@@ -779,7 +779,7 @@ async def test_payout_failure_does_not_fail_consumer_invoke_and_records_failed_p
     failed_record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.payment_service"
+        if record.name == "app.services.payout_service"
         and getattr(record, EVENT_FIELD, None) == "payout.failed"
     )
 

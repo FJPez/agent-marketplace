@@ -218,3 +218,50 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
     assert summary.failed_count == 1
     assert summary.total_amount_minor == 8_900_000
     assert summary.sent_amount_minor == 4_500_000
+
+
+@pytest.mark.asyncio
+async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _ = migrated_database
+    (
+        provider_account_id,
+        service_id,
+        invocation_id,
+        payment_attempt_id,
+        retry_invocation_id,
+        retry_attempt_id,
+    ) = await _seed_payout_dependencies(db_session_factory)
+
+    async with db_session_factory.begin() as session:
+        repo = PayoutRepository(session)
+        repo.add(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            destination_wallet="0x00000000000000000000000000000000000000aa",
+            amount_minor=4_500_000,
+            currency="USDC",
+            network="base-sepolia",
+            status=PayoutStatus.SENT,
+        )
+        repo.add(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=retry_invocation_id,
+            payment_attempt_id=retry_attempt_id,
+            destination_wallet="0x00000000000000000000000000000000000000aa",
+            amount_minor=100,
+            currency="USDT",
+            network="base-sepolia",
+            status=PayoutStatus.SENT,
+        )
+
+    async with db_session_factory() as session:
+        repo = PayoutRepository(session)
+        summary = await repo.summarize_for_provider(provider_account_id=provider_account_id)
+
+    assert summary is not None

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import SecretStr, ValidationError
 
 from app.core.config import AppEnv, Settings, get_settings
 
@@ -53,3 +53,20 @@ def test_get_settings_allow_environment_overrides(
     assert settings.env is AppEnv.TEST
     assert settings.debug is True
     get_settings.cache_clear()
+
+
+def test_settings_store_payout_private_key_as_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
+    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "http://localhost:8545")
+    monkeypatch.setenv("APP_PAYOUTS_USDC_ADDRESS", "0x" + "ab" * 20)
+    monkeypatch.setenv("APP_PAYOUTS_WALLET_PRIVATE_KEY", "0x" + "cd" * 32)
+
+    settings = Settings()
+
+    assert isinstance(settings.payouts_wallet_private_key, SecretStr)
+    assert settings.payouts_wallet_private_key.get_secret_value() == "0x" + "cd" * 32

@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
@@ -27,13 +27,7 @@ async def get_provider_earnings(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProviderEarningsSummaryResponse:
     service = LedgerService(session)
-    try:
-        totals = await service.get_provider_earnings(actor)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="internal server error",
-        ) from exc
+    totals = await service.get_provider_earnings(actor)
     return ProviderEarningsSummaryResponse(
         totals=[ProviderEarningsTotalResponse.from_summary(total) for total in totals],
     )
@@ -45,13 +39,7 @@ async def get_provider_ledger(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ProviderLedgerResponse:
     service = LedgerService(session)
-    try:
-        entries = await service.get_provider_ledger(actor)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="internal server error",
-        ) from exc
+    entries = await service.get_provider_ledger(actor)
     return ProviderLedgerResponse(
         entries=[ProviderLedgerEntryResponse.from_model(entry) for entry in entries],
     )
@@ -64,14 +52,8 @@ async def get_provider_payouts(
     payout_status: Annotated[PayoutStatus | None, Query(alias="status")] = None,
 ) -> ProviderPayoutListResponse:
     service = PayoutService(session)
-    try:
-        payouts = await service.get_provider_payouts(actor, status=payout_status)
-        summary = await service.get_provider_payout_summary(actor)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="internal server error",
-        ) from exc
+    payouts = await service.get_provider_payouts(actor, status=payout_status)
+    summary = await service.get_provider_payout_summary(actor)
     return ProviderPayoutListResponse(
         summary=None if summary is None else ProviderPayoutSummaryResponse.from_summary(summary),
         payouts=[ProviderPayoutResponse.from_model(payout) for payout in payouts],

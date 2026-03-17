@@ -8,6 +8,7 @@ from app.api.deps.auth import CurrentActor
 from app.core.enums import AccessMode
 from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
+from app.integrations.payouts import SupportsPayoutExecutor
 from app.integrations.provider_gateway.client import SupportsRequest
 from app.schemas.invoke import InvocationListItem, InvocationResponse, InvokeRequest
 from app.services.invoke_service import (
@@ -23,7 +24,6 @@ from app.services.payment_service import (
     PaymentRequiredChallenge,
     PaymentService,
     SupportsFacilitatorClient,
-    SupportsPayoutExecutor,
     SupportsX402ResourceServer,
 )
 

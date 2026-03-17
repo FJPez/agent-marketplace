@@ -77,6 +77,9 @@ class ProviderPayoutResponse(BaseModel):
 
     @classmethod
     def from_model(cls, payout: Payout) -> Self:
+        sanitized_error = None
+        if payout.error_message is not None:
+            sanitized_error = payout.error_message[:200]
         return cls(
             id=payout.id,
             service_id=payout.service_id,
@@ -88,7 +91,7 @@ class ProviderPayoutResponse(BaseModel):
             network=payout.network,
             status=payout.status,
             transfer_reference=payout.transfer_reference,
-            error_message=payout.error_message,
+            error_message=sanitized_error,
             attempt_count=payout.attempt_count,
             created_at=payout.created_at,
             updated_at=payout.updated_at,

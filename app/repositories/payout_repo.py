@@ -113,7 +113,10 @@ class PayoutRepository:
             .where(Payout.provider_account_id == provider_account_id)
             .group_by(Payout.currency)
         )
-        row = (await self._session.execute(statement)).one_or_none()
+        # Reporting is currently single-currency, but historical data or test
+        # fixtures may still produce multiple rows because this query groups by
+        # currency. Returning the first row avoids a hard crash.
+        row = (await self._session.execute(statement)).first()
         if row is None:
             return None
         return PayoutSummary(

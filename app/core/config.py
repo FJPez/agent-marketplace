@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.enums import AppEnv
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     payouts_rpc_url: str | None = None
     payouts_chain_id: int = 84532
     payouts_usdc_address: str | None = None
-    payouts_wallet_private_key: str | None = None
+    payouts_wallet_private_key: SecretStr | None = None
     api_rate_limit: str = "120/minute"
     invoke_rate_limit: str = "60/minute"
     quote_rate_limit: str = "30/minute"
@@ -56,7 +56,12 @@ class Settings(BaseSettings):
                 for field_name, value in (
                     ("payouts_rpc_url", self.payouts_rpc_url),
                     ("payouts_usdc_address", self.payouts_usdc_address),
-                    ("payouts_wallet_private_key", self.payouts_wallet_private_key),
+                    (
+                        "payouts_wallet_private_key",
+                        None
+                        if self.payouts_wallet_private_key is None
+                        else self.payouts_wallet_private_key.get_secret_value(),
+                    ),
                 )
                 if not value
             ]

@@ -35,7 +35,7 @@ class Payout(Base):
         unique=True,
     )
     destination_wallet: Mapped[str] = mapped_column(String(42))
-    amount_minor: Mapped[int] = mapped_column(Integer)
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
     currency: Mapped[str] = mapped_column(String(16))
     network: Mapped[str] = mapped_column(String(64))
     status: Mapped[PayoutStatus] = mapped_column(

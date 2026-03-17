@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column("invocation_id", sa.BigInteger(), nullable=False),
         sa.Column("payment_attempt_id", sa.BigInteger(), nullable=False),
         sa.Column("destination_wallet", sa.String(length=42), nullable=False),
-        sa.Column("amount_minor", sa.Integer(), nullable=False),
+        sa.Column("amount_minor", sa.BigInteger(), nullable=False),
         sa.Column("currency", sa.String(length=16), nullable=False),
         sa.Column("network", sa.String(length=64), nullable=False),
         sa.Column(

@@ -56,7 +56,7 @@ async def _init_app_state(state: AppState) -> None:
             rpc_url=state.settings.payouts_rpc_url,
             chain_id=state.settings.payouts_chain_id,
             token_address=state.settings.payouts_usdc_address,
-            private_key=state.settings.payouts_wallet_private_key,
+            private_key=state.settings.payouts_wallet_private_key.get_secret_value(),
         )
 
 

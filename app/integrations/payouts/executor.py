@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from eth_account import Account
@@ -42,6 +42,7 @@ class BaseSepoliaUsdcPayoutExecutor:
     chain_id: int
     token_address: str
     private_key: str
+    _lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     async def send_payout(
         self,
@@ -50,15 +51,22 @@ class BaseSepoliaUsdcPayoutExecutor:
         amount_minor: int,
         idempotency_key: str,
     ) -> dict[str, object]:
-        _ = idempotency_key
         if amount_minor <= 0:
             msg = "payout amount must be positive"
             raise PayoutExecutionError(msg)
-        return await asyncio.to_thread(
-            self._send_payout_sync,
-            destination_wallet=destination_wallet,
-            amount_minor=amount_minor,
-        )
+        if not Web3.is_address(destination_wallet):
+            msg = "invalid destination wallet address"
+            raise PayoutExecutionError(msg)
+        # Base Sepolia ERC-20 transfers rely on nonce sequencing rather than
+        # application-level idempotency. The interface keeps this value for
+        # future executor implementations that support explicit request keys.
+        _ = idempotency_key
+        async with self._lock:
+            return await asyncio.to_thread(
+                self._send_payout_sync,
+                destination_wallet=destination_wallet,
+                amount_minor=amount_minor,
+            )
 
     def _send_payout_sync(
         self,
