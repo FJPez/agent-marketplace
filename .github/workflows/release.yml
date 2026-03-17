@@ -29,8 +29,6 @@ jobs:
     environment: ${{ inputs.target_environment }}
     env:
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-      RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}
-      RAILWAY_ENVIRONMENT: ${{ inputs.target_environment }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,16 +40,13 @@ jobs:
         run: |
           railway up \
             --ci \
-            --service api \
-            --environment "${RAILWAY_ENVIRONMENT}" \
-            --project "${RAILWAY_PROJECT_ID}"
+            --service api
       - name: Release summary
         run: |
           {
             echo "## Railway deploy started"
             echo
             echo "- Environment: ${{ inputs.target_environment }}"
-            echo "- Railway project: ${RAILWAY_PROJECT_ID}"
             echo "- Railway service: api"
             echo "- Smoke URL: ${{ inputs.smoke_base_url }}"
           } >> "$GITHUB_STEP_SUMMARY"
