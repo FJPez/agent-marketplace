@@ -19,7 +19,7 @@ This demo gives you a local end-to-end path for:
   - You can use your own local Postgres, or `docker compose up -d postgres`
 - a Base Sepolia private key for the buyer wallet
 - a Base Sepolia private key for the provider wallet
-- a Base Sepolia address for the marketplace settlement wallet
+- a Base Sepolia private key for the marketplace treasury wallet
 - a CDP secret API key id and secret for the facilitator
 
 ## What You Need Before Starting
@@ -35,8 +35,8 @@ You need three wallet roles for the full paid demo:
   - must be a different EVM wallet on Base Sepolia
   - you must have the private key locally as `PROVIDER_PRIVATE_KEY`
 - Marketplace settlement wallet:
-  - set as `APP_X402_PAY_TO_ADDRESS`
-  - should match the address controlled by `APP_PAYOUTS_WALLET_PRIVATE_KEY`
+  - set as `APP_TREASURY_PRIVATE_KEY`
+  - the app derives the public treasury address automatically at runtime
   - this is the wallet the x402 payment requirement points to
   - this is also the wallet that later sends provider payouts
 
@@ -108,12 +108,11 @@ APP_X402_NETWORK=base-sepolia
 APP_X402_NETWORK_CAIP2=eip155:84532
 APP_X402_CDP_API_KEY_ID=organizations/YOUR_ORG_ID/apiKeys/YOUR_KEY_ID
 APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n
-APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_SETTLEMENT_ADDRESS
 APP_PAYOUTS_ENABLED=true
 APP_PAYOUTS_RPC_URL=https://sepolia.base.org
 APP_PAYOUTS_CHAIN_ID=84532
 APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000
-APP_PAYOUTS_WALLET_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY
+APP_TREASURY_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY
 APP_API_RATE_LIMIT=120/minute
 APP_INVOKE_RATE_LIMIT=60/minute
 APP_QUOTE_RATE_LIMIT=30/minute
@@ -164,9 +163,6 @@ What each setting does:
 - `APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-----END EC PRIVATE KEY-----\n`
   - CDP private key material used to sign facilitator JWTs
   - literal `\n` escapes are supported
-- `APP_X402_PAY_TO_ADDRESS=0xYOUR_BASE_SEPOLIA_SETTLEMENT_ADDRESS`
-  - marketplace settlement address advertised in the x402 payment requirement
-  - must be a Base Sepolia EVM address
 - `APP_PAYOUTS_ENABLED=true`
   - required for the full consumer-to-provider payout demo
 - `APP_PAYOUTS_RPC_URL=https://sepolia.base.org`
@@ -175,9 +171,9 @@ What each setting does:
   - chain id used for payout transactions
 - `APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000`
   - USDC token contract used for provider payout execution
-- `APP_PAYOUTS_WALLET_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY`
+- `APP_TREASURY_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY`
   - treasury signer used when `POST /v1/provider/payouts` executes provider payouts
-  - should correspond to `APP_X402_PAY_TO_ADDRESS` for a coherent treasury flow
+  - the app derives the public treasury address from this private key and uses it in x402 payment requirements
 - `APP_API_RATE_LIMIT=120/minute`
   - base rate limit for authenticated API traffic
 - `APP_INVOKE_RATE_LIMIT=60/minute`
@@ -387,7 +383,7 @@ When the paid retry succeeds, take the `transaction` value from the decoded
 - explorer: `https://sepolia-explorer.base.org`
 - confirm the transaction hash exists
 - confirm the buyer wallet is the payer
-- confirm the settlement address matches `APP_X402_PAY_TO_ADDRESS`
+- confirm the settlement address matches the address derived from `APP_TREASURY_PRIVATE_KEY`
 
 When the provider payout request succeeds, compare the treasury settlement
 wallet and the provider wallet before and after `POST /v1/provider/payouts`.

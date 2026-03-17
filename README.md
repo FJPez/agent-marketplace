@@ -223,10 +223,10 @@ uv run alembic upgrade head
 
 - `.env.example` includes the current `APP_...` settings used by local auth,
   guardrails, x402, and the demo seed path.
-- `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; it is the marketplace
-  settlement address exposed in x402 payment requirements. Startup and free
-  routes still work without it, but paid invoke attempts fail with a clear
-  config error.
+- `APP_TREASURY_PRIVATE_KEY` is the single source of truth for paid invokes and
+  provider payouts. The app derives the marketplace treasury address from that
+  private key for x402 payment requirements, and the same key signs provider
+  payout transactions.
 - x402 v2 payment flows use `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
   `PAYMENT-RESPONSE` headers.
 - `scripts/seed_demo.py` seeds a rerunnable demo provider-owned active service,
@@ -249,16 +249,14 @@ For a live x402 v2 manual test:
    - `APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
    - `APP_X402_CDP_API_KEY_ID=...`
    - `APP_X402_CDP_API_KEY_SECRET=...`
-   - `APP_X402_PAY_TO_ADDRESS=...`
-   This should be the marketplace settlement or treasury address that receives
-   the buyer's x402 payment on Base Sepolia. For the full payout demo, this
-   should match the treasury signer configured by
-   `APP_PAYOUTS_WALLET_PRIVATE_KEY`.
+   - `APP_TREASURY_PRIVATE_KEY=...`
+   The app derives the marketplace treasury address from this key and exposes
+   that derived address in x402 payment requirements.
 3. Enable payout execution and configure the treasury signer:
    - `APP_PAYOUTS_ENABLED=true`
    - `APP_PAYOUTS_RPC_URL=...`
    - `APP_PAYOUTS_USDC_ADDRESS=...`
-   - `APP_PAYOUTS_WALLET_PRIVATE_KEY=...`
+   - `APP_TREASURY_PRIVATE_KEY=...`
 4. Export different consumer and provider wallets before seeding or running the
    example clients:
    - `export CONSUMER_PRIVATE_KEY=0x...`
