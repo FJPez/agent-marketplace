@@ -6,6 +6,34 @@ from pydantic import SecretStr, ValidationError
 from app.core.config import AppEnv, Settings, get_settings
 
 
+@pytest.mark.parametrize(
+    ("database_url", "expected_database_url"),
+    [
+        (
+            "postgresql://db.example.com/agent_marketplace",
+            "postgresql+asyncpg://db.example.com/agent_marketplace",
+        ),
+        (
+            "postgres://db.example.com/agent_marketplace",
+            "postgresql+asyncpg://db.example.com/agent_marketplace",
+        ),
+    ],
+)
+def test_settings_normalize_plain_postgres_database_urls(
+    database_url: str,
+    expected_database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", database_url)
+
+    settings = Settings()
+
+    assert settings.database_url == expected_database_url
+
+
 def test_settings_use_default_values(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -257,9 +285,7 @@ def test_settings_accept_valid_deployment_configuration(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("APP_ENV", "staging")
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv(
-        "APP_DATABASE_URL", "postgresql+asyncpg://db.internal:5432/agent_marketplace"
-    )
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql://db.internal:5432/agent_marketplace")
     monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
@@ -269,4 +295,5 @@ def test_settings_accept_valid_deployment_configuration(
 
     assert settings.env is AppEnv.STAGING
     assert settings.debug is False
+    assert settings.database_url == "postgresql+asyncpg://db.internal:5432/agent_marketplace"
     assert settings.payouts_enabled is True

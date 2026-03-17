@@ -8,6 +8,7 @@ from eth_account import Account as EthAccount
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.core.config import normalize_database_url
 from app.db.models import Account
 
 TREASURY_ADMIN_DISPLAY_NAME = "Treasury Admin"
@@ -34,7 +35,7 @@ def _wallet_address_from_private_key(private_key: str) -> str:
 
 async def bootstrap_admin(*, database_url: str, treasury_private_key: str) -> str:
     treasury_wallet = _wallet_address_from_private_key(treasury_private_key)
-    engine = create_async_engine(database_url, pool_pre_ping=True)
+    engine = create_async_engine(normalize_database_url(database_url), pool_pre_ping=True)
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
 
     try:

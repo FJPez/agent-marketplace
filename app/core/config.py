@@ -46,6 +46,16 @@ _DEFAULT_SIWE_DOMAIN = "testserver"
 _CDP_FACILITATOR_HOST = "api.cdp.coinbase.com"
 
 
+def normalize_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql+asyncpg://"):
+        return database_url
+    if database_url.startswith("postgresql://"):
+        return database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if database_url.startswith("postgres://"):
+        return database_url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return database_url
+
+
 def get_supported_payment_token(network_caip2: str) -> PaymentToken | None:
     return _SUPPORTED_PAYMENT_TOKENS_BY_NETWORK.get(network_caip2)
 
@@ -121,6 +131,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":
+        self.database_url = normalize_database_url(self.database_url)
         if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)

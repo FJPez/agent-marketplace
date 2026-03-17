@@ -108,6 +108,30 @@ async def test_bootstrap_admin_is_idempotent(
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_admin_accepts_plain_postgres_database_url(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    _ = migrated_database
+    database_url = _database_url(db_session_factory).replace(
+        "postgresql+asyncpg://", "postgresql://"
+    )
+
+    treasury_wallet = await bootstrap_admin(
+        database_url=database_url,
+        treasury_private_key="0x" + "cd" * 32,
+    )
+
+    async with db_session_factory() as session:
+        account = await session.scalar(
+            select(Account).where(Account.wallet_address == treasury_wallet),
+        )
+
+    assert account is not None
+    assert account.is_admin is True
+
+
+@pytest.mark.asyncio
 async def test_bootstrap_admin_rejects_invalid_treasury_private_key() -> None:
     with pytest.raises(BootstrapAdminError, match="APP_TREASURY_PRIVATE_KEY is not a valid"):
         await bootstrap_admin(
