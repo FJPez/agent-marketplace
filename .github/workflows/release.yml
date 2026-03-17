@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: Deployment environment to release.
+        required: true
+        default: production
+        type: choice
+        options:
+          - staging
+          - production
+      smoke_base_url:
+        description: Public base URL to smoke test after the deploy step has completed.
+        required: true
+        type: string
+      run_migrations:
+        description: Run Alembic migrations before smoke checks.
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ inputs.target_environment }}
+  cancel-in-progress: false
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    outputs:
+      image_ref: ${{ steps.image.outputs.image_ref }}
+      image_repository: ${{ steps.image.outputs.image_repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare image metadata
+        id: image
+        run: |
+          IMAGE_REPOSITORY="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image_repository=${IMAGE_REPOSITORY}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${IMAGE_REPOSITORY}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.image.outputs.image_ref }}
+            ${{ steps.image.outputs.image_repository }}:${{ inputs.target_environment }}
+
+  database-migrate:
+    if: ${{ inputs.run_migrations }}
+    needs: build-image
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+    env:
+      APP_ENV: ${{ inputs.target_environment == 'production' && 'prod' || 'staging' }}
+      APP_DATABASE_URL: ${{ secrets.APP_DATABASE_URL }}
+      APP_JWT_SECRET_KEY: ${{ secrets.APP_JWT_SECRET_KEY }}
+      APP_SIWE_DOMAIN: ${{ secrets.APP_SIWE_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-groups --locked
+      - run: uv run alembic upgrade head
+
+  smoke:
+    needs:
+      - build-image
+      - database-migrate
+    if: >-
+      ${{
+        always() &&
+        needs.build-image.result == 'success' &&
+        (
+          needs.database-migrate.result == 'success' ||
+          needs.database-migrate.result == 'skipped'
+        )
+      }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target_environment }}
+    env:
+      SMOKE_BASE_URL: ${{ inputs.smoke_base_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-groups --locked
+      - name: Smoke test deployed service
+        run: |
+          for attempt in $(seq 1 30); do
+            if uv run python scripts/deployment_smoke.py; then
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Smoke checks did not pass before timeout." >&2
+          exit 1
+      - name: Release summary
+        run: |
+          {
+            echo "## Release ready"
+            echo
+            echo "- Environment: ${{ inputs.target_environment }}"
+            echo "- Image: ${{ needs.build-image.outputs.image_ref }}"
+            echo "- Smoke URL: ${{ inputs.smoke_base_url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
