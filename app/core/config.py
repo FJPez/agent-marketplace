@@ -1,10 +1,43 @@
+from dataclasses import dataclass
 from functools import lru_cache
 
 from eth_account import Account
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from web3 import Web3
 
 from app.core.enums import AppEnv
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentToken:
+    address: str
+    name: str
+    symbol: str
+    decimals: int
+    version: str
+
+
+_SUPPORTED_PAYMENT_TOKENS_BY_NETWORK: dict[str, PaymentToken] = {
+    "eip155:8453": PaymentToken(
+        address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        name="USD Coin",
+        symbol="USDC",
+        decimals=6,
+        version="2",
+    ),
+    "eip155:84532": PaymentToken(
+        address="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        name="USDC",
+        symbol="USDC",
+        decimals=6,
+        version="2",
+    ),
+}
+
+
+def get_supported_payment_token(network_caip2: str) -> PaymentToken | None:
+    return _SUPPORTED_PAYMENT_TOKENS_BY_NETWORK.get(network_caip2)
 
 
 class Settings(BaseSettings):
@@ -32,10 +65,10 @@ class Settings(BaseSettings):
     x402_network_caip2: str = "eip155:84532"
     x402_cdp_api_key_id: str | None = None
     x402_cdp_api_key_secret: str | None = None
+    payment_token_address: str | None = None
     payouts_enabled: bool = False
     payouts_rpc_url: str | None = None
     payouts_chain_id: int = 84532
-    payouts_usdc_address: str | None = None
     treasury_private_key: SecretStr | None = None
     api_rate_limit: str = "120/minute"
     invoke_rate_limit: str = "60/minute"
@@ -52,12 +85,14 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.treasury_private_key is not None:
             self._derive_treasury_address()
+        if self.payment_token_address is not None:
+            self._resolve_payment_token()
         if self.payouts_enabled:
             missing = [
                 field_name
                 for field_name, value in (
                     ("payouts_rpc_url", self.payouts_rpc_url),
-                    ("payouts_usdc_address", self.payouts_usdc_address),
+                    ("payment_token_address", self.payment_token_address),
                     (
                         "treasury_private_key",
                         None
@@ -78,6 +113,12 @@ class Settings(BaseSettings):
             return None
         return self._derive_treasury_address()
 
+    @property
+    def payment_token(self) -> PaymentToken | None:
+        if self.payment_token_address is None:
+            return None
+        return self._resolve_payment_token()
+
     def _derive_treasury_address(self) -> str:
         assert self.treasury_private_key is not None
         try:
@@ -85,6 +126,22 @@ class Settings(BaseSettings):
         except (TypeError, ValueError) as exc:
             msg = "treasury_private_key is invalid"
             raise ValueError(msg) from exc
+
+    def _resolve_payment_token(self) -> PaymentToken:
+        assert self.payment_token_address is not None
+        supported_token = get_supported_payment_token(self.x402_network_caip2)
+        if supported_token is None:
+            msg = "payment_token_address is not supported on the configured x402 network"
+            raise ValueError(msg)
+        try:
+            configured_token_address = Web3.to_checksum_address(self.payment_token_address)
+        except ValueError as exc:
+            msg = "payment_token_address is invalid"
+            raise ValueError(msg) from exc
+        if configured_token_address != supported_token.address:
+            msg = "payment_token_address does not match the supported token for x402_network_caip2"
+            raise ValueError(msg)
+        return supported_token
 
 
 @lru_cache

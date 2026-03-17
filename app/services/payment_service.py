@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 from sqlalchemy.exc import IntegrityError
 
@@ -202,6 +203,27 @@ class PaymentService:
                 ),
             )
         assert attempt is not None
+        if not _payment_payload_matches_requirement(
+            payment_payload=payment_payload,
+            payment_requirement=payment_requirement,
+        ):
+            mismatch_verify_outcome: dict[str, object] = {
+                "ok": False,
+                "reason": "payment asset mismatch",
+            }
+            attempt.verify_outcome = mismatch_verify_outcome
+            logger.info(
+                "payment verification failed",
+                extra=build_event_context(
+                    "payment.verify_failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: resolved.quote.id,
+                    },
+                ),
+            )
+            await self._session.commit()
+            return self._challenge(payment_requirement, detail="payment could not be verified")
 
         verify_outcome = await self._verify(
             payment_requirement=payment_requirement,
@@ -284,13 +306,15 @@ class PaymentService:
         payout_service = PayoutExecutionService(
             self._session,
         )
+        payment_token = self._settings.payment_token
+        assert payment_token is not None
         await payout_service.record_ready_payout(
             provider_account_id=resolved.service.provider_account_id,
             service_id=resolved.service.id,
             invocation_id=invocation.id,
             payment_attempt_id=attempt.id,
             gross_amount_minor=_get_payment_amount(payment_requirement),
-            currency="USDC",
+            currency=payment_token.symbol,
             network=self._settings.x402_network,
         )
         await self._session.commit()
@@ -310,6 +334,7 @@ class PaymentService:
                 amount_minor=amount_minor,
                 currency=currency,
                 treasury_address=self._settings.treasury_address,
+                payment_token=self._settings.payment_token,
                 facilitator_url=self._settings.x402_facilitator_url,
                 network=self._settings.x402_network,
                 network_caip2=self._settings.x402_network_caip2,
@@ -400,3 +425,19 @@ def _get_payment_amount(payment_requirement: dict[str, object]) -> int:
         return value
     msg = "payment requirement is missing payment_amount"
     raise InvokeBadGatewayError(msg)
+
+
+def _payment_payload_matches_requirement(
+    *,
+    payment_payload: dict[str, object],
+    payment_requirement: dict[str, object],
+) -> bool:
+    accepted = payment_payload.get("accepted")
+    if not isinstance(accepted, Mapping):
+        return False
+    accepted_mapping = cast("Mapping[str, object]", accepted)
+    accepted_asset = accepted_mapping.get("asset")
+    required_asset = payment_requirement.get("asset")
+    if not isinstance(accepted_asset, str) or not isinstance(required_asset, str):
+        return False
+    return accepted_asset.casefold() == required_asset.casefold()

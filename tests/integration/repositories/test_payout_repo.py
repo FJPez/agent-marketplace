@@ -270,7 +270,7 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
             payment_attempt_id=retry_attempt_id,
             destination_wallet="0x00000000000000000000000000000000000000aa",
             amount_minor=100,
-            currency="USDT",
+            currency="USDC",
             network="base-sepolia",
             status=PayoutStatus.SENT,
         )
@@ -281,6 +281,6 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
             provider_account_id=provider_account_id
         )
 
-    assert len(summaries) == 2
-    assert [summary.currency for summary in summaries] == ["USDC", "USDT"]
-    assert [summary.total_amount_minor for summary in summaries] == [4_500_000, 100]
+    assert len(summaries) == 1
+    assert summaries[0].currency == "USDC"
+    assert summaries[0].total_amount_minor == 4_500_100

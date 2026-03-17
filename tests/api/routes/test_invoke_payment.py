@@ -479,7 +479,11 @@ class _UnavailableFacilitatorClient:
         raise AssertionError("settle should not be called")
 
 
-def _payment_header(*, payment_identifier: str) -> str:
+def _payment_header(
+    *,
+    payment_identifier: str,
+    asset: str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+) -> str:
     return encode_payment_signature_header(
         PaymentPayload.model_validate(
             {
@@ -490,7 +494,7 @@ def _payment_header(*, payment_identifier: str) -> str:
                 "accepted": {
                     "scheme": "exact",
                     "network": "eip155:84532",
-                    "asset": "usdc",
+                    "asset": asset,
                     "amount": "500",
                     "payTo": "0x000000000000000000000000000000000000c0de",
                     "maxTimeoutSeconds": 300,
@@ -515,6 +519,7 @@ def _install_payment_state(
     state.facilitator_client = facilitator_client
     state.x402_resource_server = x402_resource_server or _FakeX402ResourceServer()
     state.settings.payouts_enabled = payouts_enabled
+    state.settings.payment_token_address = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     state.settings.treasury_private_key = SecretStr("0x" + "11" * 32)
     state.payout_executor = payout_executor
 
@@ -972,6 +977,58 @@ async def test_paid_invoke_records_asset_denominated_provider_payout_amount(
     assert attempt.payment_requirement["payment_amount"] == 5_000_000
     assert payouts[0].transfer_reference is None
     assert payouts[0].destination_wallet is None
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_rejects_wrong_payment_token_before_invoke_or_payout(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "bonjour"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+        payouts_enabled=True,
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            payment_header=_payment_header(
+                payment_identifier="wrong-token-payment",
+                asset="0x00000000000000000000000000000000000000aa",
+            ),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    invocation_count, payment_attempt_count, ledger_count, payout_count = await _count_rows(
+        db_session_factory
+    )
+
+    assert response.status_code == 402
+    assert response.json() == {"detail": "payment could not be verified"}
+    assert invocation_count == 0
+    assert payment_attempt_count == 1
+    assert ledger_count == 0
+    assert payout_count == 0
 
 
 @pytest.mark.asyncio
