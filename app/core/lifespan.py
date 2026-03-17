@@ -3,7 +3,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx import AsyncClient, Limits, Timeout
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from starlette.types import Lifespan
 
@@ -39,7 +39,18 @@ async def _init_app_state(state: AppState) -> None:
     state.db_engine = create_engine(state.settings)
     state.db_session_factory = create_session_factory(state.db_engine)
     state.stack.push_async_callback(state.db_engine.dispose)
-    state.http_client = AsyncClient()
+    state.http_client = AsyncClient(
+        timeout=Timeout(
+            connect=state.settings.http_connect_timeout,
+            read=state.settings.http_read_timeout,
+            write=state.settings.http_write_timeout,
+            pool=state.settings.http_pool_timeout,
+        ),
+        limits=Limits(
+            max_connections=state.settings.http_max_connections,
+            max_keepalive_connections=state.settings.http_max_keepalive_connections,
+        ),
+    )
     state.stack.push_async_callback(state.http_client.aclose)
     state.facilitator_client = FacilitatorClient(
         url=state.settings.x402_facilitator_url,

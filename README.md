@@ -219,6 +219,19 @@ uv run ty check
 uv run alembic upgrade head
 ```
 
+## Deployment
+
+Railway is the supported deployment target for this repository.
+
+Use [docs/deployment/railway.md](docs/deployment/railway.md)
+for the full setup and release flow, including:
+
+- Railway project and service creation
+- required Railway app variables
+- required GitHub environment secrets
+- release workflow usage
+- treasury-wallet admin bootstrap behavior
+
 ## Operational notes
 
 - `.env.example` includes the current `APP_...` settings used by local auth,

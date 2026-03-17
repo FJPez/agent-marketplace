@@ -3,7 +3,9 @@ import os
 from collections.abc import AsyncIterator, Generator
 from pathlib import Path
 
-os.environ.setdefault("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+os.environ["APP_JWT_SECRET_KEY"] = "test-secret-key-with-32-bytes-123"
+os.environ["APP_SIWE_DOMAIN"] = "testserver"
+os.environ.pop("APP_ENV_FILE", None)
 
 import pytest
 from alembic import command
