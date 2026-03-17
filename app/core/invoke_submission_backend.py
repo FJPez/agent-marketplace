@@ -110,9 +110,7 @@ class RedisInvokeSubmissionBackend:
         )
 
     async def reset(self) -> None:
-        keys = [
-            key async for key in self._redis_client.scan_iter(match=f"{self._key_prefix}:*")
-        ]
+        keys = [key async for key in self._redis_client.scan_iter(match=f"{self._key_prefix}:*")]
         if keys:
             await self._redis_client.delete(tuple(keys))
 
