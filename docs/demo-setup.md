@@ -111,7 +111,7 @@ APP_X402_CDP_API_KEY_SECRET=-----BEGIN EC PRIVATE KEY-----\nYOUR_KEY_MATERIAL\n-
 APP_PAYOUTS_ENABLED=true
 APP_PAYOUTS_RPC_URL=https://sepolia.base.org
 APP_PAYOUTS_CHAIN_ID=84532
-APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000
+APP_PAYMENT_TOKEN_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e
 APP_TREASURY_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY
 APP_API_RATE_LIMIT=120/minute
 APP_INVOKE_RATE_LIMIT=60/minute
@@ -169,8 +169,9 @@ What each setting does:
   - Base Sepolia RPC used for provider payout execution
 - `APP_PAYOUTS_CHAIN_ID=84532`
   - chain id used for payout transactions
-- `APP_PAYOUTS_USDC_ADDRESS=0x0000000000000000000000000000000000000000`
-  - USDC token contract used for provider payout execution
+- `APP_PAYMENT_TOKEN_ADDRESS=0x036CbD53842c5426634e7929541eC2318f3dCF7e`
+  - the single payment token contract used for both x402 payments and provider payouts
+  - the app enforces one payment token per network
 - `APP_TREASURY_PRIVATE_KEY=0xYOUR_BASE_SEPOLIA_TREASURY_PRIVATE_KEY`
   - treasury signer used when `POST /v1/provider/payouts` executes provider payouts
   - the app derives the public treasury address from this private key and uses it in x402 payment requirements
@@ -321,6 +322,11 @@ On success the example client also logs:
 
 After a successful paid retry, provider earnings are recorded internally as
 `READY` payouts for the wallet derived from `PROVIDER_PRIVATE_KEY`.
+
+The payment token is also enforced on the consumer side. If the consumer signs
+or submits a payment payload for any token other than `APP_PAYMENT_TOKEN_ADDRESS`,
+the API returns `402 payment could not be verified` and does not invoke the
+provider or create payouts.
 
 ## Run the Provider Example Client
 
