@@ -519,7 +519,6 @@ def _install_payment_state(
     state.facilitator_client = facilitator_client
     state.x402_resource_server = x402_resource_server or _FakeX402ResourceServer()
     state.settings.payouts_enabled = payouts_enabled
-    state.settings.payment_token_address = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     state.settings.treasury_private_key = SecretStr("0x" + "11" * 32)
     state.payout_executor = payout_executor
 

@@ -63,7 +63,6 @@ def test_settings_store_treasury_private_key_as_secret(
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "http://localhost:8545")
-    monkeypatch.setenv("APP_PAYMENT_TOKEN_ADDRESS", "0x036CbD53842c5426634e7929541eC2318f3dCF7e")
     monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
 
     settings = Settings()
@@ -71,7 +70,9 @@ def test_settings_store_treasury_private_key_as_secret(
     assert isinstance(settings.treasury_private_key, SecretStr)
     assert settings.treasury_private_key.get_secret_value() == "0x" + "cd" * 32
     assert settings.treasury_address == "0x89AEF553A06ab0C3173e79DE1Ce241A9ed3b992C"
-    assert settings.payment_token_address == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    assert settings.payment_token is not None
+    assert settings.payment_token.address == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    assert settings.payment_token.symbol == "USDC"
 
 
 def test_settings_reject_invalid_treasury_private_key(
@@ -82,20 +83,22 @@ def test_settings_reject_invalid_treasury_private_key(
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "http://localhost:8545")
-    monkeypatch.setenv("APP_PAYMENT_TOKEN_ADDRESS", "0x036CbD53842c5426634e7929541eC2318f3dCF7e")
     monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "not-a-key")
 
     with pytest.raises(ValidationError, match="treasury_private_key"):
         Settings()
 
 
-def test_settings_reject_payment_token_address_that_does_not_match_supported_network_token(
+def test_settings_derive_payment_token_from_network(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_PAYMENT_TOKEN_ADDRESS", "0x" + "ab" * 20)
+    monkeypatch.setenv("APP_X402_NETWORK_CAIP2", "eip155:8453")
 
-    with pytest.raises(ValidationError, match="payment_token_address"):
-        Settings()
+    settings = Settings()
+
+    assert settings.payment_token is not None
+    assert settings.payment_token.address == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    assert settings.payment_token.symbol == "USDC"

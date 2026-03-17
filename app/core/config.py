@@ -4,7 +4,6 @@ from functools import lru_cache
 from eth_account import Account
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from web3 import Web3
 
 from app.core.enums import AppEnv
 
@@ -65,7 +64,6 @@ class Settings(BaseSettings):
     x402_network_caip2: str = "eip155:84532"
     x402_cdp_api_key_id: str | None = None
     x402_cdp_api_key_secret: str | None = None
-    payment_token_address: str | None = None
     payouts_enabled: bool = False
     payouts_rpc_url: str | None = None
     payouts_chain_id: int = 84532
@@ -85,14 +83,14 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.treasury_private_key is not None:
             self._derive_treasury_address()
-        if self.payment_token_address is not None:
-            self._resolve_payment_token()
         if self.payouts_enabled:
+            if self.payment_token is None:
+                msg = "x402_network_caip2 is not supported for payments"
+                raise ValueError(msg)
             missing = [
                 field_name
                 for field_name, value in (
                     ("payouts_rpc_url", self.payouts_rpc_url),
-                    ("payment_token_address", self.payment_token_address),
                     (
                         "treasury_private_key",
                         None
@@ -115,9 +113,7 @@ class Settings(BaseSettings):
 
     @property
     def payment_token(self) -> PaymentToken | None:
-        if self.payment_token_address is None:
-            return None
-        return self._resolve_payment_token()
+        return get_supported_payment_token(self.x402_network_caip2)
 
     def _derive_treasury_address(self) -> str:
         assert self.treasury_private_key is not None
@@ -126,22 +122,6 @@ class Settings(BaseSettings):
         except (TypeError, ValueError) as exc:
             msg = "treasury_private_key is invalid"
             raise ValueError(msg) from exc
-
-    def _resolve_payment_token(self) -> PaymentToken:
-        assert self.payment_token_address is not None
-        supported_token = get_supported_payment_token(self.x402_network_caip2)
-        if supported_token is None:
-            msg = "payment_token_address is not supported on the configured x402 network"
-            raise ValueError(msg)
-        try:
-            configured_token_address = Web3.to_checksum_address(self.payment_token_address)
-        except ValueError as exc:
-            msg = "payment_token_address is invalid"
-            raise ValueError(msg) from exc
-        if configured_token_address != supported_token.address:
-            msg = "payment_token_address does not match the supported token for x402_network_caip2"
-            raise ValueError(msg)
-        return supported_token
 
 
 @lru_cache

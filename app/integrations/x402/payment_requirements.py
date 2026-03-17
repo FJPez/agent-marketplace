@@ -24,10 +24,7 @@ def build_payment_requirement(
             "APP_TREASURY_PRIVATE_KEY is required for paid invokes",
         )
     if payment_token is None:
-        raise PaymentRequirementConfigError(
-            "payment configuration is incomplete: "
-            "APP_PAYMENT_TOKEN_ADDRESS is required for paid invokes",
-        )
+        raise PaymentRequirementConfigError("payment network is not supported")
     if currency != "USD":
         raise PaymentRequirementConfigError("payment currency is not supported")
 
