@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import AsyncClient, Response
+from pydantic import SecretStr
 from sqlalchemy import func, select
 from tests.helpers.auth import auth_headers_for_account_id
 from x402 import PaymentPayload
@@ -14,12 +16,23 @@ from x402.http import encode_payment_signature_header
 
 from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
+from app.core.logging import (
+    EVENT_FIELD,
+    INVOCATION_ID_FIELD,
+    PAYMENT_ATTEMPT_ID_FIELD,
+    PAYOUT_ID_FIELD,
+    PAYOUT_STATUS_FIELD,
+    PROVIDER_ACCOUNT_ID_FIELD,
+    REQUEST_ID_FIELD,
+    SERVICE_ID_FIELD,
+)
 from app.core.request_hash import hash_request_body
 from app.db.models import (
     Account,
     Invocation,
     LedgerEntry,
     PaymentAttempt,
+    Payout,
     PricingModel,
     ProviderUpstream,
     Quote,
@@ -27,6 +40,7 @@ from app.db.models import (
     ServiceEndpoint,
     ServiceRevision,
 )
+from app.integrations.payouts import PreparedPayout, SentPayout
 from app.integrations.x402.facilitator_client import FacilitatorUnavailableError
 from app.integrations.x402.resource_server import X402ResourceServerAdapter
 
@@ -49,9 +63,11 @@ def _auth_headers(
 
 async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    wallet_address: str = "0x00000000000000000000000000000000000000aa",
 ) -> int:
     async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
+        account = Account(display_name="Provider", wallet_address=wallet_address)
         session.add(account)
         await session.flush()
         return account.id
@@ -173,14 +189,23 @@ async def _seed_quote(
 
 async def _count_rows(
     db_session_factory: async_sessionmaker[AsyncSession],
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, int]:
     async with db_session_factory() as session:
         invocation_count = await session.scalar(select(func.count()).select_from(Invocation))
         payment_attempt_count = await session.scalar(
             select(func.count()).select_from(PaymentAttempt)
         )
         ledger_count = await session.scalar(select(func.count()).select_from(LedgerEntry))
-    return invocation_count or 0, payment_attempt_count or 0, ledger_count or 0
+        payout_count = await session.scalar(select(func.count()).select_from(Payout))
+    return invocation_count or 0, payment_attempt_count or 0, ledger_count or 0, payout_count or 0
+
+
+async def _list_payouts(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> list[Payout]:
+    async with db_session_factory() as session:
+        result = await session.scalars(select(Payout).order_by(Payout.id))
+        return list(result.all())
 
 
 async def _get_payment_attempt(
@@ -192,6 +217,16 @@ async def _get_payment_attempt(
         statement = select(PaymentAttempt).where(
             PaymentAttempt.payment_identifier == payment_identifier,
         )
+        return await session.scalar(statement)
+
+
+async def _get_invocation_by_idempotency_key(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    idempotency_key: str,
+) -> Invocation | None:
+    async with db_session_factory() as session:
+        statement = select(Invocation).where(Invocation.idempotency_key == idempotency_key)
         return await session.scalar(statement)
 
 
@@ -349,6 +384,79 @@ class _FakeX402ResourceServer:
         return {"PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
 
 
+class _SuccessfulPayoutExecutor:
+    def __init__(self) -> None:
+        self.prepare_calls: list[dict[str, object]] = []
+        self.send_calls: list[dict[str, object]] = []
+
+    async def prepare_payout(
+        self,
+        *,
+        destination_wallet: str,
+        amount_minor: int,
+        idempotency_key: str,
+        nonce: int,
+    ) -> PreparedPayout:
+        self.prepare_calls.append(
+            {
+                "destination_wallet": destination_wallet,
+                "amount_minor": amount_minor,
+                "idempotency_key": idempotency_key,
+                "nonce": nonce,
+            }
+        )
+        return PreparedPayout(
+            raw_transaction="0xrawtx",
+            reference="0xpayoutsent",
+            network="base-sepolia",
+            token_address="0x0000000000000000000000000000000000000001",
+        )
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> SentPayout:
+        self.send_calls.append(
+            {
+                "raw_transaction": raw_transaction,
+                "reference": reference,
+            }
+        )
+        return SentPayout(
+            reference=reference,
+            network="base-sepolia",
+            token_address="0x0000000000000000000000000000000000000001",
+        )
+
+
+class _FailingPayoutExecutor:
+    async def prepare_payout(
+        self,
+        *,
+        destination_wallet: str,
+        amount_minor: int,
+        idempotency_key: str,
+        nonce: int,
+    ) -> PreparedPayout:
+        _ = destination_wallet
+        _ = amount_minor
+        _ = idempotency_key
+        _ = nonce
+        raise RuntimeError("rpc unavailable")
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> SentPayout:
+        _ = raw_transaction
+        _ = reference
+        raise RuntimeError("rpc unavailable")
+
+
 class _UnavailableFacilitatorClient:
     async def verify(
         self,
@@ -371,7 +479,11 @@ class _UnavailableFacilitatorClient:
         raise AssertionError("settle should not be called")
 
 
-def _payment_header(*, payment_identifier: str) -> str:
+def _payment_header(
+    *,
+    payment_identifier: str,
+    asset: str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+) -> str:
     return encode_payment_signature_header(
         PaymentPayload.model_validate(
             {
@@ -382,7 +494,7 @@ def _payment_header(*, payment_identifier: str) -> str:
                 "accepted": {
                     "scheme": "exact",
                     "network": "eip155:84532",
-                    "asset": "usdc",
+                    "asset": asset,
                     "amount": "500",
                     "payTo": "0x000000000000000000000000000000000000c0de",
                     "maxTimeoutSeconds": 300,
@@ -399,12 +511,16 @@ def _install_payment_state(
     upstream_client: _FakeHttpClient,
     facilitator_client: object,
     x402_resource_server: object | None = None,
+    payout_executor: object | None = None,
+    payouts_enabled: bool = False,
 ) -> None:
     state = get_app_state(app)
     state.http_client = upstream_client
     state.facilitator_client = facilitator_client
     state.x402_resource_server = x402_resource_server or _FakeX402ResourceServer()
-    state.settings.x402_pay_to_address = "0x000000000000000000000000000000000000c0de"
+    state.settings.payouts_enabled = payouts_enabled
+    state.settings.treasury_private_key = SecretStr("0x" + "11" * 32)
+    state.payout_executor = payout_executor
 
 
 @pytest.mark.asyncio
@@ -435,7 +551,9 @@ async def test_paid_invoke_without_payment_returns_402_and_creates_no_records(
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
 
-    invocation_count, payment_attempt_count, ledger_count = await _count_rows(db_session_factory)
+    invocation_count, payment_attempt_count, ledger_count, payout_count = await _count_rows(
+        db_session_factory
+    )
 
     assert response.status_code == 402
     assert response.json() == {"detail": "payment required"}
@@ -443,6 +561,7 @@ async def test_paid_invoke_without_payment_returns_402_and_creates_no_records(
     assert invocation_count == 0
     assert payment_attempt_count == 0
     assert ledger_count == 0
+    assert payout_count == 0
 
 
 @pytest.mark.asyncio
@@ -552,6 +671,77 @@ async def test_successful_paid_invoke_writes_ledger_entries(
 
 
 @pytest.mark.asyncio
+async def test_successful_paid_invoke_logs_invoke_and_ledger_events(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "bonjour"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = await async_client.post(
+            "/v1/invoke/paid-invoke-service",
+            headers={
+                **_auth_headers(
+                    consumer_account_id,
+                    payment_header=_payment_header(payment_identifier="payment-log-success"),
+                ),
+                "X-Request-ID": "invoke-log-success",
+            },
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+        )
+
+    assert response.status_code == 200
+    payment_attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-log-success",
+    )
+    assert payment_attempt is not None
+
+    invoke_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.invoke_service"
+        and getattr(record, EVENT_FIELD, None) == "invoke.succeeded"
+    )
+    ledger_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.ledger_service"
+        and getattr(record, EVENT_FIELD, None) == "ledger.recorded"
+    )
+
+    assert getattr(invoke_record, REQUEST_ID_FIELD) == "invoke-log-success"
+    assert getattr(invoke_record, SERVICE_ID_FIELD) == service_id
+    assert getattr(invoke_record, INVOCATION_ID_FIELD) == response.json()["id"]
+    assert getattr(ledger_record, REQUEST_ID_FIELD) == "invoke-log-success"
+    assert getattr(ledger_record, PROVIDER_ACCOUNT_ID_FIELD) == provider_account_id
+    assert getattr(ledger_record, SERVICE_ID_FIELD) == service_id
+    assert getattr(ledger_record, INVOCATION_ID_FIELD) == response.json()["id"]
+    assert getattr(ledger_record, PAYMENT_ATTEMPT_ID_FIELD) == payment_attempt.id
+
+
+@pytest.mark.asyncio
 async def test_successful_paid_invoke_replays_by_idempotency_key_without_second_upstream_call(
     app: FastAPI,
     async_client: AsyncClient,
@@ -599,6 +789,299 @@ async def test_successful_paid_invoke_replays_by_idempotency_key_without_second_
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
     assert len(upstream_client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=500, json={"detail": "upstream failed"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        response = await async_client.post(
+            "/v1/invoke/paid-invoke-service",
+            headers={
+                **_auth_headers(
+                    consumer_account_id,
+                    payment_header=_payment_header(payment_identifier="payment-log-failure"),
+                ),
+                "X-Request-ID": "invoke-log-failure",
+            },
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "upstream request failed"}
+    failed_invocation = await _get_invocation_by_idempotency_key(
+        db_session_factory,
+        idempotency_key="invoke-key",
+    )
+    assert failed_invocation is not None
+    failure_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.invoke_service"
+        and getattr(record, EVENT_FIELD, None) == "invoke.failed"
+    )
+    assert getattr(failure_record, REQUEST_ID_FIELD) == "invoke-log-failure"
+    assert getattr(failure_record, SERVICE_ID_FIELD) == service_id
+    assert getattr(failure_record, INVOCATION_ID_FIELD) == failed_invocation.id
+
+
+@pytest.mark.asyncio
+async def test_successful_paid_invoke_records_ready_provider_payout_when_enabled(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    payout_executor = _SuccessfulPayoutExecutor()
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "bonjour"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+        payout_executor=payout_executor,
+        payouts_enabled=True,
+    )
+
+    with caplog.at_level(logging.INFO, logger="app.services.payout_service"):
+        response = await async_client.post(
+            "/v1/invoke/paid-invoke-service",
+            headers={
+                **_auth_headers(
+                    consumer_account_id,
+                    payment_header=_payment_header(payment_identifier="payment-payout-success"),
+                ),
+                "X-Request-ID": "payout-success-req",
+            },
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+        )
+
+    payouts = await _list_payouts(db_session_factory)
+    ready_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.payout_service"
+        and getattr(record, EVENT_FIELD, None) == "payout.ready"
+    )
+
+    assert response.status_code == 200
+    assert payout_executor.prepare_calls == []
+    assert payout_executor.send_calls == []
+    assert len(payouts) == 1
+    assert payouts[0].status.value == "ready"
+    assert payouts[0].destination_wallet is None
+    assert payouts[0].amount_minor == 4_500_000
+    assert payouts[0].currency == "USDC"
+    assert payouts[0].network == "base-sepolia"
+    assert payouts[0].attempt_count == 0
+    assert getattr(ready_record, REQUEST_ID_FIELD) == "payout-success-req"
+    assert getattr(ready_record, PAYOUT_ID_FIELD) == payouts[0].id
+    assert getattr(ready_record, PAYOUT_STATUS_FIELD) == "ready"
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_records_asset_denominated_provider_payout_amount(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    payout_executor = _SuccessfulPayoutExecutor()
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "bonjour"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+        payout_executor=payout_executor,
+        payouts_enabled=True,
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers={
+            **_auth_headers(
+                consumer_account_id,
+                payment_header=_payment_header(payment_identifier="payment-payout-failure"),
+            ),
+            "X-Request-ID": "payout-failure-req",
+        },
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-payout-failure",
+    )
+    payouts = await _list_payouts(db_session_factory)
+
+    assert response.status_code == 200
+    assert attempt is not None
+    assert len(payouts) == 1
+    assert payout_executor.prepare_calls == []
+    assert payout_executor.send_calls == []
+    assert payouts[0].status.value == "ready"
+    assert payouts[0].currency == "USDC"
+    assert payouts[0].amount_minor == 4_500_000
+    assert attempt.payment_requirement["payment_amount"] == 5_000_000
+    assert payouts[0].transfer_reference is None
+    assert payouts[0].destination_wallet is None
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_rejects_wrong_payment_token_before_invoke_or_payout(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "bonjour"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+        payouts_enabled=True,
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            payment_header=_payment_header(
+                payment_identifier="wrong-token-payment",
+                asset="0x00000000000000000000000000000000000000aa",
+            ),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    invocation_count, payment_attempt_count, ledger_count, payout_count = await _count_rows(
+        db_session_factory
+    )
+
+    assert response.status_code == 402
+    assert response.json() == {"detail": "payment could not be verified"}
+    assert invocation_count == 0
+    assert payment_attempt_count == 1
+    assert ledger_count == 0
+    assert payout_count == 0
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_replay_does_not_create_duplicate_provider_payout(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    payout_executor = _SuccessfulPayoutExecutor()
+    _install_payment_state(
+        app,
+        upstream_client=_FakeHttpClient(
+            responses=[Response(status_code=200, json={"result": "bonjour"})]
+        ),
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+        payout_executor=payout_executor,
+        payouts_enabled=True,
+    )
+    headers = _auth_headers(
+        consumer_account_id,
+        payment_header=_payment_header(payment_identifier="payment-payout-replay"),
+    )
+
+    first = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=headers,
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+    second = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=headers,
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    payouts = await _list_payouts(db_session_factory)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert payout_executor.prepare_calls == []
+    assert payout_executor.send_calls == []
+    assert len(payouts) == 1
 
 
 @pytest.mark.asyncio

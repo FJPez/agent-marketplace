@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import PricingModelType
+from app.core.logging import (
+    INVOCATION_ID_FIELD,
+    PAYMENT_ATTEMPT_ID_FIELD,
+    PROVIDER_ACCOUNT_ID_FIELD,
+    QUOTE_ID_FIELD,
+    SERVICE_ID_FIELD,
+    build_event_context,
+    get_logger,
+)
 from app.integrations.x402.facilitator_client import (
     FacilitatorAuthError,
     FacilitatorConfigError,
@@ -28,6 +38,9 @@ from app.services.invoke_service import (
     InvokeService,
 )
 from app.services.ledger_service import LedgerService
+from app.services.payout_service import PayoutExecutionService
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,9 +128,18 @@ class PaymentService:
             request_hash=resolved.request_hash,
         )
         if existing is not None:
+            logger.info(
+                "paid invoke replayed",
+                extra=build_event_context(
+                    "payment.replayed",
+                    **{
+                        INVOCATION_ID_FIELD: existing.id,
+                    },
+                ),
+            )
             return PaidInvokeSuccess(
                 invocation=existing,
-                response_headers=await self._build_success_headers_for_invocation(existing.id),
+                response_headers=await self.build_success_headers_for_invocation(existing.id),
             )
 
         if resolved.quote is None:
@@ -181,6 +203,27 @@ class PaymentService:
                 ),
             )
         assert attempt is not None
+        if not _payment_payload_matches_requirement(
+            payment_payload=payment_payload,
+            payment_requirement=payment_requirement,
+        ):
+            mismatch_verify_outcome: dict[str, object] = {
+                "ok": False,
+                "reason": "payment asset mismatch",
+            }
+            attempt.verify_outcome = mismatch_verify_outcome
+            logger.info(
+                "payment verification failed",
+                extra=build_event_context(
+                    "payment.verify_failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: resolved.quote.id,
+                    },
+                ),
+            )
+            await self._session.commit()
+            return self._challenge(payment_requirement, detail="payment could not be verified")
 
         verify_outcome = await self._verify(
             payment_requirement=payment_requirement,
@@ -189,6 +232,16 @@ class PaymentService:
         attempt.verify_outcome = verify_outcome
         attempt.facilitator_reference = _extract_reference(verify_outcome)
         if not _is_verify_success(verify_outcome):
+            logger.info(
+                "payment verification failed",
+                extra=build_event_context(
+                    "payment.verify_failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: resolved.quote.id,
+                    },
+                ),
+            )
             await self._session.commit()
             return self._challenge(payment_requirement, detail="payment could not be verified")
 
@@ -201,6 +254,16 @@ class PaymentService:
             verify_outcome,
         )
         if not _is_settle_success(settle_outcome):
+            logger.error(
+                "payment settlement failed",
+                extra=build_event_context(
+                    "payment.settle_failed",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: resolved.quote.id,
+                    },
+                ),
+            )
             await self._session.commit()
             raise InvokeBadGatewayError("payment settlement failed")
 
@@ -227,6 +290,33 @@ class PaymentService:
             amount_minor=resolved.quote.amount_minor,
             currency=resolved.quote.currency or "",
         )
+        logger.info(
+            "payment settled",
+            extra=build_event_context(
+                "payment.settled",
+                **{
+                    PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                    QUOTE_ID_FIELD: resolved.quote.id,
+                    INVOCATION_ID_FIELD: invocation.id,
+                    PROVIDER_ACCOUNT_ID_FIELD: resolved.service.provider_account_id,
+                    SERVICE_ID_FIELD: resolved.service.id,
+                },
+            ),
+        )
+        payout_service = PayoutExecutionService(
+            self._session,
+        )
+        payment_token = self._settings.payment_token
+        assert payment_token is not None
+        await payout_service.record_ready_payout(
+            provider_account_id=resolved.service.provider_account_id,
+            service_id=resolved.service.id,
+            invocation_id=invocation.id,
+            payment_attempt_id=attempt.id,
+            gross_amount_minor=_get_payment_amount(payment_requirement),
+            currency=payment_token.symbol,
+            network=self._settings.x402_network,
+        )
         await self._session.commit()
         return PaidInvokeSuccess(
             invocation=invocation,
@@ -243,7 +333,8 @@ class PaymentService:
             return build_payment_requirement(
                 amount_minor=amount_minor,
                 currency=currency,
-                pay_to_address=self._settings.x402_pay_to_address,
+                treasury_address=self._settings.treasury_address,
+                payment_token=self._settings.payment_token,
                 facilitator_url=self._settings.x402_facilitator_url,
                 network=self._settings.x402_network,
                 network_caip2=self._settings.x402_network_caip2,
@@ -267,7 +358,7 @@ class PaymentService:
             settle_outcome=settle_outcome,
         )
 
-    async def _build_success_headers_for_invocation(self, invocation_id: int) -> dict[str, str]:
+    async def build_success_headers_for_invocation(self, invocation_id: int) -> dict[str, str]:
         attempt = await self._attempt_repo.get_by_invocation_id(invocation_id=invocation_id)
         if attempt is None or attempt.settle_outcome is None:
             return {}
@@ -326,3 +417,27 @@ def _extract_reference(outcome: dict[str, object]) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def _get_payment_amount(payment_requirement: dict[str, object]) -> int:
+    value = payment_requirement.get("payment_amount")
+    if isinstance(value, int):
+        return value
+    msg = "payment requirement is missing payment_amount"
+    raise InvokeBadGatewayError(msg)
+
+
+def _payment_payload_matches_requirement(
+    *,
+    payment_payload: dict[str, object],
+    payment_requirement: dict[str, object],
+) -> bool:
+    accepted = payment_payload.get("accepted")
+    if not isinstance(accepted, Mapping):
+        return False
+    accepted_mapping = cast("Mapping[str, object]", accepted)
+    accepted_asset = accepted_mapping.get("asset")
+    required_asset = payment_requirement.get("asset")
+    if not isinstance(accepted_asset, str) or not isinstance(required_asset, str):
+        return False
+    return accepted_asset.casefold() == required_asset.casefold()

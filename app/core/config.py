@@ -1,9 +1,42 @@
+from dataclasses import dataclass
 from functools import lru_cache
 
-from pydantic import model_validator
+from eth_account import Account
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.enums import AppEnv
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentToken:
+    address: str
+    name: str
+    symbol: str
+    decimals: int
+    version: str
+
+
+_SUPPORTED_PAYMENT_TOKENS_BY_NETWORK: dict[str, PaymentToken] = {
+    "eip155:8453": PaymentToken(
+        address="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        name="USD Coin",
+        symbol="USDC",
+        decimals=6,
+        version="2",
+    ),
+    "eip155:84532": PaymentToken(
+        address="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        name="USDC",
+        symbol="USDC",
+        decimals=6,
+        version="2",
+    ),
+}
+
+
+def get_supported_payment_token(network_caip2: str) -> PaymentToken | None:
+    return _SUPPORTED_PAYMENT_TOKENS_BY_NETWORK.get(network_caip2)
 
 
 class Settings(BaseSettings):
@@ -31,7 +64,10 @@ class Settings(BaseSettings):
     x402_network_caip2: str = "eip155:84532"
     x402_cdp_api_key_id: str | None = None
     x402_cdp_api_key_secret: str | None = None
-    x402_pay_to_address: str | None = None
+    payouts_enabled: bool = False
+    payouts_rpc_url: str | None = None
+    payouts_chain_id: int = 84532
+    treasury_private_key: SecretStr | None = None
     api_rate_limit: str = "120/minute"
     invoke_rate_limit: str = "60/minute"
     quote_rate_limit: str = "30/minute"
@@ -45,7 +81,47 @@ class Settings(BaseSettings):
         if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
+        if self.treasury_private_key is not None:
+            self._derive_treasury_address()
+        if self.payouts_enabled:
+            if self.payment_token is None:
+                msg = "x402_network_caip2 is not supported for payments"
+                raise ValueError(msg)
+            missing = [
+                field_name
+                for field_name, value in (
+                    ("payouts_rpc_url", self.payouts_rpc_url),
+                    (
+                        "treasury_private_key",
+                        None
+                        if self.treasury_private_key is None
+                        else self.treasury_private_key.get_secret_value(),
+                    ),
+                )
+                if not value
+            ]
+            if missing:
+                msg = f"payout settings are required when payouts are enabled: {', '.join(missing)}"
+                raise ValueError(msg)
         return self
+
+    @property
+    def treasury_address(self) -> str | None:
+        if self.treasury_private_key is None:
+            return None
+        return self._derive_treasury_address()
+
+    @property
+    def payment_token(self) -> PaymentToken | None:
+        return get_supported_payment_token(self.x402_network_caip2)
+
+    def _derive_treasury_address(self) -> str:
+        assert self.treasury_private_key is not None
+        try:
+            return Account.from_key(self.treasury_private_key.get_secret_value()).address
+        except (TypeError, ValueError) as exc:
+            msg = "treasury_private_key is invalid"
+            raise ValueError(msg) from exc
 
 
 @lru_cache

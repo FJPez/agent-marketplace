@@ -9,6 +9,7 @@ from starlette.types import Lifespan
 
 from app.core.config import Settings
 from app.db.session import create_engine, create_session_factory
+from app.integrations.payouts import BaseSepoliaUsdcPayoutExecutor
 from app.integrations.x402.facilitator_client import FacilitatorClient
 from app.integrations.x402.resource_server import X402ResourceServerAdapter
 
@@ -22,6 +23,7 @@ class AppState:
     http_client: object | None = None
     facilitator_client: object | None = None
     x402_resource_server: object | None = None
+    payout_executor: object | None = None
     telemetry: object | None = None
 
 
@@ -46,6 +48,17 @@ async def _init_app_state(state: AppState) -> None:
         cdp_api_key_secret=state.settings.x402_cdp_api_key_secret,
     )
     state.x402_resource_server = X402ResourceServerAdapter()
+    if state.settings.payouts_enabled:
+        assert state.settings.payouts_rpc_url is not None
+        payment_token = state.settings.payment_token
+        assert payment_token is not None
+        assert state.settings.treasury_private_key is not None
+        state.payout_executor = BaseSepoliaUsdcPayoutExecutor(
+            rpc_url=state.settings.payouts_rpc_url,
+            chain_id=state.settings.payouts_chain_id,
+            token_address=payment_token.address,
+            private_key=state.settings.treasury_private_key.get_secret_value(),
+        )
 
 
 def create_lifespan(settings: Settings) -> Lifespan[FastAPI]:

@@ -4,48 +4,65 @@ import asyncio
 import json
 import logging
 import os
-import uuid
-from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import httpx
+from demo_common import (
+    CHAIN_ID,
+    authenticate,
+    authorization_headers,
+    build_idempotency_headers,
+    ensure_distinct_wallets,
+    get_required_private_key,
+    resolve_api_base_url,
+)
 from eth_account import Account
-from eth_account.messages import encode_defunct
 from x402 import x402Client
 from x402.http import decode_payment_response_header, x402HTTPClient
 from x402.mechanisms.evm.exact import register_exact_evm_client
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
-CONSUMER_PRIVATE_KEY = os.getenv("CONSUMER_PRIVATE_KEY")
-SIWE_DOMAIN = os.getenv("SIWE_DOMAIN")
+API_BASE_URL = resolve_api_base_url()
 SERVICE_SLUG = os.getenv("SERVICE_SLUG", "demo-agent-service")
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
 NETWORK_CAIP2 = "eip155:84532"
-CHAIN_ID = 84532
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("example_client")
 
 
 async def main() -> None:
-    if not CONSUMER_PRIVATE_KEY:
-        raise RuntimeError("CONSUMER_PRIVATE_KEY is required for the paid invoke example")
-
-    buyer, wallet_address = _build_x402_http_client(CONSUMER_PRIVATE_KEY)
+    consumer_private_key = get_required_private_key(
+        "CONSUMER_PRIVATE_KEY",
+        purpose="the consumer paid invoke example",
+    )
+    consumer_wallet_address, provider_wallet_address = ensure_distinct_wallets(
+        primary_private_key=consumer_private_key,
+        primary_env_name="CONSUMER_PRIVATE_KEY",
+        secondary_private_key=os.getenv("PROVIDER_PRIVATE_KEY"),
+        secondary_env_name="PROVIDER_PRIVATE_KEY",
+    )
+    buyer, wallet_address = _build_x402_http_client(consumer_private_key)
+    assert wallet_address == consumer_wallet_address
 
     logger.info("API base URL: %s", API_BASE_URL)
-    logger.info("Using wallet address: %s", wallet_address)
+    logger.info("Consumer wallet address: %s", wallet_address)
+    if provider_wallet_address is not None:
+        logger.info("Provider wallet address: %s", provider_wallet_address)
     logger.info("Target network: Base Sepolia (%s, chain %s)", NETWORK_CAIP2, CHAIN_ID)
 
     async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=30.0) as client:
-        access_token = await _authenticate(client, private_key=CONSUMER_PRIVATE_KEY)
+        access_token, authenticated_wallet = await authenticate(
+            client,
+            api_base_url=API_BASE_URL,
+            private_key=consumer_private_key,
+        )
+        logger.info("\nAuthenticated consumer wallet: %s", authenticated_wallet)
         services = await _discover_services(client)
         _select_service(services, SERVICE_SLUG)
 
-        free_payload = {"message": "hello from the free invoke example"}
-        paid_payload = {
+        free_payload: dict[str, object] = {"message": "hello from the free invoke example"}
+        paid_payload: dict[str, object] = {
             "message": ("Summarize this marketplace request after the x402 payment flow completes.")
         }
 
@@ -58,6 +75,10 @@ async def main() -> None:
             paid_payload,
             access_token=access_token,
             quote_id=quote["id"],
+        )
+        logger.info("\nProvider earnings should now exist as READY payouts.")
+        logger.info(
+            "Next step: run `make demo-provider` with PROVIDER_PRIVATE_KEY exported.",
         )
 
 
@@ -87,7 +108,7 @@ async def _create_quote(
 ) -> dict[str, Any]:
     response = await client.post(
         f"/v1/services/{service_slug}/quote",
-        headers=_authorization_headers(access_token),
+        headers=authorization_headers(access_token),
         json={"endpoint_key": PAID_ENDPOINT_KEY, "payload": payload},
     )
     response.raise_for_status()
@@ -182,66 +203,8 @@ def _build_x402_http_client(private_key: str) -> tuple[x402HTTPClient, str]:
     return x402HTTPClient(buyer), wallet.address
 
 
-async def _authenticate(client: httpx.AsyncClient, *, private_key: str) -> str:
-    signer = Account.from_key(private_key)
-    nonce_response = await client.get(
-        "/v1/auth/nonce",
-        params={"address": signer.address},
-    )
-    nonce_response.raise_for_status()
-    nonce = nonce_response.json()["nonce"]
-    issued_at = datetime.now(UTC).replace(microsecond=0)
-    domain = _resolve_siwe_domain()
-    message = "\n".join(
-        [
-            f"{domain} wants you to sign in with your Ethereum account:",
-            signer.address,
-            "",
-            f"URI: {API_BASE_URL}",
-            "Version: 1",
-            f"Chain ID: {CHAIN_ID}",
-            f"Nonce: {nonce}",
-            f"Issued At: {issued_at.isoformat().replace('+00:00', 'Z')}",
-        ],
-    )
-    signed = Account.sign_message(
-        signable_message=encode_defunct(text=message),
-        private_key=private_key,
-    )
-    verify_response = await client.post(
-        "/v1/auth/verify",
-        json={
-            "message": message,
-            "signature": signed.signature.to_0x_hex(),
-        },
-    )
-    verify_response.raise_for_status()
-    body = verify_response.json()
-    logger.info(
-        "\nAuthenticated account:\n%s",
-        json.dumps(body["account"], indent=2),
-    )
-    return body["access_token"]
-
-
-def _resolve_siwe_domain() -> str:
-    if SIWE_DOMAIN:
-        return SIWE_DOMAIN
-    parsed = urlparse(API_BASE_URL)
-    if parsed.hostname:
-        return parsed.hostname
-    return "127.0.0.1"
-
-
-def _authorization_headers(access_token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {access_token}"}
-
-
 def _invoke_headers(access_token: str) -> dict[str, str]:
-    return {
-        **_authorization_headers(access_token),
-        "Idempotency-Key": f"example-{uuid.uuid4()}",
-    }
+    return build_idempotency_headers(access_token, prefix="example-consumer")
 
 
 if __name__ == "__main__":

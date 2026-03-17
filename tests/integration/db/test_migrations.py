@@ -12,6 +12,7 @@ DOMAIN_TABLES = {
     "ledger_entries",
     "moderation_actions",
     "payment_attempts",
+    "payouts",
     "pricing_models",
     "provider_upstreams",
     "quotes",
@@ -104,6 +105,37 @@ def test_head_migration_points_service_provider_fk_at_accounts(
 
     assert provider_fk["referred_table"] == "accounts"
     assert provider_fk["referred_columns"] == ["id"]
+
+
+def test_head_migration_uses_bigint_for_payout_amount_minor(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    columns = asyncio.run(get_column_specs(db_engine, "payouts"))
+
+    assert type(columns["amount_minor"]["type"]).__name__.upper() == "BIGINT"
+
+
+def test_head_migration_adds_request_payout_columns(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    columns = asyncio.run(get_column_specs(db_engine, "payouts"))
+
+    assert columns["destination_wallet"]["nullable"] is True
+    assert {
+        "request_idempotency_key",
+        "failure_code",
+        "prepared_raw_transaction",
+        "chain_nonce",
+    }.issubset(
+        columns,
+    )
+    assert type(columns["chain_nonce"]["type"]).__name__.upper() == "BIGINT"
 
 
 async def _seed_head_state_for_downgrade(db_engine: AsyncEngine) -> None:

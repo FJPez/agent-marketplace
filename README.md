@@ -223,8 +223,10 @@ uv run alembic upgrade head
 
 - `.env.example` includes the current `APP_...` settings used by local auth,
   guardrails, x402, and the demo seed path.
-- `APP_X402_PAY_TO_ADDRESS` is required for paid invokes; startup and free routes
-  still work without it, but paid invoke attempts fail with a clear config error.
+- `APP_TREASURY_PRIVATE_KEY` is the single source of truth for paid invokes and
+  provider payouts. The app derives the marketplace treasury address from that
+  private key for x402 payment requirements, and the same key signs provider
+  payout transactions.
 - x402 v2 payment flows use `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE`, and
   `PAYMENT-RESPONSE` headers.
 - `scripts/seed_demo.py` seeds a rerunnable demo provider-owned active service,
@@ -247,35 +249,50 @@ For a live x402 v2 manual test:
    - `APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402`
    - `APP_X402_CDP_API_KEY_ID=...`
    - `APP_X402_CDP_API_KEY_SECRET=...`
-   - `APP_X402_PAY_TO_ADDRESS=...`
-   The payout address should be the provider wallet that should receive Base
-   Sepolia USDC.
-3. Point the seeded service at a reachable upstream with
+   - `APP_TREASURY_PRIVATE_KEY=...`
+   The app derives the marketplace treasury address from this key and exposes
+   that derived address in x402 payment requirements.
+3. Enable payout execution and configure the treasury signer:
+   - `APP_PAYOUTS_ENABLED=true`
+   - `APP_PAYOUTS_RPC_URL=...`
+   - `APP_TREASURY_PRIVATE_KEY=...`
+   The app currently supports exactly one payment token per network. On Base
+   Sepolia that token is USDC, derived from `APP_X402_NETWORK_CAIP2`, and
+   consumer payments using any other token are rejected before invoke execution
+   or payout creation.
+4. Export different consumer and provider wallets before seeding or running the
+   example clients:
+   - `export CONSUMER_PRIVATE_KEY=0x...`
+   - `export PROVIDER_PRIVATE_KEY=0x...`
+   - `export API_BASE_URL=http://127.0.0.1:8000`
+   - `export SIWE_DOMAIN=127.0.0.1`
+   The consumer and provider keys must resolve to different Base Sepolia
+   wallets.
+5. Point the seeded service at a reachable upstream with
    `APP_DEMO_UPSTREAM_BASE_URL` and the matching demo path settings.
    If you change those values, rerun the demo seed so the stored upstream rows
    in the database are updated.
-4. Run migrations and seed data:
+6. Run migrations and seed data:
    `uv run alembic upgrade head`
    `make seed`
-5. Authenticate the buyer wallet with the same private key the example x402
-   client uses:
-   `GET /v1/auth/nonce?address=<wallet>`
-   sign the returned nonce in a SIWE message whose domain matches
-   `APP_SIWE_DOMAIN`
-   `POST /v1/auth/verify`
-6. Optionally create an API key for repeated manual calls:
-   `POST /v1/auth/api-keys`
-7. Create a quote for the paid endpoint:
-   `POST /v1/services/demo-agent-service/quote`
-8. Invoke with `Authorization: Bearer <jwt-or-api-key>` and `Idempotency-Key`. The first
-   unpaid request should return `402 Payment Required` with
-   `PAYMENT-REQUIRED`.
-9. Retry with a standard x402 v2 buyer/client so it sends `PAYMENT-SIGNATURE`.
-   A successful paid invoke returns the upstream response plus
-   `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
+7. Run the local upstream and API:
+   `make demo-upstream`
+   `make demo-api`
+8. Run the consumer flow:
+   `make demo-client`
+   This authenticates with `CONSUMER_PRIVATE_KEY`, creates a quote, invokes the
+   free endpoint, pays for the paid endpoint, and prints the
+   `PAYMENT-RESPONSE` settlement details.
+9. Run the provider payout flow:
+   `make demo-provider`
+   This authenticates with `PROVIDER_PRIVATE_KEY`, lists provider payouts,
+   calls `POST /v1/provider/payouts`, and lists payouts again so you can see
+   the resulting status change.
 
 Quote prices remain in USD minor units at the API layer. The x402 integration
 converts that amount to USDC base units internally before verify/settle.
+Settlement records provider earnings immediately, but token transfer to the
+provider now happens only through the explicit payout request flow.
 
 For the full local demo walkthrough, including the mock upstream, seeded demo
 service, example client, `.env` setup, Base Sepolia wallet preparation, CDP

@@ -7,6 +7,13 @@ from jsonschema import ValidationError, validate
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import InvocationFailureReason, InvocationStatus
+from app.core.logging import (
+    ACCOUNT_ID_FIELD,
+    INVOCATION_ID_FIELD,
+    SERVICE_ID_FIELD,
+    build_event_context,
+    get_logger,
+)
 from app.core.request_hash import hash_request_body
 from app.integrations.provider_gateway.client import (
     ProviderGatewayClient,
@@ -56,6 +63,9 @@ class InvokeForbiddenError(Exception):
 
 class InvokeUnavailableError(Exception):
     pass
+
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,17 +220,50 @@ class InvokeService:
             invocation.error_message = "upstream request timed out"
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
             await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            logger.error(
+                "invoke failed",
+                extra=build_event_context(
+                    "invoke.failed",
+                    **{
+                        ACCOUNT_ID_FIELD: actor.account_id,
+                        INVOCATION_ID_FIELD: invocation.id,
+                        SERVICE_ID_FIELD: resolved.service.id,
+                    },
+                ),
+            )
             raise InvokeGatewayTimeoutError("upstream request timed out") from exc
         except ProviderGatewayTransportError as exc:
             invocation.error_message = "upstream request failed"
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
             await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            logger.error(
+                "invoke failed",
+                extra=build_event_context(
+                    "invoke.failed",
+                    **{
+                        ACCOUNT_ID_FIELD: actor.account_id,
+                        INVOCATION_ID_FIELD: invocation.id,
+                        SERVICE_ID_FIELD: resolved.service.id,
+                    },
+                ),
+            )
             raise InvokeBadGatewayError("upstream request failed") from exc
         except ProviderGatewayResponseError as exc:
             invocation.error_message = str(exc)
             invocation.upstream_status_code = exc.upstream_status_code
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
             await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            logger.error(
+                "invoke failed",
+                extra=build_event_context(
+                    "invoke.failed",
+                    **{
+                        ACCOUNT_ID_FIELD: actor.account_id,
+                        INVOCATION_ID_FIELD: invocation.id,
+                        SERVICE_ID_FIELD: resolved.service.id,
+                    },
+                ),
+            )
             raise InvokeBadGatewayError(str(exc)) from exc
 
         invocation.status = InvocationStatus.SUCCEEDED
@@ -229,6 +272,17 @@ class InvokeService:
         invocation.error_message = None
         invocation.failure_reason = None
         await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+        logger.info(
+            "invoke succeeded",
+            extra=build_event_context(
+                "invoke.succeeded",
+                **{
+                    ACCOUNT_ID_FIELD: actor.account_id,
+                    INVOCATION_ID_FIELD: invocation.id,
+                    SERVICE_ID_FIELD: resolved.service.id,
+                },
+            ),
+        )
         return invocation
 
     async def get_invocation(

@@ -104,7 +104,7 @@ async def invoke_service(
                     settings=get_app_state(fastapi_request.app).settings,
                 )
                 for header_name, header_value in (
-                    await payment_service._build_success_headers_for_invocation(replayed.id)
+                    await payment_service.build_success_headers_for_invocation(replayed.id)
                 ).items():
                     response.headers[header_name] = header_value
             return InvocationResponse.from_model(replayed)
