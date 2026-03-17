@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from coredis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -29,5 +30,14 @@ async def get_readiness_response(app_state: AppState) -> HealthResponse:
             await session.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
         raise ReadinessCheckError("database unavailable") from exc
+
+    if app_state.settings.redis_url is not None:
+        redis_client = app_state.redis_client
+        if redis_client is None:
+            raise ReadinessCheckError("redis unavailable")
+        try:
+            await redis_client.ping()
+        except RedisError as exc:
+            raise ReadinessCheckError("redis unavailable") from exc
 
     return HealthResponse(status="ok")

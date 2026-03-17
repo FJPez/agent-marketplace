@@ -9,12 +9,15 @@ from coredis.tokens import PureToken
 if TYPE_CHECKING:
     import coredis
 
+    from app.core.config import Settings
+
 _COMPARE_AND_DELETE_SCRIPT = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   return redis.call('DEL', KEYS[1])
 end
 return 0
 """
+_DEFAULT_INVOKE_SUBMISSION_TTL_SECONDS = 3660
 
 
 class SubmissionAcquireResult(Enum):
@@ -109,4 +112,18 @@ class RedisInvokeSubmissionBackend:
     async def reset(self) -> None:
         keys = [key async for key in self._redis_client.scan_iter(match=f"{self._key_prefix}:*")]
         if keys:
-            await self._redis_client.delete(keys)
+            await self._redis_client.delete(*keys)
+
+
+def create_invoke_submission_backend(
+    settings: Settings,
+    *,
+    redis_client: coredis.Redis[str] | None,
+) -> InvokeSubmissionBackend:
+    if settings.redis_url and redis_client is not None:
+        return RedisInvokeSubmissionBackend(
+            redis_client,
+            ttl_seconds=_DEFAULT_INVOKE_SUBMISSION_TTL_SECONDS,
+            key_prefix=f"agent-marketplace:{settings.env.value}:invoke-submissions",
+        )
+    return MemoryInvokeSubmissionBackend()

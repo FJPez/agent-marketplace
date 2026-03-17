@@ -22,20 +22,10 @@ from tests.integration.db.support import (
 )
 
 from app.core.config import Settings, get_settings
-from app.core.rate_limits_backend import get_rate_limits_backend
 from app.db.session import create_engine, create_session_factory
 from app.main import create_app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(autouse=True)
-def reset_rate_limiter_state() -> Generator[None, None, None]:
-    asyncio.run(get_rate_limits_backend().reset())
-    try:
-        yield
-    finally:
-        asyncio.run(get_rate_limits_backend().reset())
 
 
 @pytest.fixture(scope="session")

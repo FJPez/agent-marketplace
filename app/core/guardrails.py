@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -10,6 +9,11 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.core.invoke_submission_backend import (
+    InvokeSubmissionBackend,
+    MemoryInvokeSubmissionBackend,
+    SubmissionAcquireResult,
+)
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
     build_actor_rate_limit_key,
@@ -39,8 +43,9 @@ class InvokeGuardrails:
     quote_rate_limit: str
     payload_max_bytes: int
     rate_limits_backend: RateLimitsBackend = field(default_factory=get_rate_limits_backend)
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _in_flight_requests: dict[str, str] = field(default_factory=dict)
+    invoke_submission_backend: InvokeSubmissionBackend = field(
+        default_factory=MemoryInvokeSubmissionBackend
+    )
 
     def applies_to(self, request: Request) -> bool:
         return request.url.path.startswith(_V1_PATH_PREFIX) or self._is_invoke_request(request)
@@ -76,15 +81,21 @@ class InvokeGuardrails:
             request_fingerprint=buffered_body.request_fingerprint,
         )
 
-        async with self._lock:
-            if submission_key is not None:
-                existing_fingerprint = self._in_flight_requests.get(submission_key)
-                if existing_fingerprint is not None:
-                    detail = "request already in progress"
-                    if existing_fingerprint != request_fingerprint:
-                        detail = "idempotency key already used for a different request"
-                    return JSONResponse(status_code=409, content={"detail": detail})
-                self._in_flight_requests[submission_key] = request_fingerprint
+        if submission_key is not None:
+            acquire_result = await self.invoke_submission_backend.acquire(
+                submission_key,
+                request_fingerprint,
+            )
+            if acquire_result is SubmissionAcquireResult.REQUEST_IN_PROGRESS:
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": "request already in progress"},
+                )
+            if acquire_result is SubmissionAcquireResult.IDEMPOTENCY_KEY_REUSED:
+                return JSONResponse(
+                    status_code=409,
+                    content={"detail": "idempotency key already used for a different request"},
+                )
 
         try:
             if self._has_global_policy(request) and await self._is_globally_rate_limited(request):
@@ -97,8 +108,10 @@ class InvokeGuardrails:
             return await call_next(request)
         finally:
             if submission_key is not None:
-                async with self._lock:
-                    self._in_flight_requests.pop(submission_key, None)
+                await self.invoke_submission_backend.release(
+                    submission_key,
+                    request_fingerprint,
+                )
 
     async def reset_rate_limits(self) -> None:
         await self.rate_limits_backend.reset()
