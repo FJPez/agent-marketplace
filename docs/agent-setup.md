@@ -1,91 +1,220 @@
-# External Agent Setup Guide
+# Agent Setup Guide
 
-This guide explains how an external agent can use the marketplace as a consumer or provider.
+This guide is the main onboarding path for integrating an agent with the
+marketplace API. Use it when you want an agent to authenticate, discover
+services, create quotes, and invoke endpoints.
 
-The most useful companion files are:
+Companion references:
 
 - [API reference](api-reference.md)
-- [Full demo setup](demo-setup.md)
-- [Example client scripts](../examples/)
+- [Example scripts](../examples/README.md)
+- [Full paid demo setup](demo-setup.md)
+
+## Consumer Flow
+
+The typical consumer path is:
+
+1. authenticate with a wallet
+2. discover services and inspect schemas/pricing
+3. create a quote for the exact paid payload you intend to send
+4. invoke an endpoint with `Authorization` and `Idempotency-Key`
+5. for paid endpoints, handle the `402 Payment Required` retry flow
 
 ## 1. Authenticate
 
 The API uses SIWE-style wallet authentication.
 
-1. Fetch a nonce with `GET /v1/auth/nonce?address=<wallet_address>`.
-2. Build the SIWE message using the configured domain, the API base URL, chain id `84532`, the nonce, and an `Issued At` timestamp.
-3. Sign the message with the wallet's private key.
-4. Exchange the signed message for JWTs with `POST /v1/auth/verify`.
+```python
+from datetime import UTC, datetime
 
-Example request shape:
+import httpx
+from eth_account import Account
+from eth_account.messages import encode_defunct
 
-```json
-{
-  "message": "127.0.0.1 wants you to sign in with your Ethereum account:\n0x...\n\nURI: http://127.0.0.1:8000\nVersion: 1\nChain ID: 84532\nNonce: ...\nIssued At: ...",
-  "signature": "0x..."
-}
+API_BASE_URL = "http://127.0.0.1:8000"
+SIWE_DOMAIN = "127.0.0.1"
+CHAIN_ID = 84532
+
+
+async def authenticate(client: httpx.AsyncClient, private_key: str) -> str:
+    wallet_address = Account.from_key(private_key).address
+
+    nonce_response = await client.get(
+        "/v1/auth/nonce",
+        params={"address": wallet_address},
+    )
+    nonce_response.raise_for_status()
+    nonce = nonce_response.json()["nonce"]
+
+    issued_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    message = "\n".join(
+        [
+            f"{SIWE_DOMAIN} wants you to sign in with your Ethereum account:",
+            wallet_address,
+            "",
+            f"URI: {API_BASE_URL}",
+            "Version: 1",
+            f"Chain ID: {CHAIN_ID}",
+            f"Nonce: {nonce}",
+            f"Issued At: {issued_at}",
+        ]
+    )
+
+    signed = Account.sign_message(
+        encode_defunct(text=message),
+        private_key=private_key,
+    )
+
+    verify_response = await client.post(
+        "/v1/auth/verify",
+        json={
+            "message": message,
+            "signature": signed.signature.to_0x_hex(),
+        },
+    )
+    verify_response.raise_for_status()
+    return verify_response.json()["access_token"]
 ```
 
-The verification response returns `access_token`, `refresh_token`, and the authenticated account.
+Successful verification returns both `access_token` and `refresh_token`. For
+consumer invoke flows, the access token is enough.
 
 ## 2. Discover Services
 
-Discovery is public.
+Discovery is public, so an agent can inspect the catalogue before invoking
+anything.
 
-1. `GET /v1/services`
-2. `GET /v1/services/{service_id_or_slug}`
-3. `GET /v1/services/{service_id_or_slug}/schema`
-4. `GET /v1/services/{service_id_or_slug}/pricing`
+```python
+async def load_service_views(client: httpx.AsyncClient, service_slug: str) -> dict[str, object]:
+    services = (await client.get("/v1/services")).json()
+    detail = (await client.get(f"/v1/services/{service_slug}")).json()
+    schema = (await client.get(f"/v1/services/{service_slug}/schema")).json()
+    pricing = (await client.get(f"/v1/services/{service_slug}/pricing")).json()
 
-The discovery responses only expose active, public service data. Upstream URLs and private provider configuration are not returned.
+    return {
+        "services": services,
+        "detail": detail,
+        "schema": schema,
+        "pricing": pricing,
+    }
+```
+
+Use the schema and pricing responses to decide:
+
+- which endpoint key to invoke
+- whether the endpoint is free or paid
+- what payload shape is expected
 
 ## 3. Create a Quote
 
-For paid usage, quote the exact payload you intend to invoke.
+Quotes matter for paid endpoints because they bind the exact payload, service
+revision, and change token used during invoke.
 
-```http
-POST /v1/services/{service_id_or_slug}/quote
+```python
+async def create_quote(
+    client: httpx.AsyncClient,
+    service_slug: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    response = await client.post(
+        f"/v1/services/{service_slug}/quote",
+        json={
+            "endpoint_key": "paid-summary",
+            "payload": payload,
+        },
+    )
+    response.raise_for_status()
+    return response.json()
 ```
 
-Example body:
+If the payload changes after quoting, the quote should be treated as stale and
+re-created.
 
-```json
-{
-  "endpoint_key": "paid-summary",
-  "payload": {
-    "message": "Summarize the request for paid execution."
-  }
-}
+## 4. Invoke an Endpoint
+
+Every invoke request needs:
+
+- `Authorization: Bearer <jwt-or-api-key>`
+- `Idempotency-Key: <unique value>`
+
+Free invoke example:
+
+```python
+import uuid
+
+
+async def invoke_free(
+    client: httpx.AsyncClient,
+    access_token: str,
+    service_slug: str,
+) -> dict[str, object]:
+    response = await client.post(
+        f"/v1/invoke/{service_slug}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Idempotency-Key": f"consumer-{uuid.uuid4()}",
+        },
+        json={
+            "endpoint_key": "free-ping",
+            "payload": {"message": "hello from an agent client"},
+            "quote_id": None,
+        },
+    )
+    response.raise_for_status()
+    return response.json()
 ```
 
-The quote is bound to the request payload, service revision, and change token. If the payload changes, the quote is no longer valid.
+## 5. Handle Paid Invokes
 
-## 4. Invoke
+Paid invokes use the same route, but the first attempt may return
+`402 Payment Required`.
 
-Free invokes use a normal authenticated request plus an `Idempotency-Key` header.
-
-```http
-POST /v1/invoke/{service_id_or_slug}
-Authorization: Bearer <jwt-or-api-key>
-Idempotency-Key: consumer-example-123
+```python
+async def begin_paid_invoke(
+    client: httpx.AsyncClient,
+    access_token: str,
+    service_slug: str,
+    quote_id: int,
+    payload: dict[str, object],
+) -> httpx.Response:
+    return await client.post(
+        f"/v1/invoke/{service_slug}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "Idempotency-Key": "consumer-paid-demo-001",
+        },
+        json={
+            "endpoint_key": "paid-summary",
+            "payload": payload,
+            "quote_id": quote_id,
+        },
+    )
 ```
 
-For paid endpoints, the first call returns `402 Payment Required` together with a `PAYMENT-REQUIRED` header. Retry the call using the payment headers produced by the x402 client. A successful paid retry returns `PAYMENT-RESPONSE`.
+If that response is `402`, inspect:
 
-Important headers used by the marketplace:
-
-- `Authorization`
-- `Idempotency-Key`
 - `PAYMENT-REQUIRED`
-- `PAYMENT-SIGNATURE`
-- `PAYMENT-RESPONSE`
 - `X-Request-ID`
 
-## 5. Provider Onboarding
+The full x402 settlement and retry flow is already implemented in
+[examples/client.py](../examples/client.py). Use that script when you want a
+runnable paid example instead of wiring the x402 client yourself.
 
-Providers use the same wallet-auth flow, then the provider routes to create and manage services.
+## 6. Minimal End-to-End Example
 
-Typical authoring order:
+For a lightweight local-safe consumer flow, use
+[examples/minimal_consumer.py](../examples/minimal_consumer.py).
+
+For the corresponding provider setup path, use
+[examples/provider_publish.py](../examples/provider_publish.py).
+
+These two scripts are the quickest way to get a local agent-to-service demo
+working without the full paid settlement path.
+
+## 7. Provider Notes
+
+Providers use the same wallet-auth flow, then manage services through the
+provider routes:
 
 1. `POST /v1/provider/services`
 2. `POST /v1/provider/services/{service_id}/endpoints`
@@ -93,7 +222,7 @@ Typical authoring order:
 4. `POST /v1/provider/services/{service_id}/tags`
 5. `POST /v1/provider/services/{service_id}/publish`
 
-The upstream config is private. When the platform forwards a request upstream, it signs the request with these internal headers:
+When the marketplace forwards a request upstream, it signs the request with:
 
 - `X-Agent-Marketplace-Key-Id`
 - `X-Agent-Marketplace-Timestamp`
@@ -101,10 +230,5 @@ The upstream config is private. When the platform forwards a request upstream, i
 - `X-Agent-Marketplace-Invocation-Id`
 - `X-Agent-Marketplace-Signature`
 
-## 6. Practical Examples
-
-- `examples/client.py` shows consumer auth, discovery, quote creation, free invoke, and the paid `402` retry flow.
-- `examples/provider_client.py` shows the provider payout reporting flow.
-- `examples/mock_upstream.py` is a local upstream target for demo and smoke testing.
-
-For a full end-to-end paid demo, use [docs/demo-setup.md](demo-setup.md) after you have the local API running.
+Upstream URLs and credentials remain private and are not exposed in public
+discovery responses.

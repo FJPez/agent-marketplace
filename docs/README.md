@@ -19,5 +19,5 @@ This folder contains the submission-facing docs for the coursework repository.
 ## Notes
 
 - The API reference Markdown is the source of truth for the committed PDF.
-- The agent setup guide is the quickest way to understand the auth, discovery, quote, and invoke flow from a consumer perspective.
+- The agent setup guide is the main onboarding entrypoint for agent consumers and includes inline code examples for auth, discovery, quote, and invoke.
 - The demo setup guide covers the more involved live x402 and payout path.
