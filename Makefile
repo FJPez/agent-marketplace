@@ -2,7 +2,7 @@ PYTHON ?= python
 HOST ?= 127.0.0.1
 PORT ?= 8000
 
-.PHONY: sync run test lint lint-fix format typecheck migrate seed demo-upstream demo-api demo-client
+.PHONY: sync run test lint lint-fix format typecheck migrate seed demo-upstream demo-api demo-client demo-provider
 
 sync:
 	uv sync
@@ -39,3 +39,6 @@ demo-api:
 
 demo-client:
 	uv run $(PYTHON) examples/client.py
+
+demo-provider:
+	uv run $(PYTHON) examples/provider_client.py

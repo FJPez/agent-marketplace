@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
+from eth_account import Account as EthAccount
 from sqlalchemy import select
 
 from app.core.config import get_settings
@@ -24,7 +26,6 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 DEMO_PROVIDER_NAME = "Demo Provider"
-DEMO_PROVIDER_WALLET = "0x00000000000000000000000000000000000000a1"
 DEMO_SERVICE_SLUG = "demo-agent-service"
 DEMO_CHANGE_TOKEN = "d" * 64
 FREE_ENDPOINT_KEY = "free-ping"
@@ -37,6 +38,45 @@ class SeedResult:
     service_id: int
     free_endpoint_id: int
     paid_endpoint_id: int
+    provider_wallet_address: str
+    consumer_wallet_address: str | None
+
+
+def _get_required_private_key(env_name: str, *, purpose: str) -> str:
+    private_key = os.getenv(env_name, "").strip()
+    if private_key:
+        return private_key
+    raise RuntimeError(f"{env_name} is required for {purpose}")
+
+
+def _wallet_address_from_private_key(private_key: str, *, env_name: str) -> str:
+    try:
+        return EthAccount.from_key(private_key).address
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{env_name} is not a valid EVM private key") from exc
+
+
+def _resolve_demo_wallets() -> tuple[str, str | None]:
+    provider_wallet_address = _wallet_address_from_private_key(
+        _get_required_private_key(
+            "PROVIDER_PRIVATE_KEY",
+            purpose="seeding the demo provider account",
+        ),
+        env_name="PROVIDER_PRIVATE_KEY",
+    )
+    consumer_private_key = os.getenv("CONSUMER_PRIVATE_KEY", "").strip()
+    if not consumer_private_key:
+        return provider_wallet_address, None
+
+    consumer_wallet_address = _wallet_address_from_private_key(
+        consumer_private_key,
+        env_name="CONSUMER_PRIVATE_KEY",
+    )
+    if provider_wallet_address.lower() == consumer_wallet_address.lower():
+        raise RuntimeError(
+            "PROVIDER_PRIVATE_KEY and CONSUMER_PRIVATE_KEY must resolve to different wallets",
+        )
+    return provider_wallet_address, consumer_wallet_address
 
 
 async def _get_or_create_account(
@@ -176,13 +216,16 @@ async def _upsert_upstream(
     upstream.base_url = base_url
     upstream.path = path
     upstream.http_method = "POST"
-    upstream.config = {
-        "auth": {
-            "type": "hmac_sha256",
-            "key_id": "demo-key",
-            "secret": "demo-secret",
+    upstream.config = cast(
+        "dict[str, object]",
+        {
+            "auth": {
+                "type": "hmac_sha256",
+                "key_id": "demo-key",
+                "secret": "demo-secret",
+            },
         },
-    }
+    )
     await session.flush()
 
 
@@ -282,6 +325,7 @@ async def _ensure_revision(
 
 
 async def seed_demo_data() -> SeedResult:
+    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     settings = get_settings()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
@@ -289,7 +333,7 @@ async def seed_demo_data() -> SeedResult:
         async with session_factory.begin() as session:
             provider = await _get_or_create_account(
                 session,
-                wallet_address=DEMO_PROVIDER_WALLET,
+                wallet_address=provider_wallet_address,
                 display_name=DEMO_PROVIDER_NAME,
             )
             service = await _get_or_create_service(
@@ -352,6 +396,8 @@ async def seed_demo_data() -> SeedResult:
                 service_id=service.id,
                 free_endpoint_id=free_endpoint.id,
                 paid_endpoint_id=paid_endpoint.id,
+                provider_wallet_address=provider_wallet_address,
+                consumer_wallet_address=consumer_wallet_address,
             )
     finally:
         await engine.dispose()
@@ -370,11 +416,13 @@ async def main() -> None:
                 f"demo_upstream_base_url={get_settings().demo_upstream_base_url}",
                 f"demo_free_upstream_path={get_settings().demo_free_upstream_path}",
                 f"demo_paid_upstream_path={get_settings().demo_paid_upstream_path}",
-                f"demo_provider_wallet={DEMO_PROVIDER_WALLET}",
+                f"demo_provider_wallet={result.provider_wallet_address}",
             ],
         )
         + "\n",
     )
+    if result.consumer_wallet_address is not None:
+        sys.stdout.write(f"configured_consumer_wallet={result.consumer_wallet_address}\n")
 
 
 if __name__ == "__main__":
