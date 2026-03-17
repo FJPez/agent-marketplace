@@ -174,6 +174,62 @@ def test_settings_require_non_default_siwe_domain_in_deployment_environments(
         Settings()
 
 
+@pytest.mark.parametrize("payouts_enabled_value", [None, "false"])
+def test_settings_require_payouts_enabled_in_deployment_environments(
+    payouts_enabled_value: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    if payouts_enabled_value is None:
+        monkeypatch.delenv("APP_PAYOUTS_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("APP_PAYOUTS_ENABLED", payouts_enabled_value)
+
+    with pytest.raises(ValidationError, match="payouts_enabled must be true"):
+        Settings()
+
+
+def test_settings_require_payout_rpc_url_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "staging")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv(
+        "APP_DATABASE_URL", "postgresql+asyncpg://db.internal:5432/agent_marketplace"
+    )
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
+    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
+    monkeypatch.delenv("APP_PAYOUTS_RPC_URL", raising=False)
+    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
+
+    with pytest.raises(ValidationError, match="payouts_rpc_url"):
+        Settings()
+
+
+def test_settings_require_treasury_private_key_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
+    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
+    monkeypatch.delenv("APP_TREASURY_PRIVATE_KEY", raising=False)
+
+    with pytest.raises(ValidationError, match="treasury_private_key"):
+        Settings()
+
+
 def test_settings_require_cdp_credentials_in_deployment_environments(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -183,6 +239,9 @@ def test_settings_require_cdp_credentials_in_deployment_environments(
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
     monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
+    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
+    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
     monkeypatch.setenv("APP_X402_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
     monkeypatch.delenv("APP_X402_CDP_API_KEY_ID", raising=False)
     monkeypatch.delenv("APP_X402_CDP_API_KEY_SECRET", raising=False)
@@ -202,8 +261,12 @@ def test_settings_accept_valid_deployment_configuration(
         "APP_DATABASE_URL", "postgresql+asyncpg://db.internal:5432/agent_marketplace"
     )
     monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
+    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
+    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
+    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
 
     settings = Settings()
 
     assert settings.env is AppEnv.STAGING
     assert settings.debug is False
+    assert settings.payouts_enabled is True

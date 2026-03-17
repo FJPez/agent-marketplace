@@ -4,11 +4,13 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx import AsyncClient
+from pydantic import SecretStr
 
 import app.main as main_module
 from app.core import lifespan as lifespan_module
 from app.core.config import AppEnv, Settings
 from app.core.lifespan import get_app_state
+from app.integrations.payouts import BaseSepoliaUsdcPayoutExecutor
 from app.main import create_app
 
 
@@ -133,3 +135,28 @@ def test_health_ready_returns_service_unavailable_without_db_session_factory() -
 
     assert response.status_code == 503
     assert response.json() == {"detail": "database unavailable"}
+
+
+def test_create_app_initializes_payout_executor_for_deployed_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda: Settings(
+            env=AppEnv.STAGING,
+            jwt_secret_key="test-secret-key-with-32-bytes-123",
+            database_url="postgresql+asyncpg://db.internal:5432/agent_marketplace",
+            siwe_domain="staging.example.com",
+            payouts_enabled=True,
+            payouts_rpc_url="https://rpc.example.com",
+            treasury_private_key=SecretStr("0x" + "cd" * 32),
+        ),
+    )
+    app = create_app()
+
+    with TestClient(app):
+        state = get_app_state(app)
+        assert isinstance(state.payout_executor, BaseSepoliaUsdcPayoutExecutor)

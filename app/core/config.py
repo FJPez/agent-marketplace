@@ -124,30 +124,12 @@ class Settings(BaseSettings):
         if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
-        if self.env in {AppEnv.PROD, AppEnv.STAGING}:
-            self._validate_deployment_settings()
         if self.treasury_private_key is not None:
             self._derive_treasury_address()
-        if self.payouts_enabled:
-            if self.payment_token is None:
-                msg = "x402_network_caip2 is not supported for payments"
-                raise ValueError(msg)
-            missing = [
-                field_name
-                for field_name, value in (
-                    ("payouts_rpc_url", self.payouts_rpc_url),
-                    (
-                        "treasury_private_key",
-                        None
-                        if self.treasury_private_key is None
-                        else self.treasury_private_key.get_secret_value(),
-                    ),
-                )
-                if not value
-            ]
-            if missing:
-                msg = f"payout settings are required when payouts are enabled: {', '.join(missing)}"
-                raise ValueError(msg)
+        if self.env in {AppEnv.PROD, AppEnv.STAGING}:
+            self._validate_deployment_settings()
+        elif self.payouts_enabled:
+            self._validate_payout_settings()
         return self
 
     def _validate_deployment_settings(self) -> None:
@@ -163,6 +145,10 @@ class Settings(BaseSettings):
         if self.database_url == _DEFAULT_DATABASE_URL or database_host in _LOCAL_DATABASE_HOSTS:
             msg = "database_url must point to a non-local database when env is staging or prod"
             raise ValueError(msg)
+        if not self.payouts_enabled:
+            msg = "payouts_enabled must be true when env is staging or prod"
+            raise ValueError(msg)
+        self._validate_payout_settings()
 
         facilitator_host = urlsplit(self.x402_facilitator_url).hostname
         cdp_credentials = (
@@ -174,6 +160,27 @@ class Settings(BaseSettings):
                 "x402_cdp_api_key_id and x402_cdp_api_key_secret are required when "
                 "env is staging or prod and the CDP facilitator is configured"
             )
+            raise ValueError(msg)
+
+    def _validate_payout_settings(self) -> None:
+        if self.payment_token is None:
+            msg = "x402_network_caip2 is not supported for payments"
+            raise ValueError(msg)
+        missing = [
+            field_name
+            for field_name, value in (
+                ("payouts_rpc_url", self.payouts_rpc_url),
+                (
+                    "treasury_private_key",
+                    None
+                    if self.treasury_private_key is None
+                    else self.treasury_private_key.get_secret_value(),
+                ),
+            )
+            if not value
+        ]
+        if missing:
+            msg = f"payout settings are required when payouts are enabled: {', '.join(missing)}"
             raise ValueError(msg)
 
     @property

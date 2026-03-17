@@ -67,6 +67,9 @@ jobs:
       APP_DATABASE_URL: ${{ secrets.APP_DATABASE_URL }}
       APP_JWT_SECRET_KEY: ${{ secrets.APP_JWT_SECRET_KEY }}
       APP_SIWE_DOMAIN: ${{ secrets.APP_SIWE_DOMAIN }}
+      APP_PAYOUTS_ENABLED: "true"
+      APP_PAYOUTS_RPC_URL: ${{ secrets.APP_PAYOUTS_RPC_URL }}
+      APP_TREASURY_PRIVATE_KEY: ${{ secrets.APP_TREASURY_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
