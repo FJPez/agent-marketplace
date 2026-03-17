@@ -212,6 +212,7 @@ def test_settings_require_payouts_enabled_in_deployment_environments(
     monkeypatch.setenv("APP_ENV", "prod")
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
     monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
     if payouts_enabled_value is None:
         monkeypatch.delenv("APP_PAYOUTS_ENABLED", raising=False)
@@ -233,6 +234,7 @@ def test_settings_require_payout_rpc_url_in_deployment_environments(
         "APP_DATABASE_URL", "postgresql+asyncpg://db.internal:5432/agent_marketplace"
     )
     monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
+    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.delenv("APP_PAYOUTS_RPC_URL", raising=False)
     monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
@@ -250,11 +252,30 @@ def test_settings_require_treasury_private_key_in_deployment_environments(
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
     monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
     monkeypatch.delenv("APP_TREASURY_PRIVATE_KEY", raising=False)
 
     with pytest.raises(ValidationError, match="treasury_private_key"):
+        Settings()
+
+
+def test_settings_require_redis_url_in_deployment_environments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
+    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
+    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
+    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
+    monkeypatch.delenv("APP_REDIS_URL", raising=False)
+
+    with pytest.raises(ValidationError, match="redis_url must be set"):
         Settings()
 
 
@@ -267,6 +288,7 @@ def test_settings_require_cdp_credentials_in_deployment_environments(
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
     monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
     monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
@@ -287,6 +309,7 @@ def test_settings_accept_valid_deployment_configuration(
     monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
     monkeypatch.setenv("APP_DATABASE_URL", "postgresql://db.internal:5432/agent_marketplace")
     monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
+    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
     monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
     monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
     monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
@@ -296,4 +319,5 @@ def test_settings_accept_valid_deployment_configuration(
     assert settings.env is AppEnv.STAGING
     assert settings.debug is False
     assert settings.database_url == "postgresql+asyncpg://db.internal:5432/agent_marketplace"
+    assert settings.redis_url == "redis://cache.internal:6379/0"
     assert settings.payouts_enabled is True

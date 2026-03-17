@@ -175,6 +175,7 @@ def test_create_app_initializes_payout_executor_for_deployed_environments(
             env=AppEnv.STAGING,
             jwt_secret_key="test-secret-key-with-32-bytes-123",
             database_url="postgresql+asyncpg://db.internal:5432/agent_marketplace",
+            redis_url="redis://cache.internal:6379/0",
             siwe_domain="staging.example.com",
             payouts_enabled=True,
             payouts_rpc_url="https://rpc.example.com",

@@ -157,6 +157,9 @@ class Settings(BaseSettings):
         if self.database_url == _DEFAULT_DATABASE_URL or database_host in _LOCAL_DATABASE_HOSTS:
             msg = "database_url must point to a non-local database when env is staging or prod"
             raise ValueError(msg)
+        if not self.redis_url:
+            msg = "redis_url must be set when env is staging or prod"
+            raise ValueError(msg)
         if not self.payouts_enabled:
             msg = "payouts_enabled must be true when env is staging or prod"
             raise ValueError(msg)
