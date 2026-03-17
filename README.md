@@ -276,9 +276,11 @@ For a live x402 v2 manual test:
    A successful paid invoke returns the upstream response plus
    `PAYMENT-RESPONSE`, which includes the settlement transaction hash.
 10. Provider earnings are recorded as `READY` payout rows after settlement.
-    To execute the provider transfer, authenticate as the provider and call
-    `POST /v1/provider/payouts` with an `Idempotency-Key`. Use
-    `GET /v1/provider/payouts` to inspect the payout status lifecycle.
+    To execute the provider transfer, authenticate as the provider with a JWT
+    and call `POST /v1/provider/payouts` with an `Idempotency-Key`. Reusing the
+    same key resumes or replays that provider's payout batch safely. Use
+    `GET /v1/provider/payouts` to inspect the filtered payout list plus
+    per-currency summaries for the same status scope.
 
 Quote prices remain in USD minor units at the API layer. The x402 integration
 converts that amount to USDC base units internally before verify/settle.

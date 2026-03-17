@@ -303,10 +303,11 @@ On success the example client also logs:
 - the transaction hash you can inspect on Base Sepolia
 
 After a successful paid retry, provider earnings are recorded internally as
-`READY` payouts. If `APP_PAYOUTS_ENABLED=true`, authenticate as the provider and
-call `POST /v1/provider/payouts` with an `Idempotency-Key` to execute the
-provider transfer. Use `GET /v1/provider/payouts` to inspect the resulting
-status change.
+`READY` payouts. If `APP_PAYOUTS_ENABLED=true`, authenticate as the provider
+with a JWT and call `POST /v1/provider/payouts` with an `Idempotency-Key` to
+execute the provider transfer. Reusing the same key safely resumes or replays
+that provider's payout batch. Use `GET /v1/provider/payouts` to inspect the
+resulting payout list and per-currency summaries.
 
 On failure the example client logs:
 
