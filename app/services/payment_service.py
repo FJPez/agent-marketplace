@@ -309,7 +309,7 @@ class PaymentService:
             return build_payment_requirement(
                 amount_minor=amount_minor,
                 currency=currency,
-                pay_to_address=self._settings.x402_pay_to_address,
+                treasury_address=self._settings.treasury_address,
                 facilitator_url=self._settings.x402_facilitator_url,
                 network=self._settings.x402_network,
                 network_caip2=self._settings.x402_network_caip2,

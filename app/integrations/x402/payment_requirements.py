@@ -24,15 +24,15 @@ def build_payment_requirement(
     *,
     amount_minor: int,
     currency: str | None,
-    pay_to_address: str | None,
+    treasury_address: str | None,
     facilitator_url: str,
     network: str,
     network_caip2: str,
 ) -> dict[str, object]:
-    if pay_to_address is None:
+    if treasury_address is None:
         raise PaymentRequirementConfigError(
             "payment configuration is incomplete: "
-            "APP_X402_PAY_TO_ADDRESS is required for paid invokes",
+            "APP_TREASURY_PRIVATE_KEY is required for paid invokes",
         )
     if currency != "USD":
         raise PaymentRequirementConfigError("payment currency is not supported")
@@ -49,7 +49,7 @@ def build_payment_requirement(
             asset_decimals=int(asset_config["decimals"]),
         ),
         "currency": currency,
-        "pay_to": pay_to_address,
+        "pay_to": treasury_address,
         "network": network,
         "network_caip2": network_caip2,
         "facilitator_url": facilitator_url,

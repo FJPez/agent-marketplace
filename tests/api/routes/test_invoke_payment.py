@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import AsyncClient, Response
+from pydantic import SecretStr
 from sqlalchemy import func, select
 from tests.helpers.auth import auth_headers_for_account_id
 from x402 import PaymentPayload
@@ -513,8 +514,8 @@ def _install_payment_state(
     state.http_client = upstream_client
     state.facilitator_client = facilitator_client
     state.x402_resource_server = x402_resource_server or _FakeX402ResourceServer()
-    state.settings.x402_pay_to_address = "0x000000000000000000000000000000000000c0de"
     state.settings.payouts_enabled = payouts_enabled
+    state.settings.treasury_private_key = SecretStr("0x" + "11" * 32)
     state.payout_executor = payout_executor
 
 

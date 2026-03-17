@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from eth_account import Account
 from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,12 +32,11 @@ class Settings(BaseSettings):
     x402_network_caip2: str = "eip155:84532"
     x402_cdp_api_key_id: str | None = None
     x402_cdp_api_key_secret: str | None = None
-    x402_pay_to_address: str | None = None
     payouts_enabled: bool = False
     payouts_rpc_url: str | None = None
     payouts_chain_id: int = 84532
     payouts_usdc_address: str | None = None
-    payouts_wallet_private_key: SecretStr | None = None
+    treasury_private_key: SecretStr | None = None
     api_rate_limit: str = "120/minute"
     invoke_rate_limit: str = "60/minute"
     quote_rate_limit: str = "30/minute"
@@ -50,6 +50,8 @@ class Settings(BaseSettings):
         if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
+        if self.treasury_private_key is not None:
+            self._derive_treasury_address()
         if self.payouts_enabled:
             missing = [
                 field_name
@@ -57,10 +59,10 @@ class Settings(BaseSettings):
                     ("payouts_rpc_url", self.payouts_rpc_url),
                     ("payouts_usdc_address", self.payouts_usdc_address),
                     (
-                        "payouts_wallet_private_key",
+                        "treasury_private_key",
                         None
-                        if self.payouts_wallet_private_key is None
-                        else self.payouts_wallet_private_key.get_secret_value(),
+                        if self.treasury_private_key is None
+                        else self.treasury_private_key.get_secret_value(),
                     ),
                 )
                 if not value
@@ -69,6 +71,20 @@ class Settings(BaseSettings):
                 msg = f"payout settings are required when payouts are enabled: {', '.join(missing)}"
                 raise ValueError(msg)
         return self
+
+    @property
+    def treasury_address(self) -> str | None:
+        if self.treasury_private_key is None:
+            return None
+        return self._derive_treasury_address()
+
+    def _derive_treasury_address(self) -> str:
+        assert self.treasury_private_key is not None
+        try:
+            return Account.from_key(self.treasury_private_key.get_secret_value()).address
+        except (TypeError, ValueError) as exc:
+            msg = "treasury_private_key is invalid"
+            raise ValueError(msg) from exc
 
 
 @lru_cache

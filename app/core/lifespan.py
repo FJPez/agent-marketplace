@@ -51,12 +51,12 @@ async def _init_app_state(state: AppState) -> None:
     if state.settings.payouts_enabled:
         assert state.settings.payouts_rpc_url is not None
         assert state.settings.payouts_usdc_address is not None
-        assert state.settings.payouts_wallet_private_key is not None
+        assert state.settings.treasury_private_key is not None
         state.payout_executor = BaseSepoliaUsdcPayoutExecutor(
             rpc_url=state.settings.payouts_rpc_url,
             chain_id=state.settings.payouts_chain_id,
             token_address=state.settings.payouts_usdc_address,
-            private_key=state.settings.payouts_wallet_private_key.get_secret_value(),
+            private_key=state.settings.treasury_private_key.get_secret_value(),
         )
 
 

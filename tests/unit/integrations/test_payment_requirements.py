@@ -10,7 +10,7 @@ def test_build_payment_requirement_for_usd_fixed_price() -> None:
     requirement = build_payment_requirement(
         amount_minor=500,
         currency="USD",
-        pay_to_address="0x000000000000000000000000000000000000c0de",
+        treasury_address="0x000000000000000000000000000000000000c0de",
         facilitator_url="https://x402.org/facilitator",
         network="base-sepolia",
         network_caip2="eip155:84532",
@@ -33,7 +33,7 @@ def test_build_payment_requirement_rejects_non_usd_currency() -> None:
         build_payment_requirement(
             amount_minor=500,
             currency="EUR",
-            pay_to_address="0x000000000000000000000000000000000000c0de",
+            treasury_address="0x000000000000000000000000000000000000c0de",
             facilitator_url="https://x402.org/facilitator",
             network="base-sepolia",
             network_caip2="eip155:84532",
