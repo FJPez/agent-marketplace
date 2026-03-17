@@ -102,3 +102,27 @@ def test_settings_derive_payment_token_from_network(
     assert settings.payment_token is not None
     assert settings.payment_token.address == "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     assert settings.payment_token.symbol == "USDC"
+
+
+def test_settings_ignore_local_dotenv_without_explicit_env_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "\n".join(
+            [
+                "APP_JWT_SECRET_KEY=dotenv-secret-key-with-32-bytes-minimum",
+                "APP_SIWE_DOMAIN=127.0.0.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("APP_ENV_FILE", raising=False)
+    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+
+    settings = Settings()
+
+    assert settings.jwt_secret_key == "test-secret-key-with-32-bytes-123"
+    assert settings.siwe_domain == "testserver"

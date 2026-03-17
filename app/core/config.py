@@ -1,9 +1,15 @@
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 
 from eth_account import Account
 from pydantic import SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
 
 from app.core.enums import AppEnv
 
@@ -41,7 +47,6 @@ def get_supported_payment_token(network_caip2: str) -> PaymentToken | None:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
         env_file_encoding="utf-8",
         env_prefix="APP_",
         extra="ignore",
@@ -75,6 +80,29 @@ class Settings(BaseSettings):
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        _ = dotenv_settings
+        env_file = os.environ.get("APP_ENV_FILE")
+        sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings]
+        if env_file:
+            sources.append(
+                DotEnvSettingsSource(
+                    settings_cls,
+                    env_file=env_file,
+                    env_file_encoding="utf-8",
+                )
+            )
+        sources.append(file_secret_settings)
+        return tuple(sources)
 
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":
