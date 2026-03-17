@@ -155,12 +155,11 @@ Create two GitHub Actions environments in the repository:
 Add these secrets to each GitHub environment:
 
 - `RAILWAY_TOKEN`
-- `RAILWAY_PROJECT_ID`
 
 `RAILWAY_TOKEN` should be a Railway token that is allowed to deploy the target
-environment. `RAILWAY_PROJECT_ID` should be the Railway project id for this
-backend. If both GitHub environments deploy to the same Railway project, the
-project id will usually be the same in both environments.
+environment. Use a Railway project token scoped to the matching Railway
+environment so the CLI already knows which project and environment it is allowed
+to deploy to.
 
 ## 7. Run The Release Workflow
 
