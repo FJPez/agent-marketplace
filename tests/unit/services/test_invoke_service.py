@@ -51,7 +51,36 @@ class FakeInvocationRepository:
         self.lookup_count = 0
         self.add_calls = 0
 
-    def add(self, **_: object) -> Invocation:
+    def add(
+        self,
+        *,
+        consumer_account_id: int,
+        service_id: int,
+        endpoint_id: int,
+        endpoint_key: str,
+        access_mode: AccessMode,
+        quote_id: int | None,
+        idempotency_key: str,
+        request_hash: str,
+        status: InvocationStatus,
+        response_payload: dict[str, object] | None,
+        upstream_status_code: int | None,
+        error_message: str | None,
+        failure_reason: InvocationFailureReason | None,
+    ) -> Invocation:
+        _ = consumer_account_id
+        _ = service_id
+        _ = endpoint_id
+        _ = endpoint_key
+        _ = access_mode
+        _ = quote_id
+        _ = idempotency_key
+        _ = request_hash
+        _ = status
+        _ = response_payload
+        _ = upstream_status_code
+        _ = error_message
+        _ = failure_reason
         self.add_calls += 1
         return Invocation(
             id=777,
@@ -161,22 +190,39 @@ class FakeNewInvocationRepository:
         _ = idempotency_key
         return None
 
-    def add(self, **kwargs: object) -> Invocation:
+    def add(
+        self,
+        *,
+        consumer_account_id: int,
+        service_id: int,
+        endpoint_id: int,
+        endpoint_key: str,
+        access_mode: AccessMode,
+        quote_id: int | None,
+        idempotency_key: str,
+        request_hash: str,
+        status: InvocationStatus,
+        response_payload: dict[str, object] | None,
+        upstream_status_code: int | None,
+        error_message: str | None,
+        failure_reason: InvocationFailureReason | None,
+    ) -> Invocation:
+        _ = failure_reason
         self.add_calls += 1
         return Invocation(
             id=505,
-            consumer_account_id=cast("int", kwargs["consumer_account_id"]),
-            service_id=cast("int", kwargs["service_id"]),
-            endpoint_id=cast("int", kwargs["endpoint_id"]),
-            endpoint_key=cast("str", kwargs["endpoint_key"]),
-            access_mode=cast("AccessMode", kwargs["access_mode"]),
-            quote_id=cast("int | None", kwargs["quote_id"]),
-            idempotency_key=cast("str", kwargs["idempotency_key"]),
-            request_hash=cast("str", kwargs["request_hash"]),
-            status=cast("InvocationStatus", kwargs["status"]),
-            response_payload=cast("dict[str, object] | None", kwargs["response_payload"]),
-            upstream_status_code=cast("int | None", kwargs["upstream_status_code"]),
-            error_message=cast("str | None", kwargs["error_message"]),
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            endpoint_key=endpoint_key,
+            access_mode=access_mode,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            status=status,
+            response_payload=response_payload,
+            upstream_status_code=upstream_status_code,
+            error_message=error_message,
             failure_reason=None,
         )
 

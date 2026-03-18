@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
@@ -65,11 +66,11 @@ class _FakeNestedTransaction:
         return False
 
 
+@dataclass
 class FakeAttempt:
-    def __init__(self, **kwargs: object) -> None:
-        self.invocation_id = cast("int | None", kwargs["invocation_id"])
-        self.quote_id = cast("int", kwargs["quote_id"])
-        self.settle_outcome = cast("dict[str, object] | None", kwargs["settle_outcome"])
+    invocation_id: int | None
+    quote_id: int
+    settle_outcome: dict[str, object] | None
 
 
 class FakePaymentAttemptRepository:
@@ -79,9 +80,33 @@ class FakePaymentAttemptRepository:
     async def get_by_payment_identifier(self, *, payment_identifier: str) -> None:
         _ = payment_identifier
 
-    def add(self, **kwargs: object) -> FakeAttempt:
+    def add(
+        self,
+        *,
+        consumer_account_id: int,
+        quote_id: int,
+        invocation_id: int | None,
+        idempotency_key: str,
+        payment_identifier: str | None,
+        payment_requirement: dict[str, object],
+        payment_payload: dict[str, object],
+        verify_outcome: dict[str, object] | None,
+        settle_outcome: dict[str, object] | None,
+        facilitator_reference: str | None,
+    ) -> FakeAttempt:
+        _ = consumer_account_id
+        _ = idempotency_key
+        _ = payment_identifier
+        _ = payment_requirement
+        _ = payment_payload
+        _ = verify_outcome
+        _ = facilitator_reference
         self.add_calls += 1
-        return FakeAttempt(**kwargs)
+        return FakeAttempt(
+            invocation_id=invocation_id,
+            quote_id=quote_id,
+            settle_outcome=settle_outcome,
+        )
 
 
 class FakeInvokeService:
