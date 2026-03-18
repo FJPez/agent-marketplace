@@ -252,7 +252,7 @@ def _resolved_target(*, auth: HmacAuthConfig | None = None) -> ResolvedInvokeTar
     )
     endpoint.upstream = ProviderUpstream(
         endpoint_id=endpoint.id,
-        base_url="https://provider.internal",
+        base_url="http://127.0.0.1:9000",
         path="/invoke",
         http_method="POST",
         config={

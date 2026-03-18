@@ -581,7 +581,7 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.internal",
+            "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
             "config": {"auth": {"type": "bearer"}},
@@ -603,6 +603,37 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
     assert "path" not in endpoint
     assert "http_method" not in endpoint
     assert "config" not in endpoint
+
+
+@pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_unsafe_private_target(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": "https://127.0.0.1:9000",
+            "path": "/translate",
+            "http_method": "POST",
+            "config": {"auth": {"type": "bearer"}},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "upstream target is not allowed"}
 
 
 @pytest.mark.asyncio
@@ -666,7 +697,7 @@ async def test_suspended_service_mutations_return_conflict(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.internal",
+            "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
             "config": {"auth": {"type": "bearer"}},

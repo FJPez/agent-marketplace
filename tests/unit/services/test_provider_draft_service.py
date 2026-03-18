@@ -740,7 +740,7 @@ async def test_upsert_upstream_marks_endpoint_as_having_upstream() -> None:
         endpoint_id=303,
         request=EndpointUpstreamRequest.model_validate(
             {
-                "base_url": "https://provider.internal",
+                "base_url": "http://127.0.0.1:9000",
                 "path": "/translate",
                 "http_method": "POST",
                 "config": {"auth": {"type": "bearer"}},

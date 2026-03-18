@@ -199,6 +199,44 @@ async def test_invoke_rejects_oversized_payload(
 
 
 @pytest.mark.asyncio
+async def test_invoke_blocks_stored_unsafe_upstream_before_dispatch(
+    guarded_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
+) -> None:
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    consumer_account_id = await _create_consumer_account(consumer_account_factory)
+    service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
+    endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        name="Translate",
+        summary="Translate text",
+        description=None,
+        access_mode=AccessMode.FREE,
+    )
+    await upstream_factory(endpoint_id=endpoint_id, base_url="https://127.0.0.1:9000")
+
+    app = _get_test_app(guarded_client)
+    state = get_app_state(app)
+    fake_http_client = _FakeHttpClient([Response(200, json={"result": "ok"})])
+    state.http_client = fake_http_client
+
+    response = await guarded_client.post(
+        f"/v1/invoke/{service_id}",
+        headers=_auth_headers(consumer_account_id, idempotency_key="unsafe-upstream"),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": None},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": "upstream target is not allowed"}
+    assert fake_http_client.calls == []
+
+
+@pytest.mark.asyncio
 async def test_invoke_rate_limits_repeated_requests(
     guarded_client: AsyncClient,
     provider_account_factory: ProviderAccountFactory,

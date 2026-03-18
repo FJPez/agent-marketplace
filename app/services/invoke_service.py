@@ -18,6 +18,7 @@ from app.core.request_hash import hash_request_body
 from app.integrations.provider_gateway.client import (
     ProviderGatewayClient,
     ProviderGatewayResponseError,
+    ProviderGatewayTargetError,
     ProviderGatewayTimeoutError,
     ProviderGatewayTransportError,
     SupportsRequest,
@@ -216,6 +217,22 @@ class InvokeService:
                 timeout_seconds=resolved.endpoint.timeout_seconds,
                 auth=resolved.auth,
             )
+        except ProviderGatewayTargetError as exc:
+            invocation.error_message = str(exc)
+            invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
+            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            logger.error(
+                "invoke failed",
+                extra=build_event_context(
+                    "invoke.failed",
+                    **{
+                        ACCOUNT_ID_FIELD: actor.account_id,
+                        INVOCATION_ID_FIELD: invocation.id,
+                        SERVICE_ID_FIELD: resolved.service.id,
+                    },
+                ),
+            )
+            raise InvokeBadGatewayError(str(exc)) from exc
         except ProviderGatewayTimeoutError as exc:
             invocation.error_message = "upstream request timed out"
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT

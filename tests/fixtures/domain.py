@@ -387,7 +387,7 @@ async def create_upstream_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     endpoint_id: int,
-    base_url: str = "https://provider.internal",
+    base_url: str = "http://127.0.0.1:9000",
     path: str = "/invoke",
     http_method: str = "POST",
     config: dict[str, object] | None = None,
@@ -697,7 +697,7 @@ def upstream_factory(
     async def create_upstream(
         *,
         endpoint_id: int,
-        base_url: str = "https://provider.internal",
+        base_url: str = "http://127.0.0.1:9000",
         path: str = "/invoke",
         http_method: str = "POST",
         config: JsonObject | None = None,

@@ -4,7 +4,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
+from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.upstream_targets import UnsafeUpstreamTargetError, validate_upstream_base_url
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.repositories.pricing_model_repo import PricingModelRepository
@@ -192,9 +194,16 @@ class ProviderEndpointService:
             endpoint_id=endpoint_id,
         )
         self._ensure_draft(service)
+        try:
+            validated_base_url = validate_upstream_base_url(
+                str(request.base_url),
+                settings=get_settings(),
+            )
+        except UnsafeUpstreamTargetError as exc:
+            raise ProviderServiceValidationError(str(exc)) from exc
         await self._upstream_repo.upsert(
             endpoint,
-            base_url=str(request.base_url),
+            base_url=validated_base_url,
             path=request.path,
             http_method=request.http_method,
             config=request.config,
