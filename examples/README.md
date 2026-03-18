@@ -1,8 +1,8 @@
 # Example Flows
 
-The files in this directory are runnable examples for local coursework demos.
-They are intentionally small and focused so you can show specific flows in the
-oral exam without stepping through the whole application.
+The files in this directory are runnable examples for local demos and
+integration testing. They are intentionally small and focused so you can try
+specific flows without stepping through the whole application.
 
 ## Scripts
 

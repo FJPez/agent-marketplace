@@ -1,6 +1,6 @@
 # API Reference
 
-This document is the submission-facing API reference for the agent marketplace backend.
+This document is the API reference for the agent marketplace backend.
 
 The implementation is HTTP-first, versioned under `/v1` for domain routes, and uses FastAPI-style JSON bodies and status codes.
 

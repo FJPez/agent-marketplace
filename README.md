@@ -91,25 +91,10 @@ make demo-provider
 - [Railway deployment guide](docs/deployment/railway.md)
 - [Example scripts](examples/)
 
-## Operational Notes
+## Environment Notes
 
-- Redis-backed guardrail tests require `TEST_REDIS_URL`; without it, those
-  checks are skipped.
-- Full pytest runs require a PostgreSQL user that can create and drop temporary
-  test databases.
-- Paid demo flows require Base Sepolia wallets, x402 facilitator credentials,
+- The local quick start assumes PostgreSQL and Redis are running.
+- Paid x402 flows require Base Sepolia wallets, x402 facilitator credentials,
   and `APP_TREASURY_PRIVATE_KEY`.
 - Railway deploys also require the treasury private key because the predeploy
   bootstrap marks that wallet as an admin account.
-
-## Development Notes
-
-If you are extending the project, read these first:
-
-- [AGENTS.md](AGENTS.md)
-- [codex-agent-plan/README.md](codex-agent-plan/README.md)
-- [codex-agent-plan/docs/00-repo-bootstrap-contract.md](codex-agent-plan/docs/00-repo-bootstrap-contract.md)
-- [codex-agent-plan/docs/10-definition-of-done-by-branch.md](codex-agent-plan/docs/10-definition-of-done-by-branch.md)
-
-Keep changes narrow, keep the repository runnable, and add tests with any
-behavior change.

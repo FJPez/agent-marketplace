@@ -1,6 +1,7 @@
 # Documentation Index
 
-This folder contains the submission-facing docs for the coursework repository.
+This folder contains the main documentation for using, integrating with, and
+operating the marketplace.
 
 ## Start Here
 
@@ -13,7 +14,6 @@ This folder contains the submission-facing docs for the coursework repository.
 
 - [Full local and paid demo setup](demo-setup.md)
 - [Railway deployment runbook](deployment/railway.md)
-- [Codex agent planning pack](../codex-agent-plan/README.md)
 - [Example client scripts](../examples/)
 
 ## Notes
