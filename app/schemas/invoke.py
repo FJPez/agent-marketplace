@@ -3,9 +3,10 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.enums import AccessMode, InvocationStatus
+from app.core.json_types import to_json_value
 from app.db.models import Invocation
-from app.schemas.common import Id, RequestHash, Timestamp
-from app.schemas.service import SchemaObject, Slug
+from app.schemas.common import Id, JsonValue, RequestHash, Timestamp
+from app.schemas.service import Slug
 
 
 class InvokeRequest(BaseModel):
@@ -27,7 +28,7 @@ class InvokeRequest(BaseModel):
     )
 
     endpoint_key: Slug
-    payload: SchemaObject
+    payload: JsonValue
     quote_id: Id | None = None
 
 
@@ -41,7 +42,7 @@ class InvocationResponse(BaseModel):
     request_hash: RequestHash
     status: InvocationStatus
     upstream_status_code: int | None
-    response_payload: SchemaObject | None
+    response_payload: JsonValue | None
     error_message: str | None
     created_at: Timestamp
 
@@ -57,7 +58,9 @@ class InvocationResponse(BaseModel):
             request_hash=invocation.request_hash,
             status=invocation.status,
             upstream_status_code=invocation.upstream_status_code,
-            response_payload=invocation.response_payload,
+            response_payload=None
+            if invocation.response_payload is None
+            else to_json_value(invocation.response_payload),
             error_message=invocation.error_message,
             created_at=invocation.created_at,
         )

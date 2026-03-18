@@ -3,6 +3,7 @@ from typing import Self
 from pydantic import BaseModel
 
 from app.core.enums import AccessMode
+from app.core.json_types import to_json_object
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.service import Description, SchemaObject, ServiceName, Slug, Summary
@@ -35,8 +36,8 @@ class PublicEndpointSchema(BaseModel):
     def from_model(cls, endpoint: ServiceEndpoint) -> Self:
         return cls(
             key=endpoint.key,
-            request_schema=endpoint.request_schema,
-            response_schema=endpoint.response_schema,
+            request_schema=to_json_object(endpoint.request_schema),
+            response_schema=to_json_object(endpoint.response_schema),
         )
 
 

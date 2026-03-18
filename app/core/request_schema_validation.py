@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 from jsonschema import ValidationError, validate
 
 
@@ -7,8 +9,8 @@ class PayloadSchemaMismatchError(ValueError):
 
 def validate_request_payload(
     *,
-    payload: dict[str, object],
-    request_schema: dict[str, object],
+    payload: object,
+    request_schema: Mapping[str, object],
 ) -> None:
     try:
         validate(instance=payload, schema=request_schema)

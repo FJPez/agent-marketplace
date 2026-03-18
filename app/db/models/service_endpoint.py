@@ -23,9 +23,12 @@ from app.core.enums import AccessMode
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.core.json_types import JsonObject
     from app.db.models.pricing_model import PricingModel
     from app.db.models.provider_upstream import ProviderUpstream
     from app.db.models.service import Service
+else:
+    JsonObject = dict[str, object]
 
 
 class ServiceEndpoint(Base):
@@ -51,8 +54,8 @@ class ServiceEndpoint(Base):
             values_callable=lambda values: [value.value for value in values],
         ),
     )
-    request_schema: Mapped[dict[str, object]] = mapped_column(JSONB)
-    response_schema: Mapped[dict[str, object]] = mapped_column(JSONB)
+    request_schema: Mapped[JsonObject] = mapped_column(JSONB)
+    response_schema: Mapped[JsonObject] = mapped_column(JSONB)
     timeout_seconds: Mapped[int] = mapped_column(Integer)
     is_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(

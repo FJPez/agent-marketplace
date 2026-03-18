@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.enums import AccessMode
+from app.core.json_types import JsonObject
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 
@@ -15,8 +16,8 @@ class _EndpointUpdateFields(TypedDict, total=False):
     summary: str | None
     description: str | None
     access_mode: AccessMode
-    request_schema: dict[str, object]
-    response_schema: dict[str, object]
+    request_schema: JsonObject
+    response_schema: JsonObject
     timeout_seconds: int
     is_enabled: bool
 
@@ -34,8 +35,8 @@ class ServiceEndpointRepository:
         summary: str | None,
         description: str | None,
         access_mode: AccessMode,
-        request_schema: dict[str, object],
-        response_schema: dict[str, object],
+        request_schema: JsonObject,
+        response_schema: JsonObject,
         timeout_seconds: int,
         is_enabled: bool,
     ) -> ServiceEndpoint:

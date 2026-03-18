@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import async_object_session
 
+from app.core.json_types import JsonObject
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service_endpoint import ServiceEndpoint
 
@@ -14,7 +15,7 @@ class ProviderUpstreamRepository:
         base_url: str,
         path: str,
         http_method: str,
-        config: dict[str, object],
+        config: JsonObject,
     ) -> ProviderUpstream:
         if endpoint.id is None:
             raise ValueError("endpoint must be persisted before upstream upsert")

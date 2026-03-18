@@ -391,7 +391,7 @@ async def test_create_quote_returns_not_found_for_disabled_endpoint(
 
 
 @pytest.mark.asyncio
-async def test_create_quote_rejects_non_object_payload(
+async def test_create_quote_accepts_non_object_payload_when_endpoint_schema_allows_it(
     async_client: AsyncClient,
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
@@ -403,12 +403,20 @@ async def test_create_quote_rejects_non_object_payload(
         service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
+        with_revision=True,
     )
-    await _seed_endpoint(
-        endpoint_factory,
-        pricing_factory,
+    endpoint_id = await endpoint_factory(
         service_id=service_id,
         key="translate",
+        access_mode=AccessMode.PAID,
+        request_schema={"type": "array", "items": {"type": "string"}},
+        response_schema={"type": "string"},
+    )
+    await pricing_factory(
+        endpoint_id=endpoint_id,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=500,
+        currency="USD",
     )
 
     response = await async_client.post(
@@ -416,7 +424,7 @@ async def test_create_quote_rejects_non_object_payload(
         json={"endpoint_key": "translate", "payload": ["not", "an", "object"]},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 201
 
 
 @pytest.mark.asyncio

@@ -52,7 +52,7 @@ class QuoteService:
         *,
         service_id_or_slug: str,
         endpoint_key: str,
-        payload: dict[str, object],
+        payload: object,
     ) -> Quote:
         service = await self._service_repo.get_public(service_id_or_slug=service_id_or_slug)
         if service is None:
@@ -107,7 +107,7 @@ class QuoteService:
         self,
         *,
         quote_id: int,
-        payload: dict[str, object],
+        payload: object,
         now: datetime | None = None,
     ) -> Quote:
         quote = await self._quote_repo.get(quote_id=quote_id)

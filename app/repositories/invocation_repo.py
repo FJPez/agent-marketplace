@@ -2,6 +2,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
+from app.core.json_types import JsonValue
 from app.db.models import Invocation
 
 
@@ -21,7 +22,7 @@ class InvocationRepository:
         idempotency_key: str,
         request_hash: str,
         status: InvocationStatus,
-        response_payload: dict[str, object] | None,
+        response_payload: JsonValue | None,
         upstream_status_code: int | None,
         error_message: str | None,
         failure_reason: InvocationFailureReason | None,
