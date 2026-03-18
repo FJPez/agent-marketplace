@@ -821,8 +821,8 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     )
     assert failed_invocation is not None
     assert payment_attempt is not None
-    assert payment_attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
-    assert payment_attempt.invocation_id == failed_invocation.id
+    assert payment_attempt.status is PaymentAttemptStatus.SETTLED
+    assert payment_attempt.invocation_id is None
     assert invocation_count == 1
     assert payment_attempt_count == 1
     assert ledger_count == 0
@@ -1148,7 +1148,7 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
 
 
 @pytest.mark.asyncio
-async def test_paid_invoke_duplicate_attempt_insert_returns_conflict_before_facilitator_calls(
+async def test_paid_invoke_duplicate_attempt_insert_resumes_existing_attempt(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -1219,15 +1219,15 @@ async def test_paid_invoke_duplicate_attempt_insert_returns_conflict_before_faci
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
 
-    assert response.status_code == 409
-    assert response.json() == {"detail": "payment identifier already used"}
-    assert len(facilitator_client.verify_calls) == 0
-    assert len(facilitator_client.settle_calls) == 0
-    assert len(upstream_client.calls) == 0
+    assert response.status_code == 200
+    assert response.json()["status"] == "succeeded"
+    assert len(facilitator_client.verify_calls) == 1
+    assert len(facilitator_client.settle_calls) == 1
+    assert len(upstream_client.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_failed_payment_identifier_reuse_returns_conflict(
+async def test_failed_payment_identifier_reuse_replays_verification_challenge(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -1271,8 +1271,8 @@ async def test_failed_payment_identifier_reuse_returns_conflict(
     )
 
     assert first.status_code == 402
-    assert second.status_code == 409
-    assert second.json() == {"detail": "payment identifier already used"}
+    assert second.status_code == 402
+    assert second.json() == {"detail": "payment could not be verified"}
     attempt = await _get_payment_attempt(
         db_session_factory,
         payment_identifier="payment-1",

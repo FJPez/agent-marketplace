@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import InvocationFailureReason, InvocationStatus
+from app.core.json_types import to_json_value
 from app.core.logging import (
     ACCOUNT_ID_FIELD,
     INVOCATION_ID_FIELD,
@@ -76,7 +77,7 @@ class ResolvedInvokeTarget:
     request_hash: str
     quote: Quote | None
     auth: HmacAuthConfig
-    payload: dict[str, object]
+    payload: object
 
 
 class InvokeService:
@@ -99,7 +100,7 @@ class InvokeService:
         *,
         service_id_or_slug: str,
         endpoint_key: str,
-        payload: dict[str, object],
+        payload: object,
         quote_id: int | None,
     ) -> ResolvedInvokeTarget:
         service = await self._service_repo.get_public(service_id_or_slug=service_id_or_slug)
@@ -167,45 +168,17 @@ class InvokeService:
         *,
         resolved: ResolvedInvokeTarget,
         idempotency_key: str,
-        auto_commit: bool = True,
     ) -> Invocation:
-        existing = await self.get_replayable_invocation(
+        invocation = await self._get_or_create_invocation(
             actor,
             idempotency_key=idempotency_key,
             request_hash=resolved.request_hash,
+            resolved=resolved,
         )
-        if existing is not None:
-            return existing
-
-        invocation: Invocation | None = None
-        try:
-            async with self._session.begin_nested():
-                invocation = self._invocation_repo.add(
-                    consumer_account_id=actor.account_id,
-                    service_id=resolved.service.id,
-                    endpoint_id=resolved.endpoint.id,
-                    endpoint_key=resolved.endpoint.key,
-                    access_mode=resolved.endpoint.access_mode,
-                    quote_id=None if resolved.quote is None else resolved.quote.id,
-                    idempotency_key=idempotency_key,
-                    request_hash=resolved.request_hash,
-                    status=InvocationStatus.FAILED,
-                    response_payload=None,
-                    upstream_status_code=None,
-                    error_message=None,
-                    failure_reason=None,
-                )
-                await self._session.flush()
-        except IntegrityError:
-            replayed = await self.get_replayable_invocation(
-                actor,
-                idempotency_key=idempotency_key,
-                request_hash=resolved.request_hash,
-            )
-            if replayed is not None:
-                return replayed
-            raise
-        assert invocation is not None
+        if invocation.status is InvocationStatus.SUCCEEDED:
+            return invocation
+        if invocation.status is InvocationStatus.FAILED:
+            self._raise_for_failed_invocation(invocation)
 
         gateway_client = ProviderGatewayClient(self._http_client)
         assert resolved.endpoint.upstream is not None
@@ -223,7 +196,8 @@ class InvokeService:
         except ProviderGatewayTargetError as exc:
             invocation.error_message = str(exc)
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
-            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            invocation.status = InvocationStatus.FAILED
+            await self._persist_and_refresh(invocation)
             logger.error(
                 "invoke failed",
                 extra=build_event_context(
@@ -239,7 +213,8 @@ class InvokeService:
         except ProviderGatewayTimeoutError as exc:
             invocation.error_message = "upstream request timed out"
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
-            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            invocation.status = InvocationStatus.FAILED
+            await self._persist_and_refresh(invocation)
             logger.error(
                 "invoke failed",
                 extra=build_event_context(
@@ -255,7 +230,8 @@ class InvokeService:
         except ProviderGatewayTransportError as exc:
             invocation.error_message = "upstream request failed"
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
-            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            invocation.status = InvocationStatus.FAILED
+            await self._persist_and_refresh(invocation)
             logger.error(
                 "invoke failed",
                 extra=build_event_context(
@@ -272,7 +248,8 @@ class InvokeService:
             invocation.error_message = str(exc)
             invocation.upstream_status_code = exc.upstream_status_code
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
-            await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+            invocation.status = InvocationStatus.FAILED
+            await self._persist_and_refresh(invocation)
             logger.error(
                 "invoke failed",
                 extra=build_event_context(
@@ -287,11 +264,11 @@ class InvokeService:
             raise InvokeBadGatewayError(str(exc)) from exc
 
         invocation.status = InvocationStatus.SUCCEEDED
-        invocation.response_payload = gateway_result.payload
+        invocation.response_payload = to_json_value(gateway_result.payload)
         invocation.upstream_status_code = gateway_result.status_code
         invocation.error_message = None
         invocation.failure_reason = None
-        await self._persist_and_refresh(invocation, auto_commit=auto_commit)
+        await self._persist_and_refresh(invocation)
         logger.info(
             "invoke succeeded",
             extra=build_event_context(
@@ -339,7 +316,7 @@ class InvokeService:
         *,
         service_id_or_slug: str,
         endpoint_key: str,
-        payload: dict[str, object],
+        payload: object,
         quote_id: int | None,
         idempotency_key: str,
     ) -> Invocation | None:
@@ -359,13 +336,12 @@ class InvokeService:
         elif service.slug != service_id_or_slug:
             raise InvokeConflictError("idempotency key already used for a different request")
 
-        request_hash = self._build_request_hash(
+        if existing.request_hash != self._build_request_hash(
             service_id=existing.service_id,
             endpoint_key=endpoint_key,
             payload=payload,
             quote_id=quote_id,
-        )
-        if existing.request_hash != request_hash:
+        ):
             raise InvokeConflictError("idempotency key already used for a different request")
         if existing.status is not InvocationStatus.SUCCEEDED:
             return None
@@ -378,19 +354,17 @@ class InvokeService:
         idempotency_key: str,
         request_hash: str,
     ) -> Invocation | None:
-        existing = await self._invocation_repo.get_by_idempotency_key(
-            consumer_account_id=actor.account_id,
+        existing = await self._get_existing_invocation(
+            actor,
             idempotency_key=idempotency_key,
+            request_hash=request_hash,
         )
         if existing is None:
             return None
-        if existing.request_hash != request_hash:
-            raise InvokeConflictError("idempotency key already used for a different request")
         if existing.status is InvocationStatus.FAILED:
-            if existing.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
-                raise InvokeGatewayTimeoutError("upstream request timed out")
-            message = existing.error_message or "upstream request failed"
-            raise InvokeBadGatewayError(message)
+            self._raise_for_failed_invocation(existing)
+        if existing.status is InvocationStatus.IN_PROGRESS:
+            return None
         return existing
 
     def _build_request_hash(
@@ -398,7 +372,7 @@ class InvokeService:
         *,
         service_id: int,
         endpoint_key: str,
-        payload: dict[str, object],
+        payload: object,
         quote_id: int | None,
     ) -> str:
         return hash_request_body(
@@ -413,10 +387,76 @@ class InvokeService:
     async def _persist_and_refresh(
         self,
         invocation: Invocation,
-        *,
-        auto_commit: bool,
     ) -> None:
         await self._session.flush()
+        await self._session.commit()
         await self._session.refresh(invocation)
-        if auto_commit:
+
+    async def _get_or_create_invocation(
+        self,
+        actor: ActorContext,
+        *,
+        idempotency_key: str,
+        request_hash: str,
+        resolved: ResolvedInvokeTarget,
+    ) -> Invocation:
+        existing = await self._get_existing_invocation(
+            actor,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+        )
+        if existing is not None:
+            return existing
+
+        invocation = self._invocation_repo.add(
+            consumer_account_id=actor.account_id,
+            service_id=resolved.service.id,
+            endpoint_id=resolved.endpoint.id,
+            endpoint_key=resolved.endpoint.key,
+            access_mode=resolved.endpoint.access_mode,
+            quote_id=None if resolved.quote is None else resolved.quote.id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            status=InvocationStatus.IN_PROGRESS,
+            response_payload=None,
+            upstream_status_code=None,
+            error_message=None,
+            failure_reason=None,
+        )
+        try:
             await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            replayed = await self._get_existing_invocation(
+                actor,
+                idempotency_key=idempotency_key,
+                request_hash=request_hash,
+            )
+            if replayed is not None:
+                return replayed
+            raise
+        await self._session.refresh(invocation)
+        return invocation
+
+    async def _get_existing_invocation(
+        self,
+        actor: ActorContext,
+        *,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> Invocation | None:
+        existing = await self._invocation_repo.get_by_idempotency_key(
+            consumer_account_id=actor.account_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing is None:
+            return None
+        if existing.request_hash != request_hash:
+            raise InvokeConflictError("idempotency key already used for a different request")
+        return existing
+
+    def _raise_for_failed_invocation(self, invocation: Invocation) -> None:
+        if invocation.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
+            raise InvokeGatewayTimeoutError("upstream request timed out")
+        message = invocation.error_message or "upstream request failed"
+        raise InvokeBadGatewayError(message)

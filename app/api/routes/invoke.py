@@ -162,11 +162,18 @@ async def invoke_service(
                     x402_resource_server=_get_x402_resource_server(fastapi_request),
                     settings=get_app_state(fastapi_request.app).settings,
                 )
-                for header_name, header_value in (
-                    await payment_service.build_success_headers_for_invocation(replayed.id)
-                ).items():
-                    response.headers[header_name] = header_value
-            return InvocationResponse.from_model(replayed)
+                replay_headers = await payment_service.build_success_headers_for_invocation(
+                    replayed.id
+                )
+                if not replay_headers:
+                    replayed = None
+                else:
+                    for header_name, header_value in replay_headers.items():
+                        response.headers[header_name] = header_value
+            if replayed is not None:
+                if replayed.access_mode is not AccessMode.PAID:
+                    return InvocationResponse.from_model(replayed)
+                return InvocationResponse.from_model(replayed)
 
         resolved = await invoke_service.resolve_target(
             actor,

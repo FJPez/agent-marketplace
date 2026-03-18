@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
@@ -13,9 +14,9 @@ from app.core.enums import AccessMode, PaymentAttemptStatus, PricingModelType, S
 from app.db.models import Quote, Service, ServiceEndpoint
 from app.integrations.provider_gateway.signing import HmacAuthConfig
 from app.integrations.x402.facilitator_client import FacilitatorAuthError
+from app.services import payment_service as payment_service_module
 from app.services.invoke_service import (
     InvokeBadGatewayError,
-    InvokeConflictError,
     ResolvedInvokeTarget,
 )
 from app.services.payment_service import PaidInvokeSuccess, PaymentService
@@ -28,43 +29,49 @@ if TYPE_CHECKING:
 
 
 class FakeSession:
-    def __init__(self, *, raise_integrity_on_flush: bool = False) -> None:
+    def __init__(self, *, raise_integrity_on_commit: bool = False) -> None:
         self.flush_calls = 0
         self.commit_calls = 0
         self.rollback_calls = 0
-        self.begin_nested_calls = 0
-        self.raise_integrity_on_flush = raise_integrity_on_flush
+        self.raise_integrity_on_commit = raise_integrity_on_commit
 
     async def flush(self) -> None:
         self.flush_calls += 1
-        if self.raise_integrity_on_flush:
-            raise IntegrityError("statement", {}, Exception("duplicate payment identifier"))
 
     async def commit(self) -> None:
         self.commit_calls += 1
+        if self.raise_integrity_on_commit and self.commit_calls == 1:
+            raise IntegrityError("statement", {}, Exception("duplicate payment identifier"))
 
     async def rollback(self) -> None:
         self.rollback_calls += 1
 
-    def begin_nested(self) -> "_FakeNestedTransaction":
-        self.begin_nested_calls += 1
-        return _FakeNestedTransaction()
 
-
-class _FakeNestedTransaction:
-    async def __aenter__(self) -> "_FakeNestedTransaction":
-        return self
-
-    async def __aexit__(
+class FakeCommitSequenceSession:
+    def __init__(
         self,
-        exc_type: object,
-        exc: object,
-        tb: object,
-    ) -> bool:
-        _ = exc_type
-        _ = exc
-        _ = tb
-        return False
+        *,
+        fail_on_commit_calls: set[int] | None = None,
+        on_successful_commit: Callable[[], None] | None = None,
+    ) -> None:
+        self.flush_calls = 0
+        self.commit_calls = 0
+        self.rollback_calls = 0
+        self.fail_on_commit_calls = fail_on_commit_calls or set()
+        self.on_successful_commit = on_successful_commit
+
+    async def flush(self) -> None:
+        self.flush_calls += 1
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+        if self.commit_calls in self.fail_on_commit_calls:
+            raise RuntimeError("commit failed")
+        if self.on_successful_commit is not None:
+            self.on_successful_commit()
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
 
 
 @dataclass
@@ -77,6 +84,7 @@ class FakeAttempt:
     id: int
     invocation_id: int | None
     quote_id: int
+    idempotency_key: str
     status: PaymentAttemptStatus
     settle_outcome: dict[str, object] | None
     verify_outcome: dict[str, object] | None = None
@@ -126,6 +134,7 @@ class FakePaymentAttemptRepository:
             id=41,
             invocation_id=invocation_id,
             quote_id=quote_id,
+            idempotency_key=idempotency_key,
             status=status,
             settle_outcome=settle_outcome,
             verify_outcome=verify_outcome,
@@ -133,6 +142,73 @@ class FakePaymentAttemptRepository:
         )
         self.added_attempt = attempt
         return attempt
+
+
+class FakePersistedPaymentAttemptRepository:
+    def __init__(self) -> None:
+        self.add_calls = 0
+        self.working_attempt: FakeAttempt | None = None
+        self.stored_attempt: FakeAttempt | None = None
+
+    async def get_by_payment_identifier(self, *, payment_identifier: str) -> FakeAttempt | None:
+        _ = payment_identifier
+        return self.stored_attempt
+
+    async def get_by_invocation_id(self, *, invocation_id: int) -> FakeAttempt | None:
+        if self.stored_attempt is not None and self.stored_attempt.invocation_id == invocation_id:
+            return self.stored_attempt
+        return None
+
+    def add(
+        self,
+        *,
+        consumer_account_id: int,
+        quote_id: int,
+        invocation_id: int | None,
+        idempotency_key: str,
+        payment_identifier: str | None,
+        status: PaymentAttemptStatus,
+        payment_requirement: dict[str, object],
+        payment_payload: dict[str, object],
+        verify_outcome: dict[str, object] | None,
+        settle_outcome: dict[str, object] | None,
+        facilitator_reference: str | None,
+    ) -> FakeAttempt:
+        _ = consumer_account_id
+        _ = payment_identifier
+        _ = payment_requirement
+        _ = payment_payload
+        self.add_calls += 1
+        self.working_attempt = FakeAttempt(
+            id=41,
+            invocation_id=invocation_id,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            status=status,
+            settle_outcome=settle_outcome,
+            verify_outcome=verify_outcome,
+            facilitator_reference=facilitator_reference,
+        )
+        self.stored_attempt = FakeAttempt(
+            id=41,
+            invocation_id=invocation_id,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            status=status,
+            settle_outcome=settle_outcome,
+            verify_outcome=verify_outcome,
+            facilitator_reference=facilitator_reference,
+        )
+        return self.working_attempt
+
+    def persist(self) -> None:
+        assert self.working_attempt is not None
+        assert self.stored_attempt is not None
+        self.stored_attempt.invocation_id = self.working_attempt.invocation_id
+        self.stored_attempt.status = self.working_attempt.status
+        self.stored_attempt.settle_outcome = self.working_attempt.settle_outcome
+        self.stored_attempt.verify_outcome = self.working_attempt.verify_outcome
+        self.stored_attempt.facilitator_reference = self.working_attempt.facilitator_reference
 
 
 class FakeInvokeService:
@@ -170,12 +246,10 @@ class FakeInvokeService:
         *,
         resolved: ResolvedInvokeTarget,
         idempotency_key: str,
-        auto_commit: bool = True,
     ) -> FakeInvocation:
         _ = actor
         _ = resolved
         _ = idempotency_key
-        _ = auto_commit
         self.execute_calls += 1
         if self.execute_exception is not None:
             raise self.execute_exception
@@ -203,6 +277,25 @@ class FakeInvokeService:
         _ = idempotency_key
         self.get_invocation_by_idempotency_calls += 1
         return self.invocation_for_lookup
+
+
+class FakeIdempotentInvokeService(FakeInvokeService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.side_effect_idempotency_keys: set[str] = set()
+
+    async def execute(
+        self,
+        actor: ActorContext,
+        *,
+        resolved: ResolvedInvokeTarget,
+        idempotency_key: str,
+    ) -> FakeInvocation:
+        _ = actor
+        _ = resolved
+        self.execute_calls += 1
+        self.side_effect_idempotency_keys.add(idempotency_key)
+        return FakeInvocation(id=88)
 
 
 class FakeFacilitatorClient:
@@ -269,7 +362,7 @@ class FakeHttpClient:
         method: str,
         url: str,
         *,
-        json: dict[str, object],
+        json: object,
         headers: dict[str, str],
         **kwargs: object,
     ) -> object:
@@ -362,7 +455,7 @@ def _resolved_target() -> ResolvedInvokeTarget:
 
 
 def _build_service(
-    session: FakeSession,
+    session: FakeSession | FakeCommitSequenceSession,
     *,
     facilitator_client: FakeFacilitatorClient | None = None,
 ) -> PaymentService:
@@ -382,12 +475,13 @@ def _build_service(
 async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = FakeSession(raise_integrity_on_flush=True)
+    session = FakeSession(raise_integrity_on_commit=True)
     facilitator_client = FakeFacilitatorClient()
     existing_attempt = FakeAttempt(
         id=41,
         invocation_id=88,
         quote_id=21,
+        idempotency_key="invoke-key",
         status=PaymentAttemptStatus.CONSUMED,
         settle_outcome={"ok": True, "reference": "settle-1"},
     )
@@ -423,16 +517,17 @@ async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_c
 
 
 @pytest.mark.asyncio
-async def test_handle_paid_invoke_conflicts_when_duplicate_attempt_is_not_consumed(
+async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facilitator_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    session = FakeSession(raise_integrity_on_flush=True)
+    session = FakeSession(raise_integrity_on_commit=True)
     facilitator_client = FakeFacilitatorClient()
     existing_attempt = FakeAttempt(
         id=41,
         invocation_id=77,
         quote_id=21,
-        status=PaymentAttemptStatus.COMPENSATION_REQUIRED,
+        idempotency_key="invoke-key-1",
+        status=PaymentAttemptStatus.SETTLE_FAILED,
         settle_outcome={"ok": True, "reference": "settle-1"},
     )
     service = _build_service(session, facilitator_client=facilitator_client)
@@ -449,7 +544,7 @@ async def test_handle_paid_invoke_conflicts_when_duplicate_attempt_is_not_consum
         },
     )
 
-    with pytest.raises(InvokeConflictError, match="payment identifier already used"):
+    with pytest.raises(InvokeBadGatewayError, match="payment settlement failed"):
         await service.handle_paid_invoke(
             ActorContext(account_id=12),
             resolved=_resolved_target(),
@@ -502,14 +597,14 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
 
     attempt = service._attempt_repo.added_attempt
     assert attempt is not None
-    assert attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
-    assert attempt.invocation_id == 77
+    assert attempt.status is PaymentAttemptStatus.SETTLED
+    assert attempt.invocation_id is None
     assert attempt.verify_outcome == {"ok": True, "reference": "verify-1"}
     assert attempt.settle_outcome == {"ok": True, "reference": "settle-1"}
-    assert session.commit_calls == 1
+    assert session.commit_calls == 3
     assert service._ledger_service.record_calls == []
     assert invoke_service.execute_calls == 1
-    assert invoke_service.get_invocation_by_idempotency_calls == 1
+    assert invoke_service.get_invocation_by_idempotency_calls == 0
 
 
 @pytest.mark.asyncio
@@ -548,3 +643,76 @@ async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
             payment_requirement={"amount_minor": 500},
             payment_payload={"authorization": {"nonce": "payment-1"}},
         )
+
+
+@pytest.mark.asyncio
+async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commit_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakePayoutExecutionService:
+        def __init__(self, session: object) -> None:
+            _ = session
+
+        async def record_ready_payout(self, **kwargs: object) -> None:
+            _ = kwargs
+
+    attempt_repo = FakePersistedPaymentAttemptRepository()
+    session = FakeCommitSequenceSession(
+        fail_on_commit_calls={4},
+        on_successful_commit=attempt_repo.persist,
+    )
+    facilitator_client = FakeFacilitatorClient(
+        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    )
+    invoke_service = FakeIdempotentInvokeService()
+    service = _build_service(session, facilitator_client=facilitator_client)
+    service._attempt_repo = attempt_repo
+    service._invoke_service = invoke_service
+    service._ledger_service = FakeLedgerService()
+    monkeypatch.setattr(
+        payment_service_module,
+        "PayoutExecutionService",
+        FakePayoutExecutionService,
+    )
+    monkeypatch.setattr(
+        service,
+        "_build_requirement",
+        lambda *, amount_minor, currency: {
+            "amount_minor": amount_minor,
+            "currency": currency,
+            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "payment_amount": 5_000_000,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        await service.handle_paid_invoke(
+            ActorContext(account_id=12),
+            resolved=_resolved_target(),
+            idempotency_key="invoke-key",
+            request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+        )
+
+    assert attempt_repo.stored_attempt is not None
+    assert attempt_repo.stored_attempt.status is PaymentAttemptStatus.SETTLED
+    assert facilitator_client.verify_calls == 1
+    assert facilitator_client.settle_calls == 1
+
+    result = await service.handle_paid_invoke(
+        ActorContext(account_id=12),
+        resolved=_resolved_target(),
+        idempotency_key="invoke-key",
+        request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+    )
+
+    assert isinstance(result, PaidInvokeSuccess)
+    assert attempt_repo.add_calls == 1
+    assert attempt_repo.stored_attempt is not None
+    assert attempt_repo.stored_attempt.status is PaymentAttemptStatus.CONSUMED
+    assert attempt_repo.stored_attempt.invocation_id == 88
+    assert session.commit_calls == 5
+    assert facilitator_client.verify_calls == 1
+    assert facilitator_client.settle_calls == 1
+    assert invoke_service.execute_calls == 2
+    assert invoke_service.side_effect_idempotency_keys == {"invoke-key"}

@@ -26,6 +26,7 @@ class PricingModelType(StrEnum):
 
 
 class InvocationStatus(StrEnum):
+    IN_PROGRESS = "in_progress"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
@@ -38,6 +39,7 @@ class InvocationFailureReason(StrEnum):
 
 class PaymentAttemptStatus(StrEnum):
     CHALLENGED = "challenged"
+    VERIFIED = "verified"
     VERIFY_FAILED = "verify_failed"
     SETTLE_FAILED = "settle_failed"
     SETTLED = "settled"

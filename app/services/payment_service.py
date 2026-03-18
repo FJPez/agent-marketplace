@@ -34,7 +34,6 @@ from app.repositories.payment_attempt_repo import PaymentAttemptRepository
 from app.services.invoke_service import (
     InvokeBadGatewayError,
     InvokeConflictError,
-    InvokeGatewayTimeoutError,
     InvokeService,
 )
 from app.services.ledger_service import LedgerService
@@ -122,37 +121,19 @@ class PaymentService:
         idempotency_key: str,
         request_headers: dict[str, str],
     ) -> PaymentRequiredChallenge | PaidInvokeSuccess:
-        existing = await self._invoke_service.get_replayable_invocation(
-            actor,
-            idempotency_key=idempotency_key,
-            request_hash=resolved.request_hash,
-        )
-        if existing is not None:
-            logger.info(
-                "paid invoke replayed",
-                extra=build_event_context(
-                    "payment.replayed",
-                    **{
-                        INVOCATION_ID_FIELD: existing.id,
-                    },
-                ),
-            )
-            return PaidInvokeSuccess(
-                invocation=existing,
-                response_headers=await self.build_success_headers_for_invocation(existing.id),
-            )
-
-        if resolved.quote is None:
+        quote = resolved.quote
+        if quote is None:
             raise InvokeConflictError("paid invoke requires quote")
-        if (
-            resolved.quote.pricing_type is not PricingModelType.FIXED_PER_CALL
-            or resolved.quote.amount_minor is None
-        ):
+        quote_id = quote.id
+        service_id = resolved.service.id
+        endpoint_key = resolved.endpoint.key
+        payload = resolved.payload
+        if quote.pricing_type is not PricingModelType.FIXED_PER_CALL or quote.amount_minor is None:
             raise InvokeConflictError("payment currency is not supported")
 
         payment_requirement = self._build_requirement(
-            amount_minor=resolved.quote.amount_minor,
-            currency=resolved.quote.currency,
+            amount_minor=quote.amount_minor,
+            currency=quote.currency,
         )
         payment_header = request_headers.get("PAYMENT-SIGNATURE") or request_headers.get(
             "payment-signature"
@@ -166,190 +147,179 @@ class PaymentService:
         except InvalidPaymentPayloadError:
             return self._challenge(payment_requirement, detail="payment required")
 
-        attempt = None
-        try:
-            async with self._session.begin_nested():
-                attempt = self._attempt_repo.add(
-                    consumer_account_id=actor.account_id,
-                    quote_id=resolved.quote.id,
-                    invocation_id=None,
-                    idempotency_key=idempotency_key,
-                    payment_identifier=payment_identifier,
-                    status=PaymentAttemptStatus.CHALLENGED,
-                    payment_requirement=payment_requirement,
-                    payment_payload=payment_payload,
-                    verify_outcome=None,
-                    settle_outcome=None,
-                    facilitator_reference=None,
-                )
-                await self._session.flush()
-        except IntegrityError:
-            existing_attempt = await self._attempt_repo.get_by_payment_identifier(
-                payment_identifier=payment_identifier,
+        attempt, target_needs_reload = await self._get_or_create_attempt(
+            actor,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            payment_identifier=payment_identifier,
+            payment_requirement=payment_requirement,
+            payment_payload=payment_payload,
+        )
+        if attempt.quote_id != quote_id:
+            raise InvokeConflictError("payment identifier already used")
+        if target_needs_reload:
+            resolved = await self._invoke_service.resolve_target(
+                actor,
+                service_id_or_slug=str(service_id),
+                endpoint_key=endpoint_key,
+                payload=payload,
+                quote_id=quote_id,
             )
-            if existing_attempt is None or existing_attempt.quote_id != resolved.quote.id:
-                raise InvokeConflictError("payment identifier already used") from None
-            if (
-                existing_attempt.status is not PaymentAttemptStatus.CONSUMED
-                or existing_attempt.invocation_id is None
-            ):
-                raise InvokeConflictError("payment identifier already used") from None
+        return await self._resume_attempt(
+            actor,
+            resolved=resolved,
+            payment_requirement=payment_requirement,
+            payment_payload=payment_payload,
+            attempt=attempt,
+        )
+
+    async def _resume_attempt(
+        self,
+        actor: ActorContext,
+        *,
+        resolved: ResolvedInvokeTarget,
+        payment_requirement: dict[str, object],
+        payment_payload: dict[str, object],
+        attempt: PaymentAttempt,
+    ) -> PaymentRequiredChallenge | PaidInvokeSuccess:
+        quote = resolved.quote
+        assert quote is not None
+        assert quote.amount_minor is not None
+        if attempt.status is PaymentAttemptStatus.CONSUMED and attempt.invocation_id is not None:
             invocation = await self._invoke_service.get_invocation(
                 actor,
-                invocation_id=existing_attempt.invocation_id,
+                invocation_id=attempt.invocation_id,
+            )
+            logger.info(
+                "paid invoke replayed",
+                extra=build_event_context(
+                    "payment.replayed",
+                    **{
+                        INVOCATION_ID_FIELD: invocation.id,
+                    },
+                ),
             )
             return PaidInvokeSuccess(
                 invocation=invocation,
                 response_headers=(
-                    self._build_response_headers(existing_attempt.settle_outcome)
-                    if existing_attempt.settle_outcome
+                    self._build_response_headers(attempt.settle_outcome)
+                    if attempt.settle_outcome
                     else {}
                 ),
             )
-        assert attempt is not None
-        if not _payment_payload_matches_requirement(
-            payment_payload=payment_payload,
-            payment_requirement=payment_requirement,
-        ):
-            mismatch_verify_outcome: dict[str, object] = {
-                "ok": False,
-                "reason": "payment asset mismatch",
-            }
-            attempt.verify_outcome = mismatch_verify_outcome
-            attempt.status = PaymentAttemptStatus.VERIFY_FAILED
-            logger.info(
-                "payment verification failed",
-                extra=build_event_context(
-                    "payment.verify_failed",
-                    **{
-                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
-                        QUOTE_ID_FIELD: resolved.quote.id,
-                    },
-                ),
-            )
-            await self._session.commit()
+
+        if attempt.status is PaymentAttemptStatus.VERIFY_FAILED:
             return self._challenge(payment_requirement, detail="payment could not be verified")
 
-        try:
+        if attempt.status is PaymentAttemptStatus.SETTLE_FAILED:
+            raise InvokeBadGatewayError("payment settlement failed")
+
+        if attempt.status is PaymentAttemptStatus.CHALLENGED:
+            if not _payment_payload_matches_requirement(
+                payment_payload=payment_payload,
+                payment_requirement=payment_requirement,
+            ):
+                mismatch_verify_outcome: dict[str, object] = {
+                    "ok": False,
+                    "reason": "payment asset mismatch",
+                }
+                await self._mark_verify_failed(
+                    attempt,
+                    verify_outcome=mismatch_verify_outcome,
+                    quote_id=quote.id,
+                )
+                return self._challenge(payment_requirement, detail="payment could not be verified")
+
             verify_outcome = await self._verify(
                 payment_requirement=payment_requirement,
                 payment_payload=payment_payload,
             )
-        except InvokeBadGatewayError as exc:
-            verify_error_outcome: dict[str, object] = {"ok": False, "reason": str(exc)}
-            attempt.verify_outcome = verify_error_outcome
-            attempt.status = PaymentAttemptStatus.VERIFY_FAILED
-            await self._session.commit()
-            raise
-        attempt.verify_outcome = verify_outcome
-        attempt.facilitator_reference = _extract_reference(verify_outcome)
-        if not _is_verify_success(verify_outcome):
-            attempt.status = PaymentAttemptStatus.VERIFY_FAILED
-            logger.info(
-                "payment verification failed",
-                extra=build_event_context(
-                    "payment.verify_failed",
-                    **{
-                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
-                        QUOTE_ID_FIELD: resolved.quote.id,
-                    },
-                ),
-            )
-            await self._session.commit()
-            return self._challenge(payment_requirement, detail="payment could not be verified")
+            if not _is_verify_success(verify_outcome):
+                await self._mark_verify_failed(
+                    attempt,
+                    verify_outcome=verify_outcome,
+                    quote_id=quote.id,
+                )
+                return self._challenge(payment_requirement, detail="payment could not be verified")
 
-        try:
+            attempt.verify_outcome = verify_outcome
+            attempt.facilitator_reference = _extract_reference(verify_outcome)
+            attempt.status = PaymentAttemptStatus.VERIFIED
+            await self._session.commit()
+
+        if attempt.status is PaymentAttemptStatus.VERIFIED:
             settle_outcome = await self._settle(
                 payment_requirement=payment_requirement,
                 payment_payload=payment_payload,
             )
-        except InvokeBadGatewayError as exc:
-            settle_error_outcome: dict[str, object] = {"ok": False, "reason": str(exc)}
-            attempt.settle_outcome = settle_error_outcome
-            attempt.status = PaymentAttemptStatus.SETTLE_FAILED
-            await self._session.commit()
-            raise
-        attempt.settle_outcome = settle_outcome
-        attempt.facilitator_reference = _extract_reference(settle_outcome) or _extract_reference(
-            verify_outcome,
-        )
-        if not _is_settle_success(settle_outcome):
-            attempt.status = PaymentAttemptStatus.SETTLE_FAILED
-            logger.error(
-                "payment settlement failed",
-                extra=build_event_context(
-                    "payment.settle_failed",
-                    **{
-                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
-                        QUOTE_ID_FIELD: resolved.quote.id,
-                    },
-                ),
-            )
-            await self._session.commit()
-            raise InvokeBadGatewayError("payment settlement failed")
+            attempt.settle_outcome = settle_outcome
+            attempt.facilitator_reference = _extract_reference(
+                settle_outcome
+            ) or _extract_reference(attempt.verify_outcome or {})
+            if not _is_settle_success(settle_outcome):
+                await self._mark_settle_failed(
+                    attempt,
+                    quote_id=quote.id,
+                )
+                raise InvokeBadGatewayError("payment settlement failed")
 
-        attempt.status = PaymentAttemptStatus.SETTLED
-        try:
+            attempt.status = PaymentAttemptStatus.SETTLED
+            await self._session.commit()
+
+        if attempt.status in {
+            PaymentAttemptStatus.SETTLED,
+            PaymentAttemptStatus.COMPENSATION_REQUIRED,
+        }:
             invocation = await self._invoke_service.execute(
                 actor,
                 resolved=resolved,
-                idempotency_key=idempotency_key,
-                auto_commit=False,
+                idempotency_key=attempt.idempotency_key,
             )
-        except (
-            InvokeBadGatewayError,
-            InvokeConflictError,
-            InvokeGatewayTimeoutError,
-        ):
-            await self._mark_compensation_required(
-                actor,
-                attempt=attempt,
-                idempotency_key=idempotency_key,
+            attempt.invocation_id = invocation.id
+            await self._ledger_service.record_paid_invocation(
+                provider_account_id=resolved.service.provider_account_id,
+                service_id=resolved.service.id,
+                invocation_id=invocation.id,
+                payment_attempt_id=attempt.id,
+                amount_minor=quote.amount_minor,
+                currency=quote.currency or "",
             )
+            logger.info(
+                "payment settled",
+                extra=build_event_context(
+                    "payment.settled",
+                    **{
+                        PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                        QUOTE_ID_FIELD: quote.id,
+                        INVOCATION_ID_FIELD: invocation.id,
+                        PROVIDER_ACCOUNT_ID_FIELD: resolved.service.provider_account_id,
+                        SERVICE_ID_FIELD: resolved.service.id,
+                    },
+                ),
+            )
+            payout_service = PayoutExecutionService(self._session)
+            payment_token = self._settings.payment_token
+            assert payment_token is not None
+            await payout_service.record_ready_payout(
+                provider_account_id=resolved.service.provider_account_id,
+                service_id=resolved.service.id,
+                invocation_id=invocation.id,
+                payment_attempt_id=attempt.id,
+                gross_amount_minor=_get_payment_amount(payment_requirement),
+                currency=payment_token.symbol,
+                network=self._settings.x402_network,
+            )
+            attempt.status = PaymentAttemptStatus.CONSUMED
             await self._session.commit()
-            raise
-        attempt.invocation_id = invocation.id
-        attempt.status = PaymentAttemptStatus.CONSUMED
-        await self._ledger_service.record_paid_invocation(
-            provider_account_id=resolved.service.provider_account_id,
-            service_id=resolved.service.id,
-            invocation_id=invocation.id,
-            payment_attempt_id=attempt.id,
-            amount_minor=resolved.quote.amount_minor,
-            currency=resolved.quote.currency or "",
-        )
-        logger.info(
-            "payment settled",
-            extra=build_event_context(
-                "payment.settled",
-                **{
-                    PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
-                    QUOTE_ID_FIELD: resolved.quote.id,
-                    INVOCATION_ID_FIELD: invocation.id,
-                    PROVIDER_ACCOUNT_ID_FIELD: resolved.service.provider_account_id,
-                    SERVICE_ID_FIELD: resolved.service.id,
-                },
-            ),
-        )
-        payout_service = PayoutExecutionService(
-            self._session,
-        )
-        payment_token = self._settings.payment_token
-        assert payment_token is not None
-        await payout_service.record_ready_payout(
-            provider_account_id=resolved.service.provider_account_id,
-            service_id=resolved.service.id,
-            invocation_id=invocation.id,
-            payment_attempt_id=attempt.id,
-            gross_amount_minor=_get_payment_amount(payment_requirement),
-            currency=payment_token.symbol,
-            network=self._settings.x402_network,
-        )
-        await self._session.commit()
-        return PaidInvokeSuccess(
-            invocation=invocation,
-            response_headers=self._build_response_headers(settle_outcome),
-        )
+            settle_outcome = attempt.settle_outcome
+            assert settle_outcome is not None
+            return PaidInvokeSuccess(
+                invocation=invocation,
+                response_headers=self._build_response_headers(settle_outcome),
+            )
+
+        msg = f"unsupported payment attempt status: {attempt.status.value}"
+        raise RuntimeError(msg)
 
     def _build_requirement(
         self,
@@ -396,20 +366,86 @@ class PaymentService:
             return {}
         return self._build_response_headers(attempt.settle_outcome)
 
-    async def _mark_compensation_required(
+    async def _get_or_create_attempt(
         self,
         actor: ActorContext,
         *,
-        attempt: PaymentAttempt,
+        quote_id: int,
         idempotency_key: str,
-    ) -> None:
-        invocation = await self._invoke_service.get_invocation_by_idempotency_key(
-            actor,
-            idempotency_key=idempotency_key,
+        payment_identifier: str,
+        payment_requirement: dict[str, object],
+        payment_payload: dict[str, object],
+    ) -> tuple[PaymentAttempt, bool]:
+        attempt = await self._attempt_repo.get_by_payment_identifier(
+            payment_identifier=payment_identifier,
         )
-        if invocation is not None:
-            attempt.invocation_id = invocation.id
-        attempt.status = PaymentAttemptStatus.COMPENSATION_REQUIRED
+        if attempt is not None:
+            return attempt, False
+
+        attempt = self._attempt_repo.add(
+            consumer_account_id=actor.account_id,
+            quote_id=quote_id,
+            invocation_id=None,
+            idempotency_key=idempotency_key,
+            payment_identifier=payment_identifier,
+            status=PaymentAttemptStatus.CHALLENGED,
+            payment_requirement=payment_requirement,
+            payment_payload=payment_payload,
+            verify_outcome=None,
+            settle_outcome=None,
+            facilitator_reference=None,
+        )
+        try:
+            await self._session.commit()
+        except IntegrityError:
+            await self._session.rollback()
+            existing = await self._attempt_repo.get_by_payment_identifier(
+                payment_identifier=payment_identifier,
+            )
+            if existing is not None:
+                return existing, True
+            raise
+        return attempt, False
+
+    async def _mark_verify_failed(
+        self,
+        attempt: PaymentAttempt,
+        *,
+        verify_outcome: dict[str, object],
+        quote_id: int,
+    ) -> None:
+        attempt.verify_outcome = verify_outcome
+        attempt.status = PaymentAttemptStatus.VERIFY_FAILED
+        logger.info(
+            "payment verification failed",
+            extra=build_event_context(
+                "payment.verify_failed",
+                **{
+                    PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                    QUOTE_ID_FIELD: quote_id,
+                },
+            ),
+        )
+        await self._session.commit()
+
+    async def _mark_settle_failed(
+        self,
+        attempt: PaymentAttempt,
+        *,
+        quote_id: int,
+    ) -> None:
+        attempt.status = PaymentAttemptStatus.SETTLE_FAILED
+        logger.error(
+            "payment settlement failed",
+            extra=build_event_context(
+                "payment.settle_failed",
+                **{
+                    PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                    QUOTE_ID_FIELD: quote_id,
+                },
+            ),
+        )
+        await self._session.commit()
 
     async def _verify(
         self,
