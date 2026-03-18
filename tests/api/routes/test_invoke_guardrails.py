@@ -12,20 +12,19 @@ from tests.helpers.auth import auth_headers_for_account_id
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
-from app.db.models import (
-    Account,
-    PricingModel,
-    ProviderUpstream,
-    Service,
-    ServiceEndpoint,
-    ServiceRevision,
-)
 from app.main import create_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from tests.fixtures.domain import (
+        ConsumerAccountFactory,
+        EndpointFactory,
+        PricingFactory,
+        ProviderAccountFactory,
+        ServiceFactory,
+        UpstreamFactory,
+    )
 
 
 def _auth_headers(account_id: int, *, idempotency_key: str) -> dict[str, str]:
@@ -41,100 +40,58 @@ def _get_test_app(client: AsyncClient) -> FastAPI:
 
 
 async def _create_provider_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await provider_account_factory()
 
 
 async def _create_consumer_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    consumer_account_factory: ConsumerAccountFactory,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Consumer")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await consumer_account_factory()
 
 
 async def _seed_service(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    service_factory: ServiceFactory,
     *,
     provider_account_id: int,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug="guardrail-service",
-            name="Guardrail Service",
-            summary="summary",
-            description=None,
-            lifecycle=ServiceLifecycle.ACTIVE,
-        )
-        session.add(service)
-        await session.flush()
-        revision = ServiceRevision(
-            service_id=service.id,
-            revision_number=1,
-            change_token="c" * 64,
-            snapshot={"slug": service.slug},
-        )
-        session.add(revision)
-        await session.flush()
-        service.current_revision_id = revision.id
-        service.current_change_token = revision.change_token
-        return service.id
+    return await service_factory(
+        provider_account_id=provider_account_id,
+        slug="guardrail-service",
+        name="Guardrail Service",
+        summary="summary",
+        description=None,
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
 
 
 async def _seed_endpoint(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
+    pricing_factory: PricingFactory,
     *,
     service_id: int,
     access_mode: AccessMode = AccessMode.FREE,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key="translate",
-            name="Translate",
-            summary="Translate text",
-            description=None,
-            access_mode=access_mode,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
+    endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        name="Translate",
+        summary="Translate text",
+        description=None,
+        access_mode=access_mode,
+    )
+    await upstream_factory(endpoint_id=endpoint_id)
+    if access_mode is AccessMode.PAID:
+        await pricing_factory(
+            endpoint_id=endpoint_id,
+            pricing_type=PricingModelType.FIXED_PER_CALL,
+            amount_minor=500,
+            currency="USD",
         )
-        session.add(endpoint)
-        await session.flush()
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint.id,
-                base_url="https://provider.internal",
-                path="/invoke",
-                http_method="POST",
-                config={
-                    "auth": {
-                        "type": "hmac_sha256",
-                        "key_id": "gateway-key",
-                        "secret": "super-secret",
-                    },
-                },
-            )
-        )
-        if access_mode is AccessMode.PAID:
-            session.add(
-                PricingModel(
-                    endpoint_id=endpoint.id,
-                    pricing_type=PricingModelType.FIXED_PER_CALL,
-                    amount_minor=500,
-                    currency="USD",
-                )
-            )
-        return endpoint.id
+    return endpoint_id
 
 
 @dataclass
@@ -217,15 +174,17 @@ async def guarded_client(
 @pytest.mark.asyncio
 async def test_invoke_rejects_oversized_payload(
     guarded_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
-    consumer_account_id = await _create_consumer_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-    )
-    await _seed_endpoint(db_session_factory, service_id=service_id)
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    consumer_account_id = await _create_consumer_account(consumer_account_factory)
+    service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
+    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
 
     oversized_payload = {"text": "x" * 5000}
 
@@ -242,15 +201,17 @@ async def test_invoke_rejects_oversized_payload(
 @pytest.mark.asyncio
 async def test_invoke_rate_limits_repeated_requests(
     guarded_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
-    consumer_account_id = await _create_consumer_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-    )
-    await _seed_endpoint(db_session_factory, service_id=service_id)
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    consumer_account_id = await _create_consumer_account(consumer_account_factory)
+    service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
+    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
 
     app = _get_test_app(guarded_client)
     state = get_app_state(app)
@@ -282,15 +243,17 @@ async def test_invoke_rate_limits_repeated_requests(
 @pytest.mark.asyncio
 async def test_invoke_rejects_duplicate_request_while_first_is_in_flight(
     guarded_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
-    consumer_account_id = await _create_consumer_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-    )
-    await _seed_endpoint(db_session_factory, service_id=service_id)
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    consumer_account_id = await _create_consumer_account(consumer_account_factory)
+    service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
+    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
 
     app = _get_test_app(guarded_client)
     state = get_app_state(app)
@@ -327,15 +290,17 @@ async def test_invoke_rejects_duplicate_request_while_first_is_in_flight(
 @pytest.mark.asyncio
 async def test_invoke_rejects_reused_idempotency_key_for_different_in_flight_request(
     guarded_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
-    consumer_account_id = await _create_consumer_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-    )
-    await _seed_endpoint(db_session_factory, service_id=service_id)
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    consumer_account_id = await _create_consumer_account(consumer_account_factory)
+    service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
+    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
 
     app = _get_test_app(guarded_client)
     state = get_app_state(app)

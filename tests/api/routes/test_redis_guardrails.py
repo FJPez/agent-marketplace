@@ -12,14 +12,19 @@ from tests.helpers.auth import auth_headers_for_account_id
 from app.core.config import get_settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.lifespan import get_app_state
-from app.db.models import Account, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
 from app.main import create_app
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from fastapi import FastAPI
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from tests.fixtures.domain import (
+        ConsumerAccountFactory,
+        EndpointFactory,
+        ProviderAccountFactory,
+        ServiceFactory,
+        UpstreamFactory,
+    )
 
 pytestmark = pytest.mark.skipif(
     "TEST_REDIS_URL" not in os.environ,
@@ -28,89 +33,49 @@ pytestmark = pytest.mark.skipif(
 
 
 async def _create_provider_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await provider_account_factory()
 
 
 async def _create_consumer_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    consumer_account_factory: ConsumerAccountFactory,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Consumer")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await consumer_account_factory()
 
 
 async def _seed_service(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    service_factory: ServiceFactory,
     *,
     provider_account_id: int,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug="redis-guardrail-service",
-            name="Redis Guardrail Service",
-            summary="summary",
-            description=None,
-            lifecycle=ServiceLifecycle.ACTIVE,
-        )
-        session.add(service)
-        await session.flush()
-        revision = ServiceRevision(
-            service_id=service.id,
-            revision_number=1,
-            change_token="d" * 64,
-            snapshot={"slug": service.slug},
-        )
-        session.add(revision)
-        await session.flush()
-        service.current_revision_id = revision.id
-        service.current_change_token = revision.change_token
-        return service.id
+    return await service_factory(
+        provider_account_id=provider_account_id,
+        slug="redis-guardrail-service",
+        name="Redis Guardrail Service",
+        summary="summary",
+        description=None,
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+        change_token="d" * 64,
+    )
 
 
 async def _seed_endpoint(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
     *,
     service_id: int,
 ) -> None:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key="translate",
-            name="Translate",
-            summary="Translate text",
-            description=None,
-            access_mode=AccessMode.FREE,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint.id,
-                base_url="https://provider.internal",
-                path="/invoke",
-                http_method="POST",
-                config={
-                    "auth": {
-                        "type": "hmac_sha256",
-                        "key_id": "gateway-key",
-                        "secret": "super-secret",
-                    },
-                },
-            )
-        )
+    endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        name="Translate",
+        summary="Translate text",
+        description=None,
+        access_mode=AccessMode.FREE,
+    )
+    await upstream_factory(endpoint_id=endpoint_id)
 
 
 @dataclass
@@ -212,16 +177,17 @@ async def test_redis_global_rate_limit_is_shared_across_app_instances(
 @pytest.mark.asyncio
 async def test_redis_invoke_lock_is_shared_across_app_instances(
     redis_app_clients: tuple[FastAPI, AsyncClient, FastAPI, AsyncClient],
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    upstream_factory: UpstreamFactory,
 ) -> None:
     first_app, first_client, _, second_client = redis_app_clients
-    provider_account_id = await _create_provider_account(db_session_factory)
-    consumer_account_id = await _create_consumer_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-    )
-    await _seed_endpoint(db_session_factory, service_id=service_id)
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    consumer_account_id = await _create_consumer_account(consumer_account_factory)
+    service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
+    await _seed_endpoint(endpoint_factory, upstream_factory, service_id=service_id)
 
     slow_http_client = _SlowHttpClient()
     get_app_state(first_app).http_client = slow_http_client
