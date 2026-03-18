@@ -46,6 +46,8 @@ async def main() -> None:
             private_key=provider_private_key,
         )
         logger.info("\nAuthenticated provider wallet: %s", authenticated_wallet)
+        await _get_earnings(client, access_token=access_token)
+        await _get_ledger(client, access_token=access_token)
         await _list_payouts(
             client,
             access_token=access_token,
@@ -72,6 +74,36 @@ async def _list_payouts(
     response.raise_for_status()
     body = response.json()
     logger.info("\n%s:\n%s", label, json.dumps(body, indent=2))
+    return body
+
+
+async def _get_earnings(
+    client: httpx.AsyncClient,
+    *,
+    access_token: str,
+) -> dict[str, Any]:
+    response = await client.get(
+        "/v1/provider/earnings",
+        headers=authorization_headers(access_token),
+    )
+    response.raise_for_status()
+    body = response.json()
+    logger.info("\nProvider earnings:\n%s", json.dumps(body, indent=2))
+    return body
+
+
+async def _get_ledger(
+    client: httpx.AsyncClient,
+    *,
+    access_token: str,
+) -> dict[str, Any]:
+    response = await client.get(
+        "/v1/provider/ledger",
+        headers=authorization_headers(access_token),
+    )
+    response.raise_for_status()
+    body = response.json()
+    logger.info("\nProvider ledger:\n%s", json.dumps(body, indent=2))
     return body
 
 

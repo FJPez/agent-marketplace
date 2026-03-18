@@ -84,12 +84,16 @@ make demo-provider
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Agent setup guide](docs/agent-setup.md)
 - [API reference source](docs/api-reference.md)
-- [API reference PDF](docs/api-reference.pdf)
+- [Agent setup guide](docs/agent-setup.md)
 - [Full demo setup](docs/demo-setup.md)
 - [Railway deployment guide](docs/deployment/railway.md)
 - [Example scripts](examples/)
+- [Contributor planning pack](codex-agent-plan/README.md)
+
+The current runtime and integration docs live under `docs/`. The
+`codex-agent-plan/` folder is retained as contributor planning context and
+historical branch-handoff material.
 
 ## Environment Notes
 

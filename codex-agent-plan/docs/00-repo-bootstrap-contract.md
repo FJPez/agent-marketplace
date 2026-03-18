@@ -63,13 +63,16 @@ app/
   api/
     deps/
     routes/
-      providers.py
+      account.py
+      account_wallet.py
+      auth.py
       provider_services.py
       discovery.py
       quotes.py
       invoke.py
       admin.py
       finance.py
+      health.py
   core/
     config.py
     lifespan.py
@@ -82,9 +85,9 @@ app/
     session.py
     models/
       account.py
-      provider.py
-      consumer.py
+      api_key.py
       service.py
+      service_tag.py
       service_endpoint.py
       provider_upstream.py
       pricing_model.py
@@ -96,24 +99,40 @@ app/
       payout.py
       moderation_action.py
       service_health_check.py
+      wallet_change_log.py
   schemas/
+    auth.py
     common.py
-    provider.py
+    account.py
     service.py
     discovery.py
     quote.py
     invoke.py
     admin.py
     finance.py
+    errors.py
   repositories/
     account_repo.py
+    api_key_repo.py
     service_repo.py
     quote_repo.py
     invocation_repo.py
-    payment_repo.py
-    ledger_repo.py
+    payment_attempt_repo.py
+    ledger_entry_repo.py
+    payout_repo.py
+    pricing_model_repo.py
+    provider_upstream_repo.py
+    service_endpoint_repo.py
+    service_health_check_repo.py
+    service_revision_repo.py
+    wallet_change_log_repo.py
   services/
-    provider_service.py
+    account_service.py
+    api_key_service.py
+    auth_resolution_service.py
+    auth_service.py
+    provider_draft_service.py
+    provider_endpoint_service.py
     publish_service.py
     discovery_service.py
     quote_service.py
@@ -124,13 +143,18 @@ app/
     ledger_service.py
     payout_service.py
     health_service.py
+    publish_readiness.py
+    service_health_service.py
+    wallet_change_service.py
   integrations/
     x402/
-      middleware.py
       facilitator_client.py
-      payment_identifier.py
+      models.py
       payment_requirements.py
-      adapters.py
+      payment_identifier.py
+      resource_server.py
+    payouts/
+      executor.py
     provider_gateway/
       client.py
       signing.py

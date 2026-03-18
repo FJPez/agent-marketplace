@@ -29,7 +29,8 @@ Deliver:
 Deliver:
 
 - auth baseline
-- provider and consumer profile creation
+- wallet auth, refresh, and API-key creation
+- account self-service and wallet-rotation support
 - ownership context
 - request logging and request IDs
 

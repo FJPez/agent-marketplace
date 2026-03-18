@@ -317,7 +317,7 @@ Example response:
   "endpoint_key": "paid-summary",
   "pricing_type": "fixed_per_call",
   "amount_minor": 100,
-  "currency": "USDC",
+  "currency": "USD",
   "request_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "service_revision_id": 1,
   "service_change_token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

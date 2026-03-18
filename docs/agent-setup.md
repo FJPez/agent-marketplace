@@ -79,6 +79,11 @@ async def authenticate(client: httpx.AsyncClient, private_key: str) -> str:
 Successful verification returns both `access_token` and `refresh_token`. For
 consumer invoke flows, the access token is enough.
 
+If you want a long-lived agent credential instead of carrying a JWT, use
+[examples/api_key_client.py](../examples/api_key_client.py). It shows the
+JWT-to-API-key flow, generic bearer usage, JWT-only route rejection, and key
+revocation.
+
 ## 2. Discover Services
 
 Discovery is public, so an agent can inspect the catalogue before invoking
@@ -200,7 +205,29 @@ The full x402 settlement and retry flow is already implemented in
 [examples/client.py](../examples/client.py). Use that script when you want a
 runnable paid example instead of wiring the x402 client yourself.
 
-## 6. Minimal End-to-End Example
+## 6. Read Invocation Results
+
+If you want to inspect invocation history or fetch a specific result later, use
+the invocation routes:
+
+```python
+async def load_invocation_views(
+    client: httpx.AsyncClient,
+    access_token: str,
+    invocation_id: int,
+) -> tuple[list[dict[str, object]], dict[str, object]]:
+    headers = {"Authorization": f"Bearer {access_token}"}
+    invocation_list = (await client.get("/v1/invocations", headers=headers)).json()
+    invocation_detail = (
+        await client.get(f"/v1/invocations/{invocation_id}", headers=headers)
+    ).json()
+    return invocation_list, invocation_detail
+```
+
+This is useful when your agent wants to store the `invocation_id` returned by
+`POST /v1/invoke/...` and read it back later.
+
+## 7. Minimal End-to-End Example
 
 For a lightweight local-safe consumer flow, use
 [examples/minimal_consumer.py](../examples/minimal_consumer.py).
@@ -211,7 +238,7 @@ For the corresponding provider setup path, use
 These two scripts are the quickest way to get a local agent-to-service demo
 working without the full paid settlement path.
 
-## 7. Provider Notes
+## 8. Provider Notes
 
 Providers use the same wallet-auth flow, then manage services through the
 provider routes:
@@ -232,3 +259,7 @@ When the marketplace forwards a request upstream, it signs the request with:
 
 Upstream URLs and credentials remain private and are not exposed in public
 discovery responses.
+
+Wallet rotation and admin moderation are documented in the API reference, but
+they are intentionally not part of the default runnable demo set in
+`examples/`.
