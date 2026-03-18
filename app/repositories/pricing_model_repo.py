@@ -12,7 +12,7 @@ class PricingModelRepository:
         self._session = session
 
     def upsert_free(self, endpoint: ServiceEndpoint) -> PricingModel:
-        pricing = endpoint.__dict__.get("pricing")
+        pricing = endpoint.pricing
         if pricing is None:
             pricing = PricingModel(
                 endpoint_id=endpoint.id,
@@ -35,7 +35,7 @@ class PricingModelRepository:
         amount_minor: int,
         currency: str,
     ) -> PricingModel:
-        pricing = endpoint.__dict__.get("pricing")
+        pricing = endpoint.pricing
         if pricing is None:
             pricing = PricingModel(
                 endpoint_id=endpoint.id,
@@ -54,7 +54,7 @@ class PricingModelRepository:
         return pricing
 
     async def delete_for_endpoint(self, endpoint: ServiceEndpoint) -> None:
-        pricing = endpoint.__dict__.get("pricing")
+        pricing = endpoint.pricing
         if pricing is None:
             return
         endpoint.pricing = None

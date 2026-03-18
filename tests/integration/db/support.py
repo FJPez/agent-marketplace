@@ -88,13 +88,11 @@ async def admin_engine(database_url: str | None = None) -> AsyncIterator[AsyncEn
 async def admin_connection(database_url: str | None = None) -> AsyncIterator[AsyncConnection]:
     async with admin_engine(database_url) as engine:
         try:
-            connection = await engine.connect()
+            async with engine.connect() as connection:
+                yield connection
         except (OSError, OperationalError, DBAPIError) as exc:
             msg = "PostgreSQL is unavailable for DB-backed tests"
             raise PostgresUnavailableError(msg) from exc
-
-        async with connection:
-            yield connection
 
 
 async def recreate_test_database(database_url: str) -> None:

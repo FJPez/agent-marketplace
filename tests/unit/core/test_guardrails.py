@@ -128,7 +128,7 @@ async def test_resolve_owner_key_uses_validated_actor_context(
 
 
 @pytest.mark.asyncio
-async def test_resolve_owner_key_hashes_unresolved_bearer_tokens(
+async def test_resolve_owner_key_falls_back_to_client_key_for_unresolved_bearer_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     @asynccontextmanager
@@ -162,4 +162,4 @@ async def test_resolve_owner_key_hashes_unresolved_bearer_tokens(
 
     owner_key = await guardrails._resolve_owner_key(request)
 
-    assert owner_key.startswith("bearer:")
+    assert owner_key == "client:127.0.0.1"

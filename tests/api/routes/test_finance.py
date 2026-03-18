@@ -484,6 +484,62 @@ async def test_provider_payout_request_requires_idempotency_key(
 
 
 @pytest.mark.asyncio
+async def test_provider_payout_request_rejects_blank_idempotency_key_after_trimming(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+    _install_payout_state(app, payout_executor=_SuccessfulPayoutExecutor())
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_provider_payout_request_rejects_overlong_idempotency_key(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+    _install_payout_state(app, payout_executor=_SuccessfulPayoutExecutor())
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "x" * 256},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_provider_payout_request_trims_idempotency_key(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+    payout_executor = _SuccessfulPayoutExecutor()
+    _install_payout_state(app, payout_executor=payout_executor)
+
+    response = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "  payout-request-1  "},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["idempotency_key"] == "payout-request-1"
+    assert all(
+        call["idempotency_key"] == "payout-request-1" for call in payout_executor.prepare_calls
+    )
+
+
+@pytest.mark.asyncio
 async def test_provider_payout_request_rejects_api_key_auth(
     app: FastAPI,
     async_client: AsyncClient,

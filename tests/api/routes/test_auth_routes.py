@@ -193,3 +193,29 @@ async def test_api_key_crud_routes_require_jwt_and_support_create_list_revoke(
     )
 
     assert revoke_response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_rejects_blank_name(async_client: AsyncClient) -> None:
+    _, access_token = await _authenticate(async_client)
+
+    response = await async_client.post(
+        "/v1/auth/api-keys",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"name": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_rejects_naive_expiration(async_client: AsyncClient) -> None:
+    _, access_token = await _authenticate(async_client)
+
+    response = await async_client.post(
+        "/v1/auth/api-keys",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"expires_at": "2030-01-01T12:00:00"},
+    )
+
+    assert response.status_code == 422

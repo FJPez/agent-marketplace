@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor, CurrentJwtActor
+from app.api.deps.headers import ValidatedIdempotencyKey
 from app.core.enums import PayoutStatus
 from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
@@ -136,7 +137,7 @@ async def request_provider_payouts(
     actor: CurrentJwtActor,
     fastapi_request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    idempotency_key: ValidatedIdempotencyKey,
 ) -> ProviderPayoutRequestResponse:
     service = PayoutExecutionService(
         session,

@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
+from app.api.deps.headers import ValidatedIdempotencyKey
 from app.core.enums import AccessMode
 from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
@@ -140,7 +141,7 @@ async def invoke_service(
     fastapi_request: Request,
     response: Response,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    idempotency_key: ValidatedIdempotencyKey,
 ) -> InvocationResponse | JSONResponse:
     invoke_service = InvokeService(session, http_client=_get_http_client(fastapi_request))
     try:

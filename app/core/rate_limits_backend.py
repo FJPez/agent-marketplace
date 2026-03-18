@@ -8,7 +8,6 @@ from limits.aio.storage import MemoryStorage, RedisStorage
 from limits.aio.strategies import FixedWindowRateLimiter
 
 from app.core.config import Settings, get_settings
-from app.core.security import hash_api_key
 
 if TYPE_CHECKING:
     from fastapi import Request
@@ -23,15 +22,6 @@ def build_actor_rate_limit_key(request: Request) -> str:
     cached_key = getattr(request.state, "rate_limit_owner_key", None)
     if isinstance(cached_key, str):
         return cached_key
-
-    authorization = request.headers.get("Authorization")
-    if authorization is not None:
-        scheme, _, token = authorization.partition(" ")
-        if scheme == "Bearer" and token:
-            settings = get_settings()
-            if token.startswith(settings.api_key_prefix):
-                return f"api_key:{hash_api_key(token)}"
-            return f"bearer:{hash_api_key(token)}"
     return build_client_rate_limit_key(request)
 
 

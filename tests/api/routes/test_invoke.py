@@ -7,6 +7,10 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from httpx import AsyncClient, Response, TimeoutException
 from tests.fixtures.domain import (
+    ConsumerAccountFactory,
+    EndpointFactory,
+    ProviderAccountFactory,
+    ServiceFactory,
     create_consumer_account_record,
     create_endpoint_record,
     create_moderation_action_record,
@@ -269,6 +273,74 @@ async def test_invoke_requires_idempotency_key(
     response = await async_client.post(
         "/v1/invoke/invoke-service",
         headers={"Authorization": _auth_headers(consumer_account_id)["Authorization"]},
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invoke_rejects_blank_idempotency_key_after_trimming(
+    async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+) -> None:
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
+        provider_account_id=provider_account_id,
+        slug="invoke-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        access_mode=AccessMode.FREE,
+    )
+    consumer_account_id = await consumer_account_factory()
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers={
+            **auth_headers_for_account_id(consumer_account_id),
+            "Idempotency-Key": "   ",
+        },
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invoke_rejects_overlong_idempotency_key(
+    async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+) -> None:
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
+        provider_account_id=provider_account_id,
+        slug="invoke-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        access_mode=AccessMode.FREE,
+    )
+    consumer_account_id = await consumer_account_factory()
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers={
+            **auth_headers_for_account_id(consumer_account_id),
+            "Idempotency-Key": "x" * 256,
+        },
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 

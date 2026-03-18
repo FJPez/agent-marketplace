@@ -129,25 +129,16 @@ class InvokeGuardrails:
             except ValueError:
                 pass
 
-        digest = sha256()
-        chunks: list[bytes] = []
-        total_size = 0
-        async for chunk in request.stream():
-            total_size += len(chunk)
-            if total_size > self.payload_max_bytes:
-                return BufferedInvokeBody(
-                    body=None,
-                    request_fingerprint=None,
-                    payload_too_large=True,
-                )
-            chunks.append(chunk)
-            digest.update(chunk)
-
-        body = b"".join(chunks)
-        request._body = body
+        body = await request.body()
+        if len(body) > self.payload_max_bytes:
+            return BufferedInvokeBody(
+                body=None,
+                request_fingerprint=None,
+                payload_too_large=True,
+            )
         return BufferedInvokeBody(
             body=body,
-            request_fingerprint=digest.hexdigest(),
+            request_fingerprint=sha256(body).hexdigest(),
             payload_too_large=False,
         )
 
