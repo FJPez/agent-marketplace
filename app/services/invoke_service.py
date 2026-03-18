@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from jsonschema import ValidationError, validate
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import InvocationFailureReason, InvocationStatus
@@ -15,6 +14,7 @@ from app.core.logging import (
     get_logger,
 )
 from app.core.request_hash import hash_request_body
+from app.core.request_schema_validation import PayloadSchemaMismatchError, validate_request_payload
 from app.integrations.provider_gateway.client import (
     ProviderGatewayClient,
     ProviderGatewayResponseError,
@@ -122,9 +122,12 @@ class InvokeService:
         if auth is None:
             raise InvokeUnavailableError("service endpoint is not invokable")
         try:
-            validate(instance=payload, schema=endpoint.request_schema)
-        except ValidationError as exc:
-            raise InvokeConflictError("request payload does not match endpoint schema") from exc
+            validate_request_payload(
+                payload=payload,
+                request_schema=endpoint.request_schema,
+            )
+        except PayloadSchemaMismatchError as exc:
+            raise InvokeConflictError(str(exc)) from exc
 
         request_hash = self._build_request_hash(
             service_id=service.id,

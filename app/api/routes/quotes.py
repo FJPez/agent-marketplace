@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.db.session import get_db_session
 from app.schemas.quote import QuoteCreateRequest, QuoteResponse
 from app.services.quote_service import QuoteNotFoundError, QuoteService, QuoteUnavailableError
@@ -19,6 +20,11 @@ QUOTE_ROUTE_DESCRIPTION = (
 def _to_http_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, QuoteNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    if isinstance(exc, PayloadSchemaMismatchError):
+        return HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        )
     if isinstance(exc, QuoteUnavailableError):
         return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
     return HTTPException(
@@ -66,7 +72,7 @@ async def create_quote(
             endpoint_key=request.endpoint_key,
             payload=request.payload,
         )
-    except (QuoteNotFoundError, QuoteUnavailableError) as exc:
+    except (PayloadSchemaMismatchError, QuoteNotFoundError, QuoteUnavailableError) as exc:
         raise _to_http_exception(exc) from exc
 
     return QuoteResponse.from_model(quote)
