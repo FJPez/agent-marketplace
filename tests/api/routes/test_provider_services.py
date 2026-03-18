@@ -16,7 +16,7 @@ from tests.fixtures.domain import (
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
-from app.db.models import Service, ServiceRevision
+from app.db.models import Service, ServiceHealthCheck, ServiceRevision
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
@@ -968,11 +968,23 @@ async def test_publish_service_rejects_service_without_endpoints(
         f"/v1/provider/services/{service_id}/publish",
         headers=_auth_headers(account_id),
     )
+    async with db_session_factory() as session:
+        latest_check = await session.scalar(
+            select(ServiceHealthCheck)
+            .where(
+                ServiceHealthCheck.service_id == service_id,
+                ServiceHealthCheck.check_name == "publish-readiness",
+            )
+            .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
+        )
 
     assert response.status_code == 422
     assert response.json() == {
         "detail": "service must define at least one endpoint before publish",
     }
+    assert latest_check is not None
+    assert latest_check.status is ServiceHealthStatus.FAIL
+    assert latest_check.summary == "service must define at least one endpoint before publish"
 
 
 @pytest.mark.asyncio
@@ -1036,14 +1048,25 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)
+        latest_check = await session.scalar(
+            select(ServiceHealthCheck)
+            .where(
+                ServiceHealthCheck.service_id == service_id,
+                ServiceHealthCheck.check_name == "publish-readiness",
+            )
+            .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
+        )
 
     assert service is not None
     assert service.current_revision_id is not None
     assert service.current_change_token is not None
+    assert latest_check is not None
+    assert latest_check.status is ServiceHealthStatus.PASS
+    assert latest_check.summary == "service is publish-ready"
 
 
 @pytest.mark.asyncio
-async def test_publish_service_rejects_service_with_failed_latest_publish_readiness(
+async def test_publish_service_replaces_stale_failed_publish_readiness_with_fresh_pass(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -1068,11 +1091,28 @@ async def test_publish_service_rejects_service_with_failed_latest_publish_readin
         f"/v1/provider/services/{service_id}/publish",
         headers=_auth_headers(account_id),
     )
+    async with db_session_factory() as session:
+        checks = list(
+            (
+                await session.execute(
+                    select(ServiceHealthCheck)
+                    .where(
+                        ServiceHealthCheck.service_id == service_id,
+                        ServiceHealthCheck.check_name == "publish-readiness",
+                    )
+                    .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "service failed latest publish-readiness health check",
-    }
+    assert response.status_code == 200
+    assert response.json()["lifecycle"] == "active"
+    assert len(checks) == 2
+    assert checks[0].status is ServiceHealthStatus.PASS
+    assert checks[0].summary == "service is publish-ready"
+    assert checks[1].status is ServiceHealthStatus.FAIL
 
 
 @pytest.mark.asyncio
