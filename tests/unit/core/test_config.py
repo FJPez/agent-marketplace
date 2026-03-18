@@ -29,7 +29,7 @@ def _write_dotenv(path: Path, *, jwt_secret: str, siwe_domain: str) -> None:
 def _valid_deployment_env(
     overrides: dict[str, str | None] | None = None,
 ) -> dict[str, str | None]:
-    env = {
+    env: dict[str, str | None] = {
         "APP_ENV": "prod",
         "APP_JWT_SECRET_KEY": TEST_JWT_SECRET_KEY,
         "APP_DATABASE_URL": "postgresql+asyncpg://db.example.com/app",

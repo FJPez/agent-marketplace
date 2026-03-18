@@ -37,6 +37,10 @@ class _ResolvedActor(Protocol):
     wallet_address: str
 
 
+class _MutableApiKey(Protocol):
+    last_used_at: datetime | None
+
+
 class _DummySession:
     async def commit(self) -> None:
         return None
@@ -85,8 +89,8 @@ def auth_client_factory(
 
         def fake_touch_last_used(
             self: auth_resolution_module.ApiKeyRepository,
-            current_api_key: object,
-        ) -> object:
+            current_api_key: _MutableApiKey,
+        ) -> _MutableApiKey:
             _ = self
             current_api_key.last_used_at = datetime.now(UTC)
             return current_api_key

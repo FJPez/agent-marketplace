@@ -43,7 +43,7 @@ def use_dedicated_test_database(base_test_env: None) -> Generator[None, None, No
     try:
         asyncio.run(recreate_test_database(test_database_url))
     except PostgresUnavailableError as exc:
-        pytest.skip(f"{exc}. Start PostgreSQL to run DB-backed tests.")
+        raise pytest.skip.Exception(f"{exc}. Start PostgreSQL to run DB-backed tests.") from exc
     os.environ["APP_DATABASE_URL"] = test_database_url
     get_settings.cache_clear()
 

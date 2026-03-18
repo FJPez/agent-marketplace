@@ -79,6 +79,10 @@ async def _seed_endpoint(
     with_hmac_auth: bool = True,
     request_schema: dict[str, object] | None = None,
 ) -> int:
+    default_request_schema: dict[str, object] = {"type": "object"}
+    resolved_request_schema = (
+        request_schema if request_schema is not None else default_request_schema
+    )
     endpoint_id = await create_endpoint_record(
         db_session_factory,
         service_id=service_id,
@@ -87,7 +91,7 @@ async def _seed_endpoint(
         summary="Translate text",
         description=None,
         access_mode=access_mode,
-        request_schema=request_schema or {"type": "object"},
+        request_schema=resolved_request_schema,
         response_schema={"type": "object"},
         is_enabled=is_enabled,
     )

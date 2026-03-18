@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, OperationalError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from app.core.config import Settings
 
@@ -85,7 +85,7 @@ async def admin_engine(database_url: str | None = None) -> AsyncIterator[AsyncEn
 
 
 @asynccontextmanager
-async def admin_connection(database_url: str | None = None) -> AsyncIterator[object]:
+async def admin_connection(database_url: str | None = None) -> AsyncIterator[AsyncConnection]:
     async with admin_engine(database_url) as engine:
         try:
             connection = await engine.connect()

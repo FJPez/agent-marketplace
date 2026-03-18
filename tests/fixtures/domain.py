@@ -380,7 +380,7 @@ async def create_pricing_record(
         )
         session.add(pricing)
         await session.flush()
-        return pricing.id
+        return endpoint_id
 
 
 async def create_upstream_record(
@@ -402,7 +402,7 @@ async def create_upstream_record(
         )
         session.add(upstream)
         await session.flush()
-        return upstream.id
+        return endpoint_id
 
 
 async def create_quote_record(

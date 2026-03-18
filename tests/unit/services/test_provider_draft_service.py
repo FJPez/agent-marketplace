@@ -233,10 +233,10 @@ class FakeEndpointRepo:
             endpoint.access_mode = access_mode
         if request_schema is not _UNSET:
             assert isinstance(request_schema, dict)
-            endpoint.request_schema = request_schema
+            object.__setattr__(endpoint, "request_schema", request_schema)
         if response_schema is not _UNSET:
             assert isinstance(response_schema, dict)
-            endpoint.response_schema = response_schema
+            object.__setattr__(endpoint, "response_schema", response_schema)
         if timeout_seconds is not _UNSET:
             assert isinstance(timeout_seconds, int)
             endpoint.timeout_seconds = timeout_seconds
