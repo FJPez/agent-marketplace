@@ -239,6 +239,7 @@ Example request:
 
 - Auth: generic bearer
 - Request: body with `base_url`, `path`, `http_method`, and optional `config`
+- Validation: `path` must start with `/` and must not include a scheme, host, query string, or fragment
 - Success: `204` with no body
 - Errors: `404` if the endpoint is not owned, `409` on invalid state transitions, `422` for invalid input
 
@@ -294,6 +295,7 @@ Example upstream config payload:
 
 - Auth: none
 - Request: body with `endpoint_key` and `payload`
+- Payload shape: `payload` may be any JSON value that matches the endpoint request schema, not only an object
 - Success: `201` with a quote bound to the request payload
 - Errors: `404` when the service or endpoint cannot be found, `409` when the quote cannot be created for the current state
 
@@ -332,9 +334,12 @@ Example response:
 
 - Auth: generic bearer
 - Request: body with `endpoint_key`, `payload`, and optional `quote_id`
+- Payload shape: `payload` may be any JSON value that matches the endpoint request schema, not only an object
 - Required header: `Idempotency-Key`
 - Success: `200` with the invocation record, or `402` for unpaid paid-endpoint requests
 - Errors: `404` for missing services or invocations, `409` for conflicts or in-progress requests, `502` for upstream failures, `504` for upstream timeouts
+- Invocation status values: `in_progress`, `succeeded`, `failed`
+- Upstream idempotency: the forwarded `X-Agent-Marketplace-Invocation-Id` header is stable across retries for the same invocation and should be treated as the provider-side idempotency key
 
 Example free-invoke request:
 

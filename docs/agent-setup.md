@@ -119,7 +119,7 @@ revision, and change token used during invoke.
 async def create_quote(
     client: httpx.AsyncClient,
     service_slug: str,
-    payload: dict[str, object],
+    payload: object,
 ) -> dict[str, object]:
     response = await client.post(
         f"/v1/services/{service_slug}/quote",
@@ -134,6 +134,10 @@ async def create_quote(
 
 If the payload changes after quoting, the quote should be treated as stale and
 re-created.
+
+`payload` can be any JSON value allowed by the endpoint schema, not only an
+object. For example, an endpoint may accept an array payload and return a JSON
+string response.
 
 ## 4. Invoke an Endpoint
 
@@ -180,7 +184,7 @@ async def begin_paid_invoke(
     access_token: str,
     service_slug: str,
     quote_id: int,
-    payload: dict[str, object],
+    payload: object,
 ) -> httpx.Response:
     return await client.post(
         f"/v1/invoke/{service_slug}",
@@ -256,6 +260,13 @@ When the marketplace forwards a request upstream, it signs the request with:
 - `X-Agent-Marketplace-Request-Hash`
 - `X-Agent-Marketplace-Invocation-Id`
 - `X-Agent-Marketplace-Signature`
+
+Treat `X-Agent-Marketplace-Invocation-Id` as the upstream idempotency key for
+provider execution. When a client retries the same marketplace invoke, the
+provider should replay by that header instead of re-executing the side effect.
+
+Provider upstream `path` values must start with `/` and must not include a
+scheme, host, query string, or fragment.
 
 Upstream URLs and credentials remain private and are not exposed in public
 discovery responses.
