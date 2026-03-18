@@ -322,6 +322,17 @@ class InvokeService:
     async def list_invocations(self, actor: ActorContext) -> list[Invocation]:
         return await self._invocation_repo.list_for_consumer(consumer_account_id=actor.account_id)
 
+    async def get_invocation_by_idempotency_key(
+        self,
+        actor: ActorContext,
+        *,
+        idempotency_key: str,
+    ) -> Invocation | None:
+        return await self._invocation_repo.get_by_idempotency_key(
+            consumer_account_id=actor.account_id,
+            idempotency_key=idempotency_key,
+        )
+
     async def try_successful_replay(
         self,
         actor: ActorContext,

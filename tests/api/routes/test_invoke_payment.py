@@ -23,7 +23,13 @@ from tests.helpers.auth import auth_headers_for_account_id
 from x402 import PaymentPayload
 from x402.http import encode_payment_signature_header
 
-from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
+from app.core.enums import (
+    AccessMode,
+    InvocationStatus,
+    PaymentAttemptStatus,
+    PricingModelType,
+    ServiceLifecycle,
+)
 from app.core.lifespan import get_app_state
 from app.core.logging import (
     EVENT_FIELD,
@@ -236,6 +242,7 @@ async def _seed_payment_attempt(
     invocation_id: int | None,
     idempotency_key: str,
     payment_identifier: str,
+    status: PaymentAttemptStatus = PaymentAttemptStatus.CHALLENGED,
     verify_outcome: dict[str, object] | None,
     settle_outcome: dict[str, object] | None,
 ) -> int:
@@ -246,6 +253,7 @@ async def _seed_payment_attempt(
             invocation_id=invocation_id,
             idempotency_key=idempotency_key,
             payment_identifier=payment_identifier,
+            status=status,
             payment_requirement={"amount_minor": 500},
             payment_payload={"payment_identifier": payment_identifier},
             verify_outcome=verify_outcome,
@@ -561,11 +569,17 @@ async def test_paid_invoke_with_valid_payment_returns_success_and_payment_respon
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
+    payment_attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-1",
+    )
 
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
     assert response.json()["response_payload"] == {"result": "bonjour"}
     assert "PAYMENT-RESPONSE" in response.headers
+    assert payment_attempt is not None
+    assert payment_attempt.status is PaymentAttemptStatus.CONSUMED
     assert len(upstream_client.calls) == 1
     assert len(facilitator_client.verify_calls) == 1
     assert len(facilitator_client.settle_calls) == 1
@@ -798,7 +812,21 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
         db_session_factory,
         idempotency_key="invoke-key",
     )
+    payment_attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-log-failure",
+    )
+    invocation_count, payment_attempt_count, ledger_count, payout_count = await _count_rows(
+        db_session_factory
+    )
     assert failed_invocation is not None
+    assert payment_attempt is not None
+    assert payment_attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert payment_attempt.invocation_id == failed_invocation.id
+    assert invocation_count == 1
+    assert payment_attempt_count == 1
+    assert ledger_count == 0
+    assert payout_count == 0
     failure_record = next(
         record
         for record in caplog.records
@@ -981,6 +1009,10 @@ async def test_paid_invoke_rejects_wrong_payment_token_before_invoke_or_payout(
     invocation_count, payment_attempt_count, ledger_count, payout_count = await _count_rows(
         db_session_factory
     )
+    payment_attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="wrong-token-payment",
+    )
 
     assert response.status_code == 402
     assert response.json() == {"detail": "payment could not be verified"}
@@ -988,6 +1020,8 @@ async def test_paid_invoke_rejects_wrong_payment_token_before_invoke_or_payout(
     assert payment_attempt_count == 1
     assert ledger_count == 0
     assert payout_count == 0
+    assert payment_attempt is not None
+    assert payment_attempt.status is PaymentAttemptStatus.VERIFY_FAILED
 
 
 @pytest.mark.asyncio
@@ -1239,6 +1273,12 @@ async def test_failed_payment_identifier_reuse_returns_conflict(
     assert first.status_code == 402
     assert second.status_code == 409
     assert second.json() == {"detail": "payment identifier already used"}
+    attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-1",
+    )
+    assert attempt is not None
+    assert attempt.status is PaymentAttemptStatus.VERIFY_FAILED
 
 
 @pytest.mark.asyncio
@@ -1280,6 +1320,7 @@ async def test_paid_invoke_rejects_payment_identifier_reuse_for_different_quote(
         invocation_id=invocation_id,
         idempotency_key="invoke-key-1",
         payment_identifier="payment-1",
+        status=PaymentAttemptStatus.CONSUMED,
         verify_outcome={"ok": True, "reference": "verify-1"},
         settle_outcome={"ok": True, "reference": "settle-1"},
     )
@@ -1345,10 +1386,16 @@ async def test_verify_failure_returns_402(
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
+    attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-1",
+    )
 
     assert response.status_code == 402
     assert response.json() == {"detail": "payment could not be verified"}
     assert "PAYMENT-REQUIRED" in response.headers
+    assert attempt is not None
+    assert attempt.status is PaymentAttemptStatus.VERIFY_FAILED
 
 
 @pytest.mark.asyncio
@@ -1419,9 +1466,15 @@ async def test_settle_failure_returns_502(
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
+    attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-1",
+    )
 
     assert response.status_code == 502
     assert response.json() == {"detail": "payment settlement failed"}
+    assert attempt is not None
+    assert attempt.status is PaymentAttemptStatus.SETTLE_FAILED
 
 
 @pytest.mark.asyncio

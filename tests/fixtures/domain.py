@@ -7,10 +7,25 @@ import pytest
 from sqlalchemy import select
 from tests.helpers.auth import create_account
 
-from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
+from app.core.enums import (
+    AccessMode,
+    InvocationFailureReason,
+    InvocationStatus,
+    LedgerEntryType,
+    PaymentAttemptStatus,
+    PayoutFailureCode,
+    PayoutStatus,
+    PricingModelType,
+    ServiceHealthStatus,
+    ServiceLifecycle,
+)
 from app.core.request_hash import hash_request_body
 from app.db.models import (
+    Invocation,
+    LedgerEntry,
     ModerationAction,
+    PaymentAttempt,
+    Payout,
     PricingModel,
     ProviderUpstream,
     Quote,
@@ -146,6 +161,82 @@ class QuoteFactory(Protocol):
         service_revision_id: int | None = ...,
         service_change_token: str | None = ...,
         expires_at: datetime | None = ...,
+    ) -> Awaitable[int]: ...
+
+
+class InvocationFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        consumer_account_id: int,
+        service_id: int,
+        endpoint_id: int,
+        endpoint_key: str = ...,
+        access_mode: AccessMode = ...,
+        quote_id: int | None = ...,
+        payload: JsonObject | None = ...,
+        request_hash: str | None = ...,
+        idempotency_key: str = ...,
+        status: InvocationStatus = ...,
+        response_payload: JsonObject | None = ...,
+        upstream_status_code: int | None = ...,
+        error_message: str | None = ...,
+        failure_reason: InvocationFailureReason | None = ...,
+    ) -> Awaitable[int]: ...
+
+
+class PaymentAttemptFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        consumer_account_id: int,
+        quote_id: int,
+        invocation_id: int | None = ...,
+        idempotency_key: str = ...,
+        payment_identifier: str | None = ...,
+        status: PaymentAttemptStatus = ...,
+        payment_requirement: JsonObject | None = ...,
+        payment_payload: JsonObject | None = ...,
+        verify_outcome: JsonObject | None = ...,
+        settle_outcome: JsonObject | None = ...,
+        facilitator_reference: str | None = ...,
+    ) -> Awaitable[int]: ...
+
+
+class LedgerEntryFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        provider_account_id: int,
+        service_id: int,
+        invocation_id: int,
+        payment_attempt_id: int,
+        entry_type: LedgerEntryType = ...,
+        amount_minor: int = ...,
+        currency: str = ...,
+    ) -> Awaitable[int]: ...
+
+
+class PayoutFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        provider_account_id: int,
+        service_id: int,
+        invocation_id: int,
+        payment_attempt_id: int,
+        destination_wallet: str | None = ...,
+        amount_minor: int = ...,
+        currency: str = ...,
+        network: str = ...,
+        status: PayoutStatus = ...,
+        transfer_reference: str | None = ...,
+        request_idempotency_key: str | None = ...,
+        failure_code: PayoutFailureCode | None = ...,
+        error_message: str | None = ...,
+        attempt_count: int = ...,
+        prepared_raw_transaction: str | None = ...,
+        chain_nonce: int | None = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -468,6 +559,158 @@ async def create_quote_record(
         return quote.id
 
 
+async def create_invocation_record(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    consumer_account_id: int,
+    service_id: int,
+    endpoint_id: int,
+    endpoint_key: str = "translate",
+    access_mode: AccessMode = AccessMode.FREE,
+    quote_id: int | None = None,
+    payload: JsonObject | None = None,
+    request_hash: str | None = None,
+    idempotency_key: str = "invoke-key",
+    status: InvocationStatus = InvocationStatus.SUCCEEDED,
+    response_payload: JsonObject | None = None,
+    upstream_status_code: int | None = 200,
+    error_message: str | None = None,
+    failure_reason: InvocationFailureReason | None = None,
+) -> int:
+    request_payload = payload or {"text": "hello"}
+    async with db_session_factory.begin() as session:
+        invocation = Invocation(
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            endpoint_key=endpoint_key,
+            access_mode=access_mode,
+            quote_id=quote_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash
+            or hash_request_body(
+                {
+                    "service_id": service_id,
+                    "endpoint_key": endpoint_key,
+                    "payload": request_payload,
+                    "quote_id": quote_id,
+                }
+            ),
+            status=status,
+            response_payload=response_payload,
+            upstream_status_code=upstream_status_code,
+            error_message=error_message,
+            failure_reason=failure_reason,
+        )
+        session.add(invocation)
+        await session.flush()
+        return invocation.id
+
+
+async def create_payment_attempt_record(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    consumer_account_id: int,
+    quote_id: int,
+    invocation_id: int | None = None,
+    idempotency_key: str = "invoke-key",
+    payment_identifier: str | None = "payment-1",
+    status: PaymentAttemptStatus = PaymentAttemptStatus.CHALLENGED,
+    payment_requirement: JsonObject | None = None,
+    payment_payload: JsonObject | None = None,
+    verify_outcome: JsonObject | None = None,
+    settle_outcome: JsonObject | None = None,
+    facilitator_reference: str | None = None,
+) -> int:
+    async with db_session_factory.begin() as session:
+        attempt = PaymentAttempt(
+            consumer_account_id=consumer_account_id,
+            quote_id=quote_id,
+            invocation_id=invocation_id,
+            idempotency_key=idempotency_key,
+            payment_identifier=payment_identifier,
+            status=status,
+            payment_requirement=payment_requirement or {"amount_minor": 500},
+            payment_payload=payment_payload or {"payment_identifier": payment_identifier},
+            verify_outcome=verify_outcome,
+            settle_outcome=settle_outcome,
+            facilitator_reference=facilitator_reference,
+        )
+        session.add(attempt)
+        await session.flush()
+        return attempt.id
+
+
+async def create_ledger_entry_record(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    provider_account_id: int,
+    service_id: int,
+    invocation_id: int,
+    payment_attempt_id: int,
+    entry_type: LedgerEntryType = LedgerEntryType.CHARGE,
+    amount_minor: int = 500,
+    currency: str = "USD",
+) -> int:
+    async with db_session_factory.begin() as session:
+        entry = LedgerEntry(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            entry_type=entry_type,
+            amount_minor=amount_minor,
+            currency=currency,
+        )
+        session.add(entry)
+        await session.flush()
+        return entry.id
+
+
+async def create_payout_record(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    provider_account_id: int,
+    service_id: int,
+    invocation_id: int,
+    payment_attempt_id: int,
+    destination_wallet: str | None = None,
+    amount_minor: int = 450,
+    currency: str = "USDC",
+    network: str = "base-sepolia",
+    status: PayoutStatus = PayoutStatus.READY,
+    transfer_reference: str | None = None,
+    request_idempotency_key: str | None = None,
+    failure_code: PayoutFailureCode | None = None,
+    error_message: str | None = None,
+    attempt_count: int = 0,
+    prepared_raw_transaction: str | None = None,
+    chain_nonce: int | None = None,
+) -> int:
+    async with db_session_factory.begin() as session:
+        payout = Payout(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            destination_wallet=destination_wallet,
+            amount_minor=amount_minor,
+            currency=currency,
+            network=network,
+            status=status,
+            transfer_reference=transfer_reference,
+            request_idempotency_key=request_idempotency_key,
+            failure_code=failure_code,
+            error_message=error_message,
+            attempt_count=attempt_count,
+            prepared_raw_transaction=prepared_raw_transaction,
+            chain_nonce=chain_nonce,
+        )
+        session.add(payout)
+        await session.flush()
+        return payout.id
+
+
 async def create_moderation_action_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -748,6 +991,158 @@ def quote_factory(
         )
 
     return create_quote
+
+
+@pytest.fixture
+def invocation_factory(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> InvocationFactory:
+    async def create_invocation(
+        *,
+        consumer_account_id: int,
+        service_id: int,
+        endpoint_id: int,
+        endpoint_key: str = "translate",
+        access_mode: AccessMode = AccessMode.FREE,
+        quote_id: int | None = None,
+        payload: JsonObject | None = None,
+        request_hash: str | None = None,
+        idempotency_key: str = "invoke-key",
+        status: InvocationStatus = InvocationStatus.SUCCEEDED,
+        response_payload: JsonObject | None = None,
+        upstream_status_code: int | None = 200,
+        error_message: str | None = None,
+        failure_reason: InvocationFailureReason | None = None,
+    ) -> int:
+        return await create_invocation_record(
+            db_session_factory,
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            endpoint_key=endpoint_key,
+            access_mode=access_mode,
+            quote_id=quote_id,
+            payload=payload,
+            request_hash=request_hash,
+            idempotency_key=idempotency_key,
+            status=status,
+            response_payload=response_payload,
+            upstream_status_code=upstream_status_code,
+            error_message=error_message,
+            failure_reason=failure_reason,
+        )
+
+    return create_invocation
+
+
+@pytest.fixture
+def payment_attempt_factory(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> PaymentAttemptFactory:
+    async def create_payment_attempt(
+        *,
+        consumer_account_id: int,
+        quote_id: int,
+        invocation_id: int | None = None,
+        idempotency_key: str = "invoke-key",
+        payment_identifier: str | None = "payment-1",
+        status: PaymentAttemptStatus = PaymentAttemptStatus.CHALLENGED,
+        payment_requirement: JsonObject | None = None,
+        payment_payload: JsonObject | None = None,
+        verify_outcome: JsonObject | None = None,
+        settle_outcome: JsonObject | None = None,
+        facilitator_reference: str | None = None,
+    ) -> int:
+        return await create_payment_attempt_record(
+            db_session_factory,
+            consumer_account_id=consumer_account_id,
+            quote_id=quote_id,
+            invocation_id=invocation_id,
+            idempotency_key=idempotency_key,
+            payment_identifier=payment_identifier,
+            status=status,
+            payment_requirement=payment_requirement,
+            payment_payload=payment_payload,
+            verify_outcome=verify_outcome,
+            settle_outcome=settle_outcome,
+            facilitator_reference=facilitator_reference,
+        )
+
+    return create_payment_attempt
+
+
+@pytest.fixture
+def ledger_entry_factory(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> LedgerEntryFactory:
+    async def create_ledger_entry(
+        *,
+        provider_account_id: int,
+        service_id: int,
+        invocation_id: int,
+        payment_attempt_id: int,
+        entry_type: LedgerEntryType = LedgerEntryType.CHARGE,
+        amount_minor: int = 500,
+        currency: str = "USD",
+    ) -> int:
+        return await create_ledger_entry_record(
+            db_session_factory,
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            entry_type=entry_type,
+            amount_minor=amount_minor,
+            currency=currency,
+        )
+
+    return create_ledger_entry
+
+
+@pytest.fixture
+def payout_factory(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> PayoutFactory:
+    async def create_payout(
+        *,
+        provider_account_id: int,
+        service_id: int,
+        invocation_id: int,
+        payment_attempt_id: int,
+        destination_wallet: str | None = None,
+        amount_minor: int = 450,
+        currency: str = "USDC",
+        network: str = "base-sepolia",
+        status: PayoutStatus = PayoutStatus.READY,
+        transfer_reference: str | None = None,
+        request_idempotency_key: str | None = None,
+        failure_code: PayoutFailureCode | None = None,
+        error_message: str | None = None,
+        attempt_count: int = 0,
+        prepared_raw_transaction: str | None = None,
+        chain_nonce: int | None = None,
+    ) -> int:
+        return await create_payout_record(
+            db_session_factory,
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            invocation_id=invocation_id,
+            payment_attempt_id=payment_attempt_id,
+            destination_wallet=destination_wallet,
+            amount_minor=amount_minor,
+            currency=currency,
+            network=network,
+            status=status,
+            transfer_reference=transfer_reference,
+            request_idempotency_key=request_idempotency_key,
+            failure_code=failure_code,
+            error_message=error_message,
+            attempt_count=attempt_count,
+            prepared_raw_transaction=prepared_raw_transaction,
+            chain_nonce=chain_nonce,
+        )
+
+    return create_payout
 
 
 @pytest.fixture

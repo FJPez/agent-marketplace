@@ -36,6 +36,15 @@ class InvocationFailureReason(StrEnum):
     UPSTREAM_RESPONSE = "upstream_response"
 
 
+class PaymentAttemptStatus(StrEnum):
+    CHALLENGED = "challenged"
+    VERIFY_FAILED = "verify_failed"
+    SETTLE_FAILED = "settle_failed"
+    SETTLED = "settled"
+    CONSUMED = "consumed"
+    COMPENSATION_REQUIRED = "compensation_required"
+
+
 class LedgerEntryType(StrEnum):
     CHARGE = "charge"
     PLATFORM_FEE = "platform_fee"

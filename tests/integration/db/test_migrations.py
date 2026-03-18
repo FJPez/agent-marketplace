@@ -138,6 +138,19 @@ def test_head_migration_adds_request_payout_columns(
     assert type(columns["chain_nonce"]["type"]).__name__.upper() == "BIGINT"
 
 
+def test_head_migration_adds_payment_attempt_lifecycle_columns(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    columns = asyncio.run(get_column_specs(db_engine, "payment_attempts"))
+
+    assert {"status", "updated_at"}.issubset(columns)
+    assert columns["status"]["nullable"] is False
+    assert columns["updated_at"]["nullable"] is False
+
+
 async def _seed_head_state_for_downgrade(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as connection:
         result = await connection.execute(

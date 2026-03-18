@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003
 
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, String, UniqueConstraint, text
+from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.enums import PaymentAttemptStatus
 from app.db.base import Base
 
 
@@ -32,6 +34,16 @@ class PaymentAttempt(Base):
     )
     idempotency_key: Mapped[str] = mapped_column(String(255))
     payment_identifier: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    status: Mapped[PaymentAttemptStatus] = mapped_column(
+        SqlEnum(
+            PaymentAttemptStatus,
+            name="payment_attempt_status",
+            create_constraint=True,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        server_default=PaymentAttemptStatus.CHALLENGED.value,
+    )
     payment_requirement: Mapped[dict[str, object]] = mapped_column(JSONB)
     payment_payload: Mapped[dict[str, object]] = mapped_column(JSONB)
     verify_outcome: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
@@ -40,4 +52,9 @@ class PaymentAttempt(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=text("now()"),
+        onupdate=text("now()"),
     )
