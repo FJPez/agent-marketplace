@@ -432,6 +432,52 @@ class _SuccessfulPayoutExecutor:
         )
 
 
+@dataclass
+class _FailingSendPayoutExecutor:
+    prepare_calls: list[dict[str, object]] = field(default_factory=list)
+    send_calls: list[dict[str, object]] = field(default_factory=list)
+
+    async def current_nonce(self) -> int:
+        return 9
+
+    async def prepare_payout(
+        self,
+        *,
+        destination_wallet: str,
+        amount_minor: int,
+        idempotency_key: str,
+        nonce: int,
+    ) -> PreparedPayout:
+        self.prepare_calls.append(
+            {
+                "destination_wallet": destination_wallet,
+                "amount_minor": amount_minor,
+                "idempotency_key": idempotency_key,
+                "nonce": nonce,
+            }
+        )
+        return PreparedPayout(
+            raw_transaction=f"0xrawtx{nonce}",
+            reference=f"0xsent{nonce}",
+            network="base-sepolia",
+            token_address="0x0000000000000000000000000000000000000001",
+        )
+
+    async def send_prepared_payout(
+        self,
+        *,
+        raw_transaction: str,
+        reference: str,
+    ) -> SentPayout:
+        self.send_calls.append(
+            {
+                "raw_transaction": raw_transaction,
+                "reference": reference,
+            }
+        )
+        raise RuntimeError("rpc unavailable")
+
+
 def _install_payout_state(app: FastAPI, *, payout_executor: object) -> None:
     state = get_app_state(app)
     state.settings.payouts_enabled = True
@@ -740,6 +786,41 @@ async def test_request_provider_payouts_claims_ready_rows_and_replays_by_idempot
             "nonce": 10,
         },
     ]
+    assert payout_executor.send_calls == [
+        {
+            "raw_transaction": "0xrawtx9",
+            "reference": "0xsent9",
+        },
+        {
+            "raw_transaction": "0xrawtx10",
+            "reference": "0xsent10",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_request_provider_payouts_rejects_same_key_when_batch_is_pending(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_ready_payout_data(db_session_factory)
+    payout_executor = _FailingSendPayoutExecutor()
+    _install_payout_state(app, payout_executor=payout_executor)
+
+    first = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "payout-request-1"},
+    )
+    second = await async_client.post(
+        "/v1/provider/payouts",
+        headers={**_auth_headers(provider_account_id), "Idempotency-Key": "payout-request-1"},
+    )
+
+    assert first.status_code == 200
+    assert {item["status"] for item in first.json()["payouts"]} == {"pending"}
+    assert second.status_code == 409
+    assert second.json() == {"detail": "provider payout batch already in progress"}
     assert payout_executor.send_calls == [
         {
             "raw_transaction": "0xrawtx9",

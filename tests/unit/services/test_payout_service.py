@@ -476,7 +476,7 @@ async def test_request_provider_payouts_replays_existing_terminal_batch() -> Non
 
 
 @pytest.mark.asyncio
-async def test_request_provider_payouts_resumes_same_key_pending_batch() -> None:
+async def test_request_provider_payouts_rejects_same_key_pending_batch() -> None:
     session = FakeSession()
     payout_repo = FakePayoutRepository()
     payout_repo.add(
@@ -506,18 +506,13 @@ async def test_request_provider_payouts_resumes_same_key_pending_batch() -> None
         payout_executor=executor,
     )
 
-    result = await service.request_provider_payouts(_actor(), idempotency_key="payout-request-1")
+    with pytest.raises(PayoutConflictError, match="provider payout batch already in progress"):
+        await service.request_provider_payouts(_actor(), idempotency_key="payout-request-1")
 
     assert executor.prepare_calls == []
-    assert executor.send_calls == [
-        {
-            "raw_transaction": "0xraw12",
-            "reference": "0xref12",
-        }
-    ]
-    assert session.commit_calls == 1
+    assert executor.send_calls == []
+    assert session.commit_calls == 0
     assert session.rollback_calls == 1
-    assert result.payouts[0].status is PayoutStatus.SENT
 
 
 @pytest.mark.asyncio

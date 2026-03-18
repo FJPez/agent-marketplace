@@ -214,12 +214,8 @@ class FakeFacilitatorClient:
     ) -> None:
         self.verify_calls = 0
         self.settle_calls = 0
-        default_verify_outcomes: list[dict[str, object]] = [
-            {"ok": True, "reference": "verify-1"}
-        ]
-        default_settle_outcomes: list[dict[str, object]] = [
-            {"ok": True, "reference": "settle-1"}
-        ]
+        default_verify_outcomes: list[dict[str, object]] = [{"ok": True, "reference": "verify-1"}]
+        default_settle_outcomes: list[dict[str, object]] = [{"ok": True, "reference": "settle-1"}]
         self.verify_outcomes = (
             verify_outcomes if verify_outcomes is not None else default_verify_outcomes
         )
