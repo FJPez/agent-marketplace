@@ -605,6 +605,35 @@ async def test_provider_payout_request_rejects_api_key_auth(
 
 
 @pytest.mark.asyncio
+async def test_provider_finance_read_routes_accept_api_key_auth(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id, _ = await _seed_provider_payout_data(db_session_factory)
+    await _seed_provider_api_key(db_session_factory, account_id=provider_account_id)
+
+    earnings_response = await async_client.get(
+        "/v1/provider/earnings",
+        headers=_api_key_headers(),
+    )
+    ledger_response = await async_client.get(
+        "/v1/provider/ledger",
+        headers=_api_key_headers(),
+    )
+    payouts_response = await async_client.get(
+        "/v1/provider/payouts",
+        headers=_api_key_headers(),
+    )
+
+    assert earnings_response.status_code == 200
+    assert earnings_response.json()["totals"][0]["currency"] == "USD"
+    assert ledger_response.status_code == 200
+    assert len(ledger_response.json()["entries"]) == 3
+    assert payouts_response.status_code == 200
+    assert len(payouts_response.json()["payouts"]) == 2
+
+
+@pytest.mark.asyncio
 async def test_get_provider_earnings_returns_currency_totals(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -799,7 +828,7 @@ async def test_request_provider_payouts_claims_ready_rows_and_replays_by_idempot
 
 
 @pytest.mark.asyncio
-async def test_request_provider_payouts_rejects_same_key_when_batch_is_pending(
+async def test_request_provider_payouts_replays_failed_batch_by_same_key(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -818,9 +847,10 @@ async def test_request_provider_payouts_rejects_same_key_when_batch_is_pending(
     )
 
     assert first.status_code == 200
-    assert {item["status"] for item in first.json()["payouts"]} == {"pending"}
-    assert second.status_code == 409
-    assert second.json() == {"detail": "provider payout batch already in progress"}
+    assert {item["status"] for item in first.json()["payouts"]} == {"failed"}
+    assert first.json()["failed_count"] == 2
+    assert second.status_code == 200
+    assert second.json() == first.json()
     assert payout_executor.send_calls == [
         {
             "raw_transaction": "0xrawtx9",

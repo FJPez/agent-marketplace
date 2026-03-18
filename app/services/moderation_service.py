@@ -37,6 +37,8 @@ class ModerationActionStore(Protocol):
 class ServiceLookupStore(Protocol):
     async def get_by_id(self, *, service_id: int) -> object | None: ...
 
+    async def get_by_id_for_update(self, *, service_id: int) -> object | None: ...
+
 
 class ModerationActionType(StrEnum):
     SUSPEND = "suspend"
@@ -194,7 +196,9 @@ class ModerationService:
         actor: ActorContext | None,
         action: ModerationActionType,
     ) -> ModerationAction:
-        await self._require_service(service_id)
+        service = await self._service_repo.get_by_id_for_update(service_id=service_id)
+        if service is None:
+            raise ModeratedServiceNotFoundError("service not found")
         state = await self.get_service_state(service_id)
         if not _is_valid_transition(state, action):
             raise InvalidModerationTransitionError(

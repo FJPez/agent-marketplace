@@ -102,6 +102,9 @@ class FakeServiceRepository:
         _ = service_id
         return object()
 
+    async def get_by_id_for_update(self, *, service_id: int) -> object | None:
+        return await self.get_by_id(service_id=service_id)
+
 
 def _service(
     *,

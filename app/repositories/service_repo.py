@@ -94,6 +94,14 @@ class ServiceRepository:
         statement = _service_with_relations().where(Service.id == service_id)
         return await self._session.scalar(statement)
 
+    async def get_by_id_for_update(self, *, service_id: int) -> Service | None:
+        locked_service_id = await self._session.scalar(
+            select(Service.id).where(Service.id == service_id).with_for_update(),
+        )
+        if locked_service_id is None:
+            return None
+        return await self.get_by_id(service_id=service_id)
+
     async def get_public(self, *, service_id_or_slug: str) -> Service | None:
         statement = _service_with_relations().where(
             Service.lifecycle == ServiceLifecycle.ACTIVE,
@@ -110,11 +118,20 @@ class ServiceRepository:
         service_id: int,
         provider_account_id: int,
     ) -> Service | None:
-        statement = _service_with_relations_for_update().where(
-            Service.id == service_id,
-            Service.provider_account_id == provider_account_id,
+        locked_service_id = await self._session.scalar(
+            select(Service.id)
+            .where(
+                Service.id == service_id,
+                Service.provider_account_id == provider_account_id,
+            )
+            .with_for_update(),
         )
-        return await self._session.scalar(statement)
+        if locked_service_id is None:
+            return None
+        return await self.get_owned(
+            service_id=service_id,
+            provider_account_id=provider_account_id,
+        )
 
     async def get_owned_by_endpoint_for_update(
         self,
@@ -122,15 +139,21 @@ class ServiceRepository:
         endpoint_id: int,
         provider_account_id: int,
     ) -> Service | None:
-        statement = (
-            _service_with_relations_for_update()
+        locked_service_id = await self._session.scalar(
+            select(Service.id)
             .join(Service.endpoints)
             .where(
                 ServiceEndpoint.id == endpoint_id,
                 Service.provider_account_id == provider_account_id,
             )
+            .with_for_update(),
         )
-        return await self._session.scalar(statement)
+        if locked_service_id is None:
+            return None
+        return await self.get_owned(
+            service_id=locked_service_id,
+            provider_account_id=provider_account_id,
+        )
 
     def update_service(
         self,

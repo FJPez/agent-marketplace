@@ -16,11 +16,16 @@ from tests.fixtures.domain import (
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
-from app.db.models import Service, ServiceHealthCheck, ServiceRevision
+from app.core.security import hash_api_key
+from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
     return auth_headers_for_account_id(account_id)
+
+
+def _api_key_headers(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 async def _create_provider_account(
@@ -143,6 +148,24 @@ async def _seed_moderation_action(
     )
 
 
+async def _seed_api_key(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+    plaintext: str = "amp_provider-test-key",
+) -> str:
+    async with db_session_factory.begin() as session:
+        session.add(
+            ApiKey(
+                account_id=account_id,
+                name="provider-key",
+                key_prefix=plaintext[:16],
+                key_hash=hash_api_key(plaintext),
+            )
+        )
+    return plaintext
+
+
 @pytest.mark.asyncio
 async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
     async_client: AsyncClient,
@@ -223,6 +246,29 @@ async def test_create_provider_service_returns_created_draft_service(
     assert response.json()["endpoints"] == []
     assert response.json()["created_at"]
     assert response.json()["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_create_provider_service_accepts_api_key_bearer(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    api_key = await _seed_api_key(db_session_factory, account_id=account_id)
+
+    response = await async_client.post(
+        "/v1/provider/services",
+        headers=_api_key_headers(api_key),
+        json={
+            "slug": "api-key-service",
+            "name": "API Key Service",
+            "summary": "Created with a provider API key.",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["provider_account_id"] == account_id
+    assert response.json()["slug"] == "api-key-service"
 
 
 @pytest.mark.asyncio
@@ -634,6 +680,37 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
 
     assert response.status_code == 422
     assert response.json() == {"detail": "upstream target is not allowed"}
+
+
+@pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_slashless_path(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": "http://127.0.0.1:9000",
+            "path": "translate",
+            "http_method": "POST",
+            "config": {"auth": {"type": "bearer"}},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "path"]
 
 
 @pytest.mark.asyncio

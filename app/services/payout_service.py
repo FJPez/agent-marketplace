@@ -384,11 +384,11 @@ class PayoutExecutionService:
                     reference=payout.transfer_reference or "",
                 )
             except (PayoutExecutionError, RuntimeError, ValueError) as exc:
-                payout.status = PayoutStatus.PENDING
+                payout.status = PayoutStatus.FAILED
                 payout.failure_code = PayoutFailureCode.EXECUTOR_ERROR
                 payout.error_message = str(exc)
                 logger.error(
-                    "provider payout remains pending",
+                    "provider payout failed",
                     extra=build_event_context(
                         "payout.failed",
                         **{

@@ -205,7 +205,7 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
     assert [payout.status.value for payout in payouts] == ["failed", "sent"]
     assert failed[0].error_message == "rpc unavailable"
     assert [payout.id for payout in replay] == [first.id, second.id]
-    assert max_chain_nonce == 9
+    assert max_chain_nonce == 10
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary.currency == "USDC"

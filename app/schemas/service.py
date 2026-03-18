@@ -1,4 +1,5 @@
-from typing import Annotated, Any, Self
+from typing import Annotated, Self
+from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -11,6 +12,7 @@ from pydantic import (
 )
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.json_types import JsonObject, to_json_object
 from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -20,6 +22,17 @@ from app.schemas.common import Id, Timestamp
 def _reject_numeric_only_slug(value: str) -> str:
     if value.isdigit():
         msg = "value must include at least one lowercase letter"
+        raise ValueError(msg)
+    return value
+
+
+def _validate_upstream_path(value: str) -> str:
+    if not value.startswith("/"):
+        msg = "path must start with /"
+        raise ValueError(msg)
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        msg = "path must be path-only and must not include scheme, host, query, or fragment"
         raise ValueError(msg)
     return value
 
@@ -50,7 +63,7 @@ Tag = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
 ]
-SchemaObject = dict[str, Any]
+SchemaObject = JsonObject
 HttpMethod = Annotated[
     str,
     StringConstraints(
@@ -206,6 +219,7 @@ class EndpointUpstreamRequest(BaseModel):
     path: Annotated[
         str,
         StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
+        AfterValidator(_validate_upstream_path),
     ]
     http_method: HttpMethod
     config: SchemaObject = Field(default_factory=dict)
@@ -292,8 +306,8 @@ class EndpointResponse(BaseModel):
             summary=endpoint.summary,
             description=endpoint.description,
             access_mode=endpoint.access_mode,
-            request_schema=endpoint.request_schema,
-            response_schema=endpoint.response_schema,
+            request_schema=to_json_object(endpoint.request_schema),
+            response_schema=to_json_object(endpoint.response_schema),
             timeout_seconds=endpoint.timeout_seconds,
             is_enabled=endpoint.is_enabled,
             pricing=EndpointPricingResponse.from_endpoint(endpoint),
