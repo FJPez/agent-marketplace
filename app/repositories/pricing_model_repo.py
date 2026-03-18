@@ -1,10 +1,21 @@
 from datetime import UTC, datetime
 
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import NO_VALUE
 
 from app.core.enums import PricingModelType
 from app.db.models.pricing_model import PricingModel
 from app.db.models.service_endpoint import ServiceEndpoint
+
+
+def _get_loaded_pricing(endpoint: ServiceEndpoint) -> PricingModel | None:
+    pricing = inspect(endpoint).attrs.pricing.loaded_value
+    if pricing is NO_VALUE:
+        return None
+    if isinstance(pricing, PricingModel):
+        return pricing
+    return None
 
 
 class PricingModelRepository:
@@ -12,7 +23,7 @@ class PricingModelRepository:
         self._session = session
 
     def upsert_free(self, endpoint: ServiceEndpoint) -> PricingModel:
-        pricing = endpoint.pricing
+        pricing = _get_loaded_pricing(endpoint)
         if pricing is None:
             pricing = PricingModel(
                 endpoint_id=endpoint.id,
@@ -35,7 +46,7 @@ class PricingModelRepository:
         amount_minor: int,
         currency: str,
     ) -> PricingModel:
-        pricing = endpoint.pricing
+        pricing = _get_loaded_pricing(endpoint)
         if pricing is None:
             pricing = PricingModel(
                 endpoint_id=endpoint.id,
@@ -54,7 +65,7 @@ class PricingModelRepository:
         return pricing
 
     async def delete_for_endpoint(self, endpoint: ServiceEndpoint) -> None:
-        pricing = endpoint.pricing
+        pricing = _get_loaded_pricing(endpoint)
         if pricing is None:
             return
         endpoint.pricing = None
