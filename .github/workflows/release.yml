@@ -16,7 +16,7 @@ on:
           - production
       smoke_base_url:
         description: Public base URL to smoke test after the deploy step has completed.
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
     environment: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
     env:
       TARGET_ENVIRONMENT: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
-      SMOKE_BASE_URL: ${{ github.event_name == 'push' && vars.SMOKE_BASE_URL || inputs.smoke_base_url }}
+      SMOKE_BASE_URL: ${{ inputs.smoke_base_url || vars.SMOKE_BASE_URL }}
       RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +43,7 @@ jobs:
         run: |
           if [ -z "$SMOKE_BASE_URL" ]; then
             echo "SMOKE_BASE_URL must be set for release jobs." >&2
+            echo "Set the GitHub Actions environment variable SMOKE_BASE_URL on the $TARGET_ENVIRONMENT environment, or provide the workflow_dispatch smoke_base_url input." >&2
             exit 1
           fi
       - name: Install Railway CLI
@@ -69,7 +70,7 @@ jobs:
     environment: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
     env:
       TARGET_ENVIRONMENT: ${{ github.event_name == 'push' && 'production' || inputs.target_environment }}
-      SMOKE_BASE_URL: ${{ github.event_name == 'push' && vars.SMOKE_BASE_URL || inputs.smoke_base_url }}
+      SMOKE_BASE_URL: ${{ inputs.smoke_base_url || vars.SMOKE_BASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
