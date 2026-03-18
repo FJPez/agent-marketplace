@@ -180,16 +180,26 @@ Add these secrets to each GitHub environment:
 
 - `RAILWAY_TOKEN`
 
+Add this variable to each GitHub environment:
+
+- `SMOKE_BASE_URL=https://<public-api-domain>`
+
 `RAILWAY_TOKEN` should be a Railway token that is allowed to deploy the target
 environment. Use a Railway project token scoped to the matching Railway
 environment so the CLI already knows which project and environment it is allowed
 to deploy to.
 
+`SMOKE_BASE_URL` must be the public HTTPS base URL for that environment's `api`
+service. On `push` to `main`, the release workflow uses the `production`
+environment's `SMOKE_BASE_URL` automatically. On manual runs, the
+`smoke_base_url` workflow input can override the environment variable when you
+want to test a different public domain.
+
 ## 8. Run The Release Workflow
 
 From GitHub Actions, run the `Release` workflow manually.
 
-Use these inputs:
+Use these inputs when you want to override the configured environment variable:
 
 - `target_environment=staging` and `smoke_base_url=https://<staging-domain>` for
   the staging deploy
