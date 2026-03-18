@@ -2,19 +2,21 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.domain import (
+    create_admin_account_record,
+    create_consumer_account_record,
+    create_endpoint_record,
+    create_health_check_record,
+    create_moderation_action_record,
+    create_pricing_record,
+    create_provider_account_record,
+    create_service_record,
+    create_upstream_record,
+)
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
-from app.db.models import (
-    Account,
-    ModerationAction,
-    PricingModel,
-    ProviderUpstream,
-    Service,
-    ServiceEndpoint,
-    ServiceHealthCheck,
-    ServiceRevision,
-)
+from app.db.models import Service, ServiceRevision
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
@@ -26,11 +28,10 @@ async def _create_provider_account(
     *,
     display_name: str = "Provider Account",
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name=display_name)
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_provider_account_record(
+        db_session_factory,
+        display_name=display_name,
+    )
 
 
 async def _create_account(
@@ -38,11 +39,12 @@ async def _create_account(
     *,
     is_admin: bool = False,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(is_admin=is_admin)
-        session.add(account)
-        await session.flush()
-        return account.id
+    if is_admin:
+        return await create_admin_account_record(db_session_factory)
+    return await create_consumer_account_record(
+        db_session_factory,
+        display_name="Authenticated User",
+    )
 
 
 async def _seed_service(
@@ -55,18 +57,15 @@ async def _seed_service(
     description: str | None = "Seeded description",
     lifecycle: ServiceLifecycle = ServiceLifecycle.DRAFT,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name=name,
-            summary=summary,
-            description=description,
-            lifecycle=lifecycle,
-        )
-        session.add(service)
-        await session.flush()
-        return service.id
+    return await create_service_record(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug=slug,
+        name=name,
+        summary=summary,
+        description=description,
+        lifecycle=lifecycle,
+    )
 
 
 async def _seed_endpoint(
@@ -77,22 +76,15 @@ async def _seed_endpoint(
     name: str = "Translate",
     access_mode: AccessMode = AccessMode.FREE,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key=key,
-            name=name,
-            summary="Endpoint summary",
-            description="Endpoint description",
-            access_mode=access_mode,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-        return endpoint.id
+    return await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key=key,
+        name=name,
+        summary="Endpoint summary",
+        description="Endpoint description",
+        access_mode=access_mode,
+    )
 
 
 async def _seed_upstream(
@@ -100,22 +92,10 @@ async def _seed_upstream(
     *,
     endpoint_id: int,
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint_id,
-                base_url="https://provider.internal",
-                path="/invoke",
-                http_method="POST",
-                config={
-                    "auth": {
-                        "type": "hmac_sha256",
-                        "key_id": "gateway-key",
-                        "secret": "super-secret",
-                    },
-                },
-            ),
-        )
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+    )
 
 
 async def _seed_pricing(
@@ -126,15 +106,13 @@ async def _seed_pricing(
     amount_minor: int | None = 1500,
     currency: str | None = "USD",
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            PricingModel(
-                endpoint_id=endpoint_id,
-                pricing_type=pricing_type,
-                amount_minor=amount_minor,
-                currency=currency,
-            ),
-        )
+    await create_pricing_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        pricing_type=pricing_type,
+        amount_minor=amount_minor,
+        currency=currency,
+    )
 
 
 async def _seed_health_check(
@@ -144,16 +122,12 @@ async def _seed_health_check(
     status: ServiceHealthStatus,
     summary: str = "unhealthy",
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ServiceHealthCheck(
-                service_id=service_id,
-                check_name="publish-readiness",
-                status=status,
-                summary=summary,
-                details={"source": "test"},
-            ),
-        )
+    await create_health_check_record(
+        db_session_factory,
+        service_id=service_id,
+        status=status,
+        summary=summary,
+    )
 
 
 async def _seed_moderation_action(
@@ -162,15 +136,11 @@ async def _seed_moderation_action(
     service_id: int,
     action: str,
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ModerationAction(
-                service_id=service_id,
-                actor_account_id=None,
-                action=action,
-                reason="policy",
-            ),
-        )
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=service_id,
+        action=action,
+    )
 
 
 @pytest.mark.asyncio

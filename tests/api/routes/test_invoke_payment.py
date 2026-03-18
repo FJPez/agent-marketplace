@@ -10,6 +10,15 @@ import pytest
 from httpx import AsyncClient, Response
 from pydantic import SecretStr
 from sqlalchemy import func, select
+from tests.fixtures.domain import (
+    create_consumer_account_record,
+    create_endpoint_record,
+    create_pricing_record,
+    create_provider_account_record,
+    create_quote_record,
+    create_service_record,
+    create_upstream_record,
+)
 from tests.helpers.auth import auth_headers_for_account_id
 from x402 import PaymentPayload
 from x402.http import encode_payment_signature_header
@@ -27,19 +36,7 @@ from app.core.logging import (
     SERVICE_ID_FIELD,
 )
 from app.core.request_hash import hash_request_body
-from app.db.models import (
-    Account,
-    Invocation,
-    LedgerEntry,
-    PaymentAttempt,
-    Payout,
-    PricingModel,
-    ProviderUpstream,
-    Quote,
-    Service,
-    ServiceEndpoint,
-    ServiceRevision,
-)
+from app.db.models import Invocation, LedgerEntry, PaymentAttempt, Payout
 from app.integrations.payouts import PreparedPayout, SentPayout
 from app.integrations.x402.facilitator_client import FacilitatorUnavailableError
 from app.integrations.x402.resource_server import X402ResourceServerAdapter
@@ -66,21 +63,20 @@ async def _create_provider_account(
     *,
     wallet_address: str = "0x00000000000000000000000000000000000000aa",
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider", wallet_address=wallet_address)
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_provider_account_record(
+        db_session_factory,
+        display_name="Provider",
+        wallet_address=wallet_address,
+    )
 
 
 async def _create_consumer_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Consumer")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_consumer_account_record(
+        db_session_factory,
+        display_name="Consumer",
+    )
 
 
 async def _seed_service(
@@ -89,28 +85,16 @@ async def _seed_service(
     provider_account_id: int,
     slug: str = "paid-invoke-service",
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name="Paid Invoke Service",
-            summary="Invoke summary",
-            description=None,
-            lifecycle=ServiceLifecycle.ACTIVE,
-        )
-        session.add(service)
-        await session.flush()
-        revision = ServiceRevision(
-            service_id=service.id,
-            revision_number=1,
-            change_token="c" * 64,
-            snapshot={"slug": slug},
-        )
-        session.add(revision)
-        await session.flush()
-        service.current_revision_id = revision.id
-        service.current_change_token = revision.change_token
-        return service.id
+    return await create_service_record(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug=slug,
+        name="Paid Invoke Service",
+        summary="Invoke summary",
+        description=None,
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
 
 
 async def _seed_paid_endpoint(
@@ -119,45 +103,27 @@ async def _seed_paid_endpoint(
     service_id: int,
     currency: str = "USD",
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key="translate",
-            name="Translate",
-            summary="Translate text",
-            description=None,
-            access_mode=AccessMode.PAID,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint.id,
-                base_url="https://provider.internal",
-                path="/invoke",
-                http_method="POST",
-                config={
-                    "auth": {
-                        "type": "hmac_sha256",
-                        "key_id": "gateway-key",
-                        "secret": "super-secret",
-                    },
-                },
-            )
-        )
-        session.add(
-            PricingModel(
-                endpoint_id=endpoint.id,
-                pricing_type=PricingModelType.FIXED_PER_CALL,
-                amount_minor=500,
-                currency=currency,
-            )
-        )
-        return endpoint.id
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+        name="Translate",
+        summary="Translate text",
+        description=None,
+        access_mode=AccessMode.PAID,
+    )
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+    )
+    await create_pricing_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=500,
+        currency=currency,
+    )
+    return endpoint_id
 
 
 async def _seed_quote(
@@ -169,22 +135,16 @@ async def _seed_quote(
     amount_minor: int = 500,
     currency: str = "USD",
 ) -> int:
-    async with db_session_factory.begin() as session:
-        quote = Quote(
-            service_id=service_id,
-            endpoint_id=endpoint_id,
-            endpoint_key="translate",
-            request_hash=hash_request_body(payload),
-            pricing_type=PricingModelType.FIXED_PER_CALL,
-            amount_minor=amount_minor,
-            currency=currency,
-            service_revision_id=1,
-            service_change_token="c" * 64,
-            expires_at=datetime.now(UTC) + timedelta(minutes=5),
-        )
-        session.add(quote)
-        await session.flush()
-        return quote.id
+    return await create_quote_record(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload=payload,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=amount_minor,
+        currency=currency,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
 
 
 async def _count_rows(

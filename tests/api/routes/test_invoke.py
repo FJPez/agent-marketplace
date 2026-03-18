@@ -6,22 +6,22 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import AsyncClient, Response, TimeoutException
+from tests.fixtures.domain import (
+    create_consumer_account_record,
+    create_endpoint_record,
+    create_moderation_action_record,
+    create_pricing_record,
+    create_provider_account_record,
+    create_quote_record,
+    create_service_record,
+    create_upstream_record,
+)
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, InvocationStatus, PricingModelType, ServiceLifecycle
 from app.core.lifespan import get_app_state
 from app.core.request_hash import hash_request_body
-from app.db.models import (
-    Account,
-    Invocation,
-    ModerationAction,
-    PricingModel,
-    ProviderUpstream,
-    Quote,
-    Service,
-    ServiceEndpoint,
-    ServiceRevision,
-)
+from app.db.models import Invocation, Quote
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -35,21 +35,19 @@ def _auth_headers(account_id: int) -> dict[str, str]:
 async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_provider_account_record(
+        db_session_factory,
+        display_name="Provider",
+    )
 
 
 async def _create_consumer_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Consumer")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_consumer_account_record(
+        db_session_factory,
+        display_name="Consumer",
+    )
 
 
 async def _seed_service(
@@ -60,29 +58,16 @@ async def _seed_service(
     lifecycle: ServiceLifecycle = ServiceLifecycle.ACTIVE,
     with_revision: bool = True,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name="Invoke Service",
-            summary="Invoke summary",
-            description=None,
-            lifecycle=lifecycle,
-        )
-        session.add(service)
-        await session.flush()
-        if with_revision:
-            revision = ServiceRevision(
-                service_id=service.id,
-                revision_number=1,
-                change_token="c" * 64,
-                snapshot={"slug": slug},
-            )
-            session.add(revision)
-            await session.flush()
-            service.current_revision_id = revision.id
-            service.current_change_token = revision.change_token
-        return service.id
+    return await create_service_record(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug=slug,
+        name="Invoke Service",
+        summary="Invoke summary",
+        description=None,
+        lifecycle=lifecycle,
+        with_revision=with_revision,
+    )
 
 
 async def _seed_endpoint(
@@ -94,49 +79,41 @@ async def _seed_endpoint(
     with_hmac_auth: bool = True,
     request_schema: dict[str, object] | None = None,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key="translate",
-            name="Translate",
-            summary="Translate text",
-            description=None,
-            access_mode=access_mode,
-            request_schema=request_schema or {"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=is_enabled,
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+        name="Translate",
+        summary="Translate text",
+        description=None,
+        access_mode=access_mode,
+        request_schema=request_schema or {"type": "object"},
+        response_schema={"type": "object"},
+        is_enabled=is_enabled,
+    )
+    upstream_config: dict[str, Any] = {}
+    if with_hmac_auth:
+        upstream_config = {
+            "auth": {
+                "type": "hmac_sha256",
+                "key_id": "gateway-key",
+                "secret": "super-secret",
+            },
+        }
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        config=upstream_config,
+    )
+    if access_mode is AccessMode.PAID:
+        await create_pricing_record(
+            db_session_factory,
+            endpoint_id=endpoint_id,
+            pricing_type=PricingModelType.FIXED_PER_CALL,
+            amount_minor=500,
+            currency="USD",
         )
-        session.add(endpoint)
-        await session.flush()
-        upstream_config: dict[str, Any] = {}
-        if with_hmac_auth:
-            upstream_config = {
-                "auth": {
-                    "type": "hmac_sha256",
-                    "key_id": "gateway-key",
-                    "secret": "super-secret",
-                },
-            }
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint.id,
-                base_url="https://provider.internal",
-                path="/invoke",
-                http_method="POST",
-                config=upstream_config,
-            ),
-        )
-        if access_mode is AccessMode.PAID:
-            session.add(
-                PricingModel(
-                    endpoint_id=endpoint.id,
-                    pricing_type=PricingModelType.FIXED_PER_CALL,
-                    amount_minor=500,
-                    currency="USD",
-                ),
-            )
-        return endpoint.id
+    return endpoint_id
 
 
 async def _seed_quote(
@@ -146,22 +123,16 @@ async def _seed_quote(
     endpoint_id: int,
     payload: dict[str, object] | None = None,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        quote = Quote(
-            service_id=service_id,
-            endpoint_id=endpoint_id,
-            endpoint_key="translate",
-            request_hash=hash_request_body(payload or {"text": "hello"}),
-            pricing_type=PricingModelType.FREE,
-            amount_minor=None,
-            currency=None,
-            service_revision_id=1,
-            service_change_token="c" * 64,
-            expires_at=datetime(2030, 1, 1, tzinfo=UTC),
-        )
-        session.add(quote)
-        await session.flush()
-        return quote.id
+    return await create_quote_record(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload=payload,
+        pricing_type=PricingModelType.FREE,
+        amount_minor=None,
+        currency=None,
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+    )
 
 
 async def _seed_existing_invocation(
@@ -213,15 +184,11 @@ async def _seed_moderation_action(
     service_id: int,
     action: str,
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ModerationAction(
-                service_id=service_id,
-                actor_account_id=None,
-                action=action,
-                reason="policy",
-            ),
-        )
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=service_id,
+        action=action,
+    )
 
 
 async def _expire_quote(

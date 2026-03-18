@@ -7,6 +7,13 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.domain import (
+    create_consumer_account_record,
+    create_endpoint_record,
+    create_provider_account_record,
+    create_quote_record,
+    create_service_record,
+)
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import (
@@ -27,9 +34,7 @@ from app.db.models import (
     PaymentAttempt,
     Payout,
     Quote,
-    Service,
     ServiceEndpoint,
-    ServiceRevision,
 )
 from app.integrations.payouts import PreparedPayout, SentPayout
 from app.repositories.ledger_entry_repo import LedgerEntryRepository
@@ -47,72 +52,57 @@ def _api_key_headers() -> dict[str, str]:
 async def _seed_provider_finance_data(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> tuple[int, int]:
+    provider_account_id = await create_provider_account_record(
+        db_session_factory,
+        display_name="Provider",
+        wallet_address="0x00000000000000000000000000000000000000aa",
+    )
+    consumer_account_id = await create_consumer_account_record(
+        db_session_factory,
+        display_name="Consumer",
+    )
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="finance-service",
+        name="Finance Service",
+        summary="Summary",
+        description=None,
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+        change_token="e" * 64,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+        name="Translate",
+        summary=None,
+        description=None,
+        access_mode=AccessMode.PAID,
+    )
+    quote_id = await create_quote_record(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        request_hash="c" * 64,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=500,
+        currency="USD",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+
     async with db_session_factory.begin() as session:
-        provider_account = Account(
-            display_name="Provider",
-            wallet_address="0x00000000000000000000000000000000000000aa",
-        )
-        consumer_account = Account(display_name="Consumer")
-        session.add_all([provider_account, consumer_account])
-        await session.flush()
-
-        service = Service(
-            provider_account_id=provider_account.id,
-            slug="finance-service",
-            name="Finance Service",
-            summary="Summary",
-            description=None,
-            lifecycle=ServiceLifecycle.ACTIVE,
-        )
-        session.add(service)
-        await session.flush()
-
-        endpoint = ServiceEndpoint(
-            service_id=service.id,
-            key="translate",
-            name="Translate",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.PAID,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-
-        revision = ServiceRevision(
-            service_id=service.id,
-            revision_number=1,
-            change_token="e" * 64,
-            snapshot={"slug": service.slug},
-        )
-        session.add(revision)
-        await session.flush()
-
-        quote = Quote(
-            service_id=service.id,
-            endpoint_id=endpoint.id,
-            endpoint_key=endpoint.key,
-            request_hash="c" * 64,
-            pricing_type=PricingModelType.FIXED_PER_CALL,
-            amount_minor=500,
-            currency="USD",
-            service_revision_id=revision.id,
-            service_change_token=revision.change_token,
-            expires_at=datetime.now(UTC) + timedelta(minutes=5),
-        )
-        session.add(quote)
-        await session.flush()
+        provider_account = await session.get(Account, provider_account_id)
+        assert provider_account is not None
 
         invocation = Invocation(
-            consumer_account_id=consumer_account.id,
-            service_id=service.id,
-            endpoint_id=endpoint.id,
-            endpoint_key=endpoint.key,
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            endpoint_key="translate",
             access_mode=AccessMode.PAID,
-            quote_id=quote.id,
+            quote_id=quote_id,
             idempotency_key="finance-key",
             request_hash="c" * 64,
             status=InvocationStatus.SUCCEEDED,
@@ -125,8 +115,8 @@ async def _seed_provider_finance_data(
         await session.flush()
 
         attempt = PaymentAttempt(
-            consumer_account_id=consumer_account.id,
-            quote_id=quote.id,
+            consumer_account_id=consumer_account_id,
+            quote_id=quote_id,
             invocation_id=invocation.id,
             idempotency_key="finance-key",
             payment_identifier="payment-finance",
@@ -141,8 +131,8 @@ async def _seed_provider_finance_data(
 
         repo = LedgerEntryRepository(session)
         repo.add(
-            provider_account_id=provider_account.id,
-            service_id=service.id,
+            provider_account_id=provider_account_id,
+            service_id=service_id,
             invocation_id=invocation.id,
             payment_attempt_id=attempt.id,
             entry_type=LedgerEntryType.CHARGE,
@@ -150,8 +140,8 @@ async def _seed_provider_finance_data(
             currency="USD",
         )
         repo.add(
-            provider_account_id=provider_account.id,
-            service_id=service.id,
+            provider_account_id=provider_account_id,
+            service_id=service_id,
             invocation_id=invocation.id,
             payment_attempt_id=attempt.id,
             entry_type=LedgerEntryType.PLATFORM_FEE,
@@ -159,15 +149,15 @@ async def _seed_provider_finance_data(
             currency="USD",
         )
         repo.add(
-            provider_account_id=provider_account.id,
-            service_id=service.id,
+            provider_account_id=provider_account_id,
+            service_id=service_id,
             invocation_id=invocation.id,
             payment_attempt_id=attempt.id,
             entry_type=LedgerEntryType.PROVIDER_EARNING,
             amount_minor=450,
             currency="USD",
         )
-        return provider_account.id, service.id
+        return provider_account_id, service_id
 
 
 async def _seed_provider_api_key(
