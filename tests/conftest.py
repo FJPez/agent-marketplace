@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ["APP_JWT_SECRET_KEY"] = "test-secret-key-with-32-bytes-123"
 os.environ["APP_SIWE_DOMAIN"] = "testserver"
-os.environ.pop("APP_ENV_FILE", None)
+os.environ["APP_ENV_FILE"] = ".env.test"
 
 import coredis
 import pytest

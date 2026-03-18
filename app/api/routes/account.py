@@ -15,7 +15,20 @@ from app.services.account_service import (
 router = APIRouter(prefix="/account", tags=["account"])
 
 
-@router.get("/me", response_model=AccountResponse)
+@router.get(
+    "/me",
+    response_model=AccountResponse,
+    summary="Get the authenticated account",
+    description=(
+        "Returns the marketplace account tied to the current JWT. This route does not "
+        "accept API-key bearer tokens."
+    ),
+    responses={
+        200: {"description": "Authenticated account returned successfully."},
+        404: {"description": "The authenticated account no longer exists."},
+        403: {"description": "A non-JWT bearer token was supplied."},
+    },
+)
 async def get_account_me(
     actor: CurrentJwtActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -30,7 +43,21 @@ async def get_account_me(
     return AccountResponse.model_validate(account)
 
 
-@router.patch("/me", response_model=AccountResponse)
+@router.patch(
+    "/me",
+    response_model=AccountResponse,
+    summary="Update the authenticated account",
+    description=(
+        "Updates account self-service fields for the current JWT-backed account. "
+        "At least one mutable field must be supplied."
+    ),
+    responses={
+        200: {"description": "Account updated successfully."},
+        403: {"description": "A non-JWT bearer token was supplied."},
+        404: {"description": "The authenticated account no longer exists."},
+        422: {"description": "The request did not contain a valid account update."},
+    },
+)
 async def patch_account_me(
     request: AccountUpdateRequest,
     actor: CurrentJwtActor,

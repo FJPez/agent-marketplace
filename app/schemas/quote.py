@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.core.enums import PricingModelType
 from app.db.models import Quote
@@ -9,6 +9,19 @@ from app.schemas.service import CurrencyCode, SchemaObject, Slug
 
 
 class QuoteCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "endpoint_key": "paid-summary",
+                    "payload": {
+                        "message": "Summarize this request after the payment flow completes."
+                    },
+                }
+            ]
+        }
+    )
+
     endpoint_key: Slug
     payload: SchemaObject
 

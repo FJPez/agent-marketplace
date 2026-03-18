@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -74,10 +74,68 @@ def _get_x402_resource_server(request: Request) -> SupportsX402ResourceServer:
     return x402_resource_server
 
 
-@router.post("/invoke/{service_id_or_slug}", response_model=InvocationResponse)
+@router.post(
+    "/invoke/{service_id_or_slug}",
+    response_model=InvocationResponse,
+    summary="Invoke a service endpoint",
+    description=(
+        "Invokes a service endpoint on behalf of the authenticated actor. Every request "
+        "must include an `Idempotency-Key` header. Free invokes execute immediately; paid "
+        "invokes may first return `402 Payment Required` with `PAYMENT-REQUIRED` metadata "
+        "and must be retried with payment headers."
+    ),
+    responses={
+        200: {"description": "Invocation completed successfully."},
+        402: {
+            "description": "Payment is required before the invoke can proceed.",
+            "headers": {
+                "PAYMENT-REQUIRED": {
+                    "description": (
+                        "Serialized x402 payment requirement for the requested paid invoke."
+                    )
+                },
+                "X-Request-ID": {
+                    "description": "Request correlation identifier echoed by the API."
+                },
+            },
+        },
+        404: {"description": "The requested service or endpoint could not be resolved."},
+        409: {
+            "description": (
+                "The invoke could not proceed because of a quote, state, or idempotency conflict."
+            )
+        },
+        502: {"description": "The provider upstream returned an invalid response."},
+        504: {
+            "description": "The provider upstream did not respond before the configured timeout."
+        },
+    },
+)
 async def invoke_service(
     service_id_or_slug: str,
-    request: InvokeRequest,
+    request: Annotated[
+        InvokeRequest,
+        Body(
+            openapi_examples={
+                "free-invoke": {
+                    "summary": "Invoke a free endpoint",
+                    "value": {
+                        "endpoint_key": "free-ping",
+                        "payload": {"message": "hello from the local demo"},
+                        "quote_id": None,
+                    },
+                },
+                "paid-invoke": {
+                    "summary": "Invoke a paid endpoint after creating a quote",
+                    "value": {
+                        "endpoint_key": "paid-summary",
+                        "payload": {"message": "Please summarize this paid request."},
+                        "quote_id": 1,
+                    },
+                },
+            }
+        ),
+    ],
     actor: CurrentActor,
     fastapi_request: Request,
     response: Response,
@@ -157,7 +215,16 @@ async def invoke_service(
     return InvocationResponse.from_model(invocation)
 
 
-@router.get("/invocations/{invocation_id}", response_model=InvocationResponse)
+@router.get(
+    "/invocations/{invocation_id}",
+    response_model=InvocationResponse,
+    summary="Get invocation detail",
+    description="Returns a single invocation record owned by the authenticated actor.",
+    responses={
+        200: {"description": "Invocation returned successfully."},
+        404: {"description": "The requested invocation does not exist."},
+    },
+)
 async def get_invocation(
     invocation_id: int,
     actor: CurrentActor,
@@ -172,7 +239,13 @@ async def get_invocation(
     return InvocationResponse.from_model(invocation)
 
 
-@router.get("/invocations", response_model=list[InvocationListItem])
+@router.get(
+    "/invocations",
+    response_model=list[InvocationListItem],
+    summary="List invocations",
+    description="Lists invocation records owned by the authenticated actor.",
+    responses={200: {"description": "Invocation list returned successfully."}},
+)
 async def list_invocations(
     actor: CurrentActor,
     fastapi_request: Request,

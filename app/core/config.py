@@ -119,14 +119,13 @@ class Settings(BaseSettings):
         _ = dotenv_settings
         env_file = os.environ.get("APP_ENV_FILE")
         sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings]
-        if env_file:
-            sources.append(
-                DotEnvSettingsSource(
-                    settings_cls,
-                    env_file=env_file,
-                    env_file_encoding="utf-8",
-                )
+        sources.append(
+            DotEnvSettingsSource(
+                settings_cls,
+                env_file=env_file or ".env",
+                env_file_encoding="utf-8",
             )
+        )
         sources.append(file_secret_settings)
         return tuple(sources)
 

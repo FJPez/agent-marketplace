@@ -72,6 +72,19 @@ CurrencyCode = Annotated[
 
 
 class ServiceCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "slug": "demo-agent-service",
+                    "name": "Demo Agent Service",
+                    "summary": "A provider-owned service for local marketplace demos.",
+                    "description": "Exposes free and paid endpoints for examiner walkthroughs.",
+                }
+            ]
+        }
+    )
+
     slug: Slug
     name: ServiceName
     summary: Summary
@@ -79,16 +92,59 @@ class ServiceCreateRequest(BaseModel):
 
 
 class ServiceUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "name": "Demo Agent Service",
+                    "summary": "Updated service summary for the oral demonstration.",
+                    "description": "Optional long-form provider description.",
+                }
+            ]
+        }
+    )
+
     name: ServiceName | None = None
     summary: Summary | None = None
     description: Description | None = None
 
 
 class ServiceTagsUpdateRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]})
+
     tags: list[Tag]
 
 
 class EndpointCreateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "key": "free-ping",
+                    "name": "Free Ping",
+                    "summary": "Simple free invoke endpoint.",
+                    "description": "Echo-style endpoint used in the local mock demo.",
+                    "access_mode": "free",
+                    "request_schema": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                        "additionalProperties": False,
+                    },
+                    "response_schema": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                        "additionalProperties": False,
+                    },
+                    "timeout_seconds": 30,
+                    "is_enabled": True,
+                    "pricing": {"pricing_type": "free"},
+                }
+            ]
+        }
+    )
+
     key: Slug
     name: ServiceName
     summary: Summary | None = None
@@ -102,6 +158,19 @@ class EndpointCreateRequest(BaseModel):
 
 
 class EndpointUpdateRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "summary": "Updated free endpoint summary.",
+                    "timeout_seconds": 45,
+                    "is_enabled": True,
+                    "pricing": {"pricing_type": "free"},
+                }
+            ]
+        }
+    )
+
     name: ServiceName | None = None
     summary: Summary | None = None
     description: Description | None = None
@@ -114,6 +183,25 @@ class EndpointUpdateRequest(BaseModel):
 
 
 class EndpointUpstreamRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "base_url": "http://127.0.0.1:9000",
+                    "path": "/free-ping",
+                    "http_method": "POST",
+                    "config": {
+                        "auth": {
+                            "type": "hmac_sha256",
+                            "key_id": "demo-key",
+                            "secret": "demo-secret",
+                        }
+                    },
+                }
+            ]
+        }
+    )
+
     base_url: HttpUrl
     path: Annotated[
         str,
@@ -124,6 +212,15 @@ class EndpointUpstreamRequest(BaseModel):
 
 
 class EndpointPricingRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"pricing_type": "free"},
+                {"pricing_type": "fixed_per_call", "amount_minor": 250, "currency": "USD"},
+            ]
+        }
+    )
+
     pricing_type: PricingModelType
     amount_minor: Annotated[int, Field(gt=0)] | None = None
     currency: CurrencyCode | None = None
