@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import pytest
 
 from app.core.config import get_settings
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Generator, Mapping
+    from collections.abc import Generator, Mapping
     from pathlib import Path
 
 TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
+
+
+class SettingsEnvFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        env: Mapping[str, str | None] | None = ...,
+        include_defaults: bool = ...,
+        cwd: Path | None = ...,
+    ) -> Path: ...
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -44,7 +54,7 @@ def base_test_env() -> Generator[None, None, None]:
 def settings_env_factory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> Callable[..., Path]:
+) -> SettingsEnvFactory:
     def configure(
         *,
         env: Mapping[str, str | None] | None = None,

@@ -1,9 +1,46 @@
-from pathlib import Path
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import SecretStr, ValidationError
+from tests.fixtures.settings import TEST_JWT_SECRET_KEY
 
 from app.core.config import AppEnv, Settings, get_settings
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from tests.fixtures.settings import SettingsEnvFactory
+
+
+def _write_dotenv(path: Path, *, jwt_secret: str, siwe_domain: str) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                f"APP_JWT_SECRET_KEY={jwt_secret}",
+                f"APP_SIWE_DOMAIN={siwe_domain}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _valid_deployment_env(
+    overrides: dict[str, str | None] | None = None,
+) -> dict[str, str | None]:
+    env = {
+        "APP_ENV": "prod",
+        "APP_JWT_SECRET_KEY": TEST_JWT_SECRET_KEY,
+        "APP_DATABASE_URL": "postgresql+asyncpg://db.example.com/app",
+        "APP_SIWE_DOMAIN": "marketplace.example.com",
+        "APP_REDIS_URL": "redis://cache.internal:6379/0",
+        "APP_PAYOUTS_ENABLED": "true",
+        "APP_PAYOUTS_RPC_URL": "https://rpc.example.com",
+        "APP_TREASURY_PRIVATE_KEY": "0x" + "cd" * 32,
+    }
+    env.update(overrides or {})
+    return env
 
 
 @pytest.mark.parametrize(
@@ -22,12 +59,9 @@ from app.core.config import AppEnv, Settings, get_settings
 def test_settings_normalize_plain_postgres_database_urls(
     database_url: str,
     expected_database_url: str,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", database_url)
+    settings_env_factory(env={"APP_DATABASE_URL": database_url})
 
     settings = Settings()
 
@@ -35,19 +69,21 @@ def test_settings_normalize_plain_postgres_database_urls(
 
 
 def test_settings_use_default_values(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.delenv("APP_X402_CDP_API_KEY_ID", raising=False)
-    monkeypatch.delenv("APP_X402_CDP_API_KEY_SECRET", raising=False)
+    settings_env_factory(
+        env={
+            "APP_X402_CDP_API_KEY_ID": None,
+            "APP_X402_CDP_API_KEY_SECRET": None,
+        }
+    )
+
     settings = Settings()
 
     assert settings.env is AppEnv.DEV
     assert settings.title == "Agent Marketplace Backend"
     assert settings.debug is False
-    assert settings.jwt_secret_key == "test-secret-key-with-32-bytes-123"
+    assert settings.jwt_secret_key == TEST_JWT_SECRET_KEY
     assert settings.jwt_access_token_expiry == 900
     assert settings.jwt_refresh_token_expiry == 604800
     assert settings.siwe_domain == "testserver"
@@ -59,22 +95,26 @@ def test_settings_use_default_values(
 
 
 def test_settings_require_jwt_secret_key(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
+    settings_env_factory(
+        include_defaults=False,
+        env={
+            "APP_ENV_FILE": None,
+            "APP_JWT_SECRET_KEY": None,
+            "APP_SIWE_DOMAIN": None,
+        },
+    )
 
     with pytest.raises(ValidationError, match="jwt_secret_key"):
         Settings()
 
 
 def test_get_settings_allow_environment_overrides(
-    monkeypatch: pytest.MonkeyPatch,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
     get_settings.cache_clear()
-    monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("APP_DEBUG", "true")
+    settings_env_factory(env={"APP_ENV": "test", "APP_DEBUG": "true"})
 
     settings = get_settings()
 
@@ -84,14 +124,15 @@ def test_get_settings_allow_environment_overrides(
 
 
 def test_settings_store_treasury_private_key_as_secret(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "http://localhost:8545")
-    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
+    settings_env_factory(
+        env={
+            "APP_PAYOUTS_ENABLED": "true",
+            "APP_PAYOUTS_RPC_URL": "http://localhost:8545",
+            "APP_TREASURY_PRIVATE_KEY": "0x" + "cd" * 32,
+        }
+    )
 
     settings = Settings()
 
@@ -104,26 +145,24 @@ def test_settings_store_treasury_private_key_as_secret(
 
 
 def test_settings_reject_invalid_treasury_private_key(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "http://localhost:8545")
-    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "not-a-key")
+    settings_env_factory(
+        env={
+            "APP_PAYOUTS_ENABLED": "true",
+            "APP_PAYOUTS_RPC_URL": "http://localhost:8545",
+            "APP_TREASURY_PRIVATE_KEY": "not-a-key",
+        }
+    )
 
     with pytest.raises(ValidationError, match="treasury_private_key"):
         Settings()
 
 
 def test_settings_derive_payment_token_from_network(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_X402_NETWORK_CAIP2", "eip155:8453")
+    settings_env_factory(env={"APP_X402_NETWORK_CAIP2": "eip155:8453"})
 
     settings = Settings()
 
@@ -132,49 +171,23 @@ def test_settings_derive_payment_token_from_network(
     assert settings.payment_token.symbol == "USDC"
 
 
-def test_settings_load_local_dotenv_without_explicit_env_file(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    dotenv_path = tmp_path / ".env"
-    dotenv_path.write_text(
-        "\n".join(
-            [
-                "APP_JWT_SECRET_KEY=dotenv-secret-key-with-32-bytes-minimum",
-                "APP_SIWE_DOMAIN=127.0.0.1",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("APP_ENV_FILE", raising=False)
-    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APP_SIWE_DOMAIN", raising=False)
-
-    settings = Settings()
-
-    assert settings.jwt_secret_key == "dotenv-secret-key-with-32-bytes-minimum"
-    assert settings.siwe_domain == "127.0.0.1"
-
-
 def test_settings_load_local_dotenv_by_default(
-    monkeypatch: pytest.MonkeyPatch,
+    settings_env_factory: SettingsEnvFactory,
     tmp_path: Path,
 ) -> None:
-    dotenv_path = tmp_path / ".env"
-    dotenv_path.write_text(
-        "\n".join(
-            [
-                "APP_JWT_SECRET_KEY=dotenv-secret-key-with-32-bytes-minimum",
-                "APP_SIWE_DOMAIN=127.0.0.1",
-            ]
-        ),
-        encoding="utf-8",
+    _write_dotenv(
+        tmp_path / ".env",
+        jwt_secret="dotenv-secret-key-with-32-bytes-minimum",
+        siwe_domain="127.0.0.1",
     )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("APP_ENV_FILE", raising=False)
-    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APP_SIWE_DOMAIN", raising=False)
+    settings_env_factory(
+        include_defaults=False,
+        env={
+            "APP_ENV_FILE": None,
+            "APP_JWT_SECRET_KEY": None,
+            "APP_SIWE_DOMAIN": None,
+        },
+    )
 
     settings = Settings()
 
@@ -183,23 +196,22 @@ def test_settings_load_local_dotenv_by_default(
 
 
 def test_settings_environment_variables_override_local_dotenv(
-    monkeypatch: pytest.MonkeyPatch,
+    settings_env_factory: SettingsEnvFactory,
     tmp_path: Path,
 ) -> None:
-    dotenv_path = tmp_path / ".env"
-    dotenv_path.write_text(
-        "\n".join(
-            [
-                "APP_JWT_SECRET_KEY=dotenv-secret-key-with-32-bytes-minimum",
-                "APP_SIWE_DOMAIN=127.0.0.1",
-            ]
-        ),
-        encoding="utf-8",
+    _write_dotenv(
+        tmp_path / ".env",
+        jwt_secret="dotenv-secret-key-with-32-bytes-minimum",
+        siwe_domain="127.0.0.1",
     )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.delenv("APP_ENV_FILE", raising=False)
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "env-secret-key-with-32-bytes-minimum")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "api.example.com")
+    settings_env_factory(
+        include_defaults=False,
+        env={
+            "APP_ENV_FILE": None,
+            "APP_JWT_SECRET_KEY": "env-secret-key-with-32-bytes-minimum",
+            "APP_SIWE_DOMAIN": "api.example.com",
+        },
+    )
 
     settings = Settings()
 
@@ -208,33 +220,28 @@ def test_settings_environment_variables_override_local_dotenv(
 
 
 def test_settings_use_app_env_file_instead_of_default_dotenv(
-    monkeypatch: pytest.MonkeyPatch,
+    settings_env_factory: SettingsEnvFactory,
     tmp_path: Path,
 ) -> None:
-    default_dotenv_path = tmp_path / ".env"
-    default_dotenv_path.write_text(
-        "\n".join(
-            [
-                "APP_JWT_SECRET_KEY=default-dotenv-secret-key-with-32-bytes",
-                "APP_SIWE_DOMAIN=default.example.com",
-            ]
-        ),
-        encoding="utf-8",
+    _write_dotenv(
+        tmp_path / ".env",
+        jwt_secret="default-dotenv-secret-key-with-32-bytes",
+        siwe_domain="default.example.com",
     )
     custom_dotenv_path = tmp_path / ".env.custom"
-    custom_dotenv_path.write_text(
-        "\n".join(
-            [
-                "APP_JWT_SECRET_KEY=custom-dotenv-secret-key-with-32-bytes-okay",
-                "APP_SIWE_DOMAIN=custom.example.com",
-            ]
-        ),
-        encoding="utf-8",
+    _write_dotenv(
+        custom_dotenv_path,
+        jwt_secret="custom-dotenv-secret-key-with-32-bytes-okay",
+        siwe_domain="custom.example.com",
     )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV_FILE", str(custom_dotenv_path))
-    monkeypatch.delenv("APP_JWT_SECRET_KEY", raising=False)
-    monkeypatch.delenv("APP_SIWE_DOMAIN", raising=False)
+    settings_env_factory(
+        include_defaults=False,
+        env={
+            "APP_ENV_FILE": str(custom_dotenv_path),
+            "APP_JWT_SECRET_KEY": None,
+            "APP_SIWE_DOMAIN": None,
+        },
+    )
 
     settings = Settings()
 
@@ -242,163 +249,90 @@ def test_settings_use_app_env_file_instead_of_default_dotenv(
     assert settings.siwe_domain == "custom.example.com"
 
 
-def test_settings_reject_debug_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("env_overrides", "match"),
+    [
+        pytest.param({"APP_DEBUG": "true"}, "debug must be false", id="debug"),
+        pytest.param(
+            {
+                "APP_ENV": "staging",
+                "APP_DATABASE_URL": (
+                    "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
+                ),
+                "APP_SIWE_DOMAIN": "staging.example.com",
+            },
+            "database_url must point to a non-local database",
+            id="local-database",
+        ),
+        pytest.param(
+            {"APP_SIWE_DOMAIN": "testserver"},
+            "siwe_domain must be explicitly set",
+            id="default-siwe-domain",
+        ),
+        pytest.param(
+            {"APP_PAYOUTS_ENABLED": None},
+            "payouts_enabled must be true",
+            id="missing-payouts-enabled",
+        ),
+        pytest.param(
+            {"APP_PAYOUTS_ENABLED": "false"},
+            "payouts_enabled must be true",
+            id="false-payouts-enabled",
+        ),
+        pytest.param(
+            {
+                "APP_ENV": "staging",
+                "APP_DATABASE_URL": "postgresql+asyncpg://db.internal:5432/agent_marketplace",
+                "APP_SIWE_DOMAIN": "staging.example.com",
+                "APP_PAYOUTS_RPC_URL": None,
+            },
+            "payouts_rpc_url",
+            id="missing-payout-rpc-url",
+        ),
+        pytest.param(
+            {"APP_TREASURY_PRIVATE_KEY": None},
+            "treasury_private_key",
+            id="missing-treasury-key",
+        ),
+        pytest.param(
+            {"APP_REDIS_URL": None},
+            "redis_url must be set",
+            id="missing-redis-url",
+        ),
+        pytest.param(
+            {
+                "APP_X402_FACILITATOR_URL": "https://api.cdp.coinbase.com/platform/v2/x402",
+                "APP_X402_CDP_API_KEY_ID": None,
+                "APP_X402_CDP_API_KEY_SECRET": None,
+            },
+            "x402_cdp_api_key_id and x402_cdp_api_key_secret",
+            id="missing-cdp-credentials",
+        ),
+    ],
+)
+def test_settings_validate_deployment_environment_requirements(
+    env_overrides: dict[str, str | None],
+    match: str,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("APP_DEBUG", "true")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
+    settings_env_factory(env=_valid_deployment_env(env_overrides))
 
-    with pytest.raises(ValidationError, match="debug must be false"):
-        Settings()
-
-
-def test_settings_require_non_local_database_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "staging")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv(
-        "APP_DATABASE_URL",
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace",
-    )
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
-
-    with pytest.raises(ValidationError, match="database_url must point to a non-local database"):
-        Settings()
-
-
-def test_settings_require_non_default_siwe_domain_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "testserver")
-
-    with pytest.raises(ValidationError, match="siwe_domain must be explicitly set"):
-        Settings()
-
-
-@pytest.mark.parametrize("payouts_enabled_value", [None, "false"])
-def test_settings_require_payouts_enabled_in_deployment_environments(
-    payouts_enabled_value: str | None,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
-    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
-    if payouts_enabled_value is None:
-        monkeypatch.delenv("APP_PAYOUTS_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("APP_PAYOUTS_ENABLED", payouts_enabled_value)
-
-    with pytest.raises(ValidationError, match="payouts_enabled must be true"):
-        Settings()
-
-
-def test_settings_require_payout_rpc_url_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "staging")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv(
-        "APP_DATABASE_URL", "postgresql+asyncpg://db.internal:5432/agent_marketplace"
-    )
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
-    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.delenv("APP_PAYOUTS_RPC_URL", raising=False)
-    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
-
-    with pytest.raises(ValidationError, match="payouts_rpc_url"):
-        Settings()
-
-
-def test_settings_require_treasury_private_key_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
-    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
-    monkeypatch.delenv("APP_TREASURY_PRIVATE_KEY", raising=False)
-
-    with pytest.raises(ValidationError, match="treasury_private_key"):
-        Settings()
-
-
-def test_settings_require_redis_url_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
-    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
-    monkeypatch.delenv("APP_REDIS_URL", raising=False)
-
-    with pytest.raises(ValidationError, match="redis_url must be set"):
-        Settings()
-
-
-def test_settings_require_cdp_credentials_in_deployment_environments(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "prod")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://db.example.com/app")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "marketplace.example.com")
-    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
-    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
-    monkeypatch.setenv("APP_X402_FACILITATOR_URL", "https://api.cdp.coinbase.com/platform/v2/x402")
-    monkeypatch.delenv("APP_X402_CDP_API_KEY_ID", raising=False)
-    monkeypatch.delenv("APP_X402_CDP_API_KEY_SECRET", raising=False)
-
-    with pytest.raises(ValidationError, match="x402_cdp_api_key_id and x402_cdp_api_key_secret"):
+    with pytest.raises(ValidationError, match=match):
         Settings()
 
 
 def test_settings_accept_valid_deployment_configuration(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("APP_ENV", "staging")
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql://db.internal:5432/agent_marketplace")
-    monkeypatch.setenv("APP_SIWE_DOMAIN", "staging.example.com")
-    monkeypatch.setenv("APP_REDIS_URL", "redis://cache.internal:6379/0")
-    monkeypatch.setenv("APP_PAYOUTS_ENABLED", "true")
-    monkeypatch.setenv("APP_PAYOUTS_RPC_URL", "https://rpc.example.com")
-    monkeypatch.setenv("APP_TREASURY_PRIVATE_KEY", "0x" + "cd" * 32)
+    settings_env_factory(
+        env=_valid_deployment_env(
+            {
+                "APP_ENV": "staging",
+                "APP_DATABASE_URL": "postgresql://db.internal:5432/agent_marketplace",
+                "APP_SIWE_DOMAIN": "staging.example.com",
+            }
+        )
+    )
 
     settings = Settings()
 

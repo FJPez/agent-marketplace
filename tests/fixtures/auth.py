@@ -1,24 +1,40 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Protocol, cast
 
 import pytest
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
+from app.api.deps.auth import get_current_actor
 from app.core.config import Settings
 from app.core.security import hash_api_key
 from app.db.session import get_db_session
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from app.api.deps.auth import CurrentActor
-
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
+_CURRENT_ACTOR_DEPENDENCY = Depends(get_current_actor)
+
+
+class AuthClientFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        account: object | None,
+        api_key: object | None = ...,
+        secret: str = ...,
+    ) -> TestClient: ...
+
+
+class _ResolvedActor(Protocol):
+    account_id: int
+    is_admin: bool
+    wallet_address: str
 
 
 class _DummySession:
@@ -33,7 +49,7 @@ async def _override_get_db_session() -> AsyncIterator[AsyncSession]:
 @pytest.fixture
 def auth_client_factory(
     monkeypatch: pytest.MonkeyPatch,
-) -> Callable[..., TestClient]:
+) -> AuthClientFactory:
     def build(
         *,
         account: object | None,
@@ -90,11 +106,14 @@ def auth_client_factory(
         app = FastAPI()
 
         @app.get("/protected")
-        async def read_protected(actor: CurrentActor) -> dict[str, object]:
+        async def read_protected(
+            actor: Annotated[object, _CURRENT_ACTOR_DEPENDENCY],
+        ) -> dict[str, object]:
+            resolved_actor = cast("_ResolvedActor", actor)
             return {
-                "account_id": actor.account_id,
-                "is_admin": actor.is_admin,
-                "wallet_address": actor.wallet_address,
+                "account_id": resolved_actor.account_id,
+                "is_admin": resolved_actor.is_admin,
+                "wallet_address": resolved_actor.wallet_address,
             }
 
         app.dependency_overrides[get_db_session] = _override_get_db_session
