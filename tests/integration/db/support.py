@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.core.config import Settings
@@ -12,6 +13,10 @@ from app.core.config import Settings
 TEST_DATABASE_SUFFIX = "_test"
 DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 RUN_ID_PATTERN = re.compile(r"[^A-Za-z0-9_]+")
+
+
+class PostgresUnavailableError(RuntimeError):
+    """Raised when the admin Postgres database cannot be reached."""
 
 
 def get_test_database_url(database_url: str | None = None) -> str:
@@ -79,10 +84,23 @@ async def admin_engine(database_url: str | None = None) -> AsyncIterator[AsyncEn
         await engine.dispose()
 
 
+@asynccontextmanager
+async def admin_connection(database_url: str | None = None) -> AsyncIterator[object]:
+    async with admin_engine(database_url) as engine:
+        try:
+            connection = await engine.connect()
+        except (OSError, OperationalError, DBAPIError) as exc:
+            msg = "PostgreSQL is unavailable for DB-backed tests"
+            raise PostgresUnavailableError(msg) from exc
+
+        async with connection:
+            yield connection
+
+
 async def recreate_test_database(database_url: str) -> None:
     database_name = get_database_name(database_url)
 
-    async with admin_engine(database_url) as engine, engine.connect() as connection:
+    async with admin_connection(database_url) as connection:
         await connection.execute(
             text(
                 "SELECT pg_terminate_backend(pid) "
@@ -99,7 +117,7 @@ async def recreate_test_database(database_url: str) -> None:
 async def drop_test_database(database_url: str) -> None:
     database_name = get_database_name(database_url)
 
-    async with admin_engine(database_url) as engine, engine.connect() as connection:
+    async with admin_connection(database_url) as connection:
         await connection.execute(
             text(
                 "SELECT pg_terminate_backend(pid) "
