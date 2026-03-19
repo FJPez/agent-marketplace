@@ -460,10 +460,10 @@ Example response:
 - Success: `200` with the moderation action history
 - Errors: `422` for invalid query values
 
-## Notes for Examiners
+## Design Notes
 
-- Quote creation is public in the codebase. Consumers do not need to authenticate to ask for a quote.
+- Quote creation is public. Consumers do not need to authenticate to request a quote.
 - Discovery routes only expose public, active service data.
-- Provider upstream URLs and upstream credentials are never returned by public discovery responses.
+- Provider upstream URLs and credentials are never returned by discovery responses.
 - The paid invoke flow is a two-step `402` challenge/settle flow backed by x402-compatible headers.
 - The provider payout request path is separate from payout reporting and requires JWT auth plus idempotency protection.

@@ -92,7 +92,7 @@ class ServiceCreateRequest(BaseModel):
                     "slug": "demo-agent-service",
                     "name": "Demo Agent Service",
                     "summary": "A provider-owned service for local marketplace demos.",
-                    "description": "Exposes free and paid endpoints for examiner walkthroughs.",
+                    "description": "Exposes free and paid endpoints for guided walkthroughs.",
                 }
             ]
         }
