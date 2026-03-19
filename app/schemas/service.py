@@ -79,7 +79,9 @@ class ServiceCreateRequest(BaseModel):
                     "slug": "demo-agent-service",
                     "name": "Demo Agent Service",
                     "summary": "A provider-owned service for local marketplace demos.",
-                    "description": "Exposes free and paid endpoints for examiner walkthroughs.",
+                    "description": (
+                        "Exposes free and paid endpoints for local marketplace walkthroughs."
+                    ),
                 }
             ]
         }
@@ -97,7 +99,7 @@ class ServiceUpdateRequest(BaseModel):
             "examples": [
                 {
                     "name": "Demo Agent Service",
-                    "summary": "Updated service summary for the oral demonstration.",
+                    "summary": "Updated service summary for the local demo flow.",
                     "description": "Optional long-form provider description.",
                 }
             ]

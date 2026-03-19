@@ -34,7 +34,7 @@ Most route handlers raise FastAPI HTTP errors with JSON bodies shaped like:
 ## Authentication Matrix
 
 - Public: health routes, discovery routes, quote creation, and auth nonce / verify / refresh
-- Generic bearer auth: provider authoring, invoke, invocation reads, provider earnings, ledger, public payout reads, and admin routes
+- Generic bearer auth: provider authoring, invoke, invocation reads, provider earnings, ledger, provider payout reads, and admin routes
 - JWT-only: API-key lifecycle, account self-service, wallet rotation, and provider payout execution
 
 ## Health
@@ -268,6 +268,21 @@ Example upstream config payload:
 - Success: `200` with the public service list
 - Errors: none expected in the normal path
 
+Example response:
+
+```json
+[
+  {
+    "id": 1,
+    "slug": "demo-agent-service",
+    "name": "Demo Agent Service",
+    "summary": "Free and paid demo endpoints for manual marketplace testing.",
+    "description": "A seeded demo service for discovery, quoting, free invoke, and paid invoke flows.",
+    "tags": ["demo", "translation"]
+  }
+]
+```
+
 ### `GET /v1/services/{service_id_or_slug}`
 
 - Auth: none
@@ -276,6 +291,35 @@ Example upstream config payload:
 - Errors: `404` when the service does not exist or is not publicly available
 - Lookup rule: a path segment made only of digits is treated as a service id, not a slug
 
+Example response:
+
+```json
+{
+  "id": 1,
+  "slug": "demo-agent-service",
+  "name": "Demo Agent Service",
+  "summary": "Free and paid demo endpoints for manual marketplace testing.",
+  "description": "A seeded demo service for discovery, quoting, free invoke, and paid invoke flows.",
+  "tags": ["demo", "translation"],
+  "endpoints": [
+    {
+      "key": "free-ping",
+      "name": "Free Ping",
+      "summary": "A lightweight free endpoint for local demo traffic.",
+      "description": "Echoes a simple pong-style response from the mock upstream.",
+      "access_mode": "free"
+    },
+    {
+      "key": "paid-summary",
+      "name": "Paid Summary",
+      "summary": "A paid endpoint that returns a compact summary.",
+      "description": "Uses x402 payment enforcement for paid invocations.",
+      "access_mode": "paid"
+    }
+  ]
+}
+```
+
 ### `GET /v1/services/{service_id_or_slug}/schema`
 
 - Auth: none
@@ -283,12 +327,68 @@ Example upstream config payload:
 - Success: `200` with the enabled endpoint schemas
 - Errors: `404` when the service does not exist or is not publicly available
 
+Example response:
+
+```json
+{
+  "id": 1,
+  "slug": "demo-agent-service",
+  "endpoints": [
+    {
+      "key": "free-ping",
+      "request_schema": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"}
+        },
+        "required": ["message"],
+        "additionalProperties": false
+      },
+      "response_schema": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"},
+          "mode": {"type": "string"}
+        },
+        "required": ["message", "mode"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
+```
+
 ### `GET /v1/services/{service_id_or_slug}/pricing`
 
 - Auth: none
 - Request: path parameter `service_id_or_slug`
 - Success: `200` with the enabled endpoint pricing data
 - Errors: `404` when the service does not exist or is not publicly available
+
+Example response:
+
+```json
+{
+  "id": 1,
+  "slug": "demo-agent-service",
+  "endpoints": [
+    {
+      "key": "free-ping",
+      "access_mode": "free",
+      "pricing_type": "free",
+      "amount_minor": null,
+      "currency": null
+    },
+    {
+      "key": "paid-summary",
+      "access_mode": "paid",
+      "pricing_type": "fixed_per_call",
+      "amount_minor": 25,
+      "currency": "USD"
+    }
+  ]
+}
+```
 
 ### `POST /v1/services/{service_id_or_slug}/quote`
 
@@ -316,8 +416,8 @@ Example response:
   "service_id": 1,
   "endpoint_key": "paid-summary",
   "pricing_type": "fixed_per_call",
-  "amount_minor": 100,
-  "currency": "USDC",
+  "amount_minor": 25,
+  "currency": "USD",
   "request_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "service_revision_id": 1,
   "service_change_token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -392,6 +492,22 @@ Example invocation response:
 - Success: `200` with earnings totals grouped by currency
 - Errors: none expected in the normal path
 
+Example response:
+
+```json
+{
+  "totals": [
+    {
+      "currency": "USD",
+      "charge_minor": 25,
+      "platform_fee_minor": 2,
+      "provider_earning_minor": 23,
+      "entry_count": 1
+    }
+  ]
+}
+```
+
 ### `GET /v1/provider/ledger`
 
 - Auth: generic bearer
@@ -399,12 +515,67 @@ Example invocation response:
 - Success: `200` with ledger entries
 - Errors: none expected in the normal path
 
+Example response:
+
+```json
+{
+  "entries": [
+    {
+      "id": 1,
+      "service_id": 1,
+      "invocation_id": 1,
+      "payment_attempt_id": 1,
+      "entry_type": "provider_earning",
+      "amount_minor": 23,
+      "currency": "USD",
+      "created_at": "2026-03-17T12:00:00Z"
+    }
+  ]
+}
+```
+
 ### `GET /v1/provider/payouts`
 
 - Auth: generic bearer
 - Request: optional `status` query parameter
 - Success: `200` with payout summaries and payout records
 - Errors: none expected in the normal path
+
+Example response:
+
+```json
+{
+  "summaries": [
+    {
+      "currency": "USD",
+      "total_count": 1,
+      "ready_count": 1,
+      "pending_count": 0,
+      "sent_count": 0,
+      "failed_count": 0,
+      "total_amount_minor": 23,
+      "sent_amount_minor": 0
+    }
+  ],
+  "payouts": [
+    {
+      "id": 1,
+      "service_id": 1,
+      "invocation_id": 1,
+      "payment_attempt_id": 1,
+      "destination_wallet": "0xabc...",
+      "amount_minor": 23,
+      "currency": "USD",
+      "network": "base-sepolia",
+      "status": "ready",
+      "failure_code": null,
+      "attempt_count": 0,
+      "created_at": "2026-03-17T12:00:00Z",
+      "updated_at": "2026-03-17T12:00:00Z"
+    }
+  ]
+}
+```
 
 ### `POST /v1/provider/payouts`
 
@@ -434,6 +605,27 @@ Example response:
 - Success: `201` with the moderation action
 - Errors: `404` when the service cannot be found, `409` for invalid transitions
 
+Example request:
+
+```json
+{
+  "reason": "Provider maintenance window."
+}
+```
+
+Example response:
+
+```json
+{
+  "id": 1,
+  "service_id": 1,
+  "actor_account_id": 1,
+  "action": "suspend",
+  "reason": "Provider maintenance window.",
+  "created_at": "2026-03-17T12:00:00Z"
+}
+```
+
 ### `POST /v1/admin/services/{service_id}/restore`
 
 - Auth: admin actor
@@ -455,9 +647,33 @@ Example response:
 - Success: `200` with the moderation action history
 - Errors: `422` for invalid query values
 
-## Notes for Examiners
+Example response:
 
-- Quote creation is public in the codebase. Consumers do not need to authenticate to ask for a quote.
+```json
+[
+  {
+    "id": 1,
+    "service_id": 1,
+    "actor_account_id": 1,
+    "action": "suspend",
+    "reason": "Provider maintenance window.",
+    "created_at": "2026-03-17T12:00:00Z"
+  },
+  {
+    "id": 2,
+    "service_id": 1,
+    "actor_account_id": 1,
+    "action": "restore",
+    "reason": "Maintenance completed.",
+    "created_at": "2026-03-17T12:30:00Z"
+  }
+]
+```
+
+## Implementation Notes
+
+- Quote creation is public. Authenticated clients may still call it, but
+  consumers do not need bearer credentials to ask for a quote.
 - Discovery routes only expose public, active service data.
 - Provider upstream URLs and upstream credentials are never returned by public discovery responses.
 - The paid invoke flow is a two-step `402` challenge/settle flow backed by x402-compatible headers.

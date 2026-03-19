@@ -19,5 +19,8 @@ operating the marketplace.
 ## Notes
 
 - The API reference Markdown is the source of truth for the committed PDF.
-- The agent setup guide is the main onboarding entrypoint for agent consumers and includes inline code examples for auth, discovery, quote, and invoke.
+- Rebuild the committed PDF with `make docs-pdf` or
+  `uv run python scripts/render_api_reference_pdf.py`.
+- The agent setup guide is the main onboarding entrypoint for agent consumers
+  and includes inline code examples for auth, discovery, quote, and invoke.
 - The demo setup guide covers the more involved live x402 and payout path.

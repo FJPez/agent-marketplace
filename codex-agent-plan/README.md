@@ -128,6 +128,15 @@ Then read the docs most relevant to the assigned branch.
   - `PROMPTS/phase-5-coordination.md`
   - `PROMPTS/phase-5-invoke-core.md`
   - `PROMPTS/phase-5-x402-payment.md`
+- Phase 6
+  - `PROMPTS/phase-6-ledger-and-earnings.md`
+  - `PROMPTS/phase-6-parallel-coordination.md`
+  - `PROMPTS/phase-6-platform-guardrails.md`
+- Phase 7
+  - `PROMPTS/phase-7-observability-and-audit-completion.md`
+  - `PROMPTS/phase-7-parallel-coordination.md`
+  - `PROMPTS/phase-7-payouts-reporting.md`
+  - `PROMPTS/phase-7-provider-payout-execution.md`
 
 ## Suggested usage
 

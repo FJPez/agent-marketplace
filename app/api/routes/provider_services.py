@@ -68,7 +68,7 @@ async def create_provider_service(
                     "value": {
                         "slug": "demo-agent-service",
                         "name": "Demo Agent Service",
-                        "summary": "A provider-owned service for examiner demos.",
+                        "summary": "A provider-owned service for local marketplace demos.",
                         "description": (
                             "Used for discovery, quote, free invoke, and paid invoke walkthroughs."
                         ),
@@ -176,7 +176,7 @@ async def update_provider_service(
                     "summary": "Update service summary",
                     "value": {
                         "name": "Demo Agent Service",
-                        "summary": "Updated service summary for the oral demonstration.",
+                        "summary": "Updated service summary for the local demo flow.",
                         "description": "Optional long-form provider description.",
                     },
                 }

@@ -6,7 +6,7 @@ COMPOSE ?= docker compose
 DOCKER_HOST ?= 127.0.0.1
 DOCKER_PORT ?= 18000
 
-.PHONY: sync run test lint lint-fix format typecheck migrate seed bootstrap-admin demo-upstream demo-api demo-client demo-provider docker-build docker-run docker-stop docker-smoke
+.PHONY: sync run test lint lint-fix format typecheck migrate docs-pdf seed bootstrap-admin demo-upstream demo-api demo-client demo-provider docker-build docker-run docker-stop docker-smoke
 
 sync:
 	uv sync
@@ -31,6 +31,9 @@ typecheck:
 
 migrate:
 	uv run alembic upgrade head
+
+docs-pdf:
+	uv run $(PYTHON) scripts/render_api_reference_pdf.py
 
 seed:
 	uv run $(PYTHON) scripts/seed_demo.py

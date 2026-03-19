@@ -6,20 +6,21 @@
 tests/
   conftest.py
   fixtures/
+  helpers/
   unit/
-    services/
-    policies/
-    utils/
+    core/
     integrations/
-      x402/
+    schemas/
+    scripts/
+    services/
   integration/
-    repositories/
     db/
+    repositories/
+    scripts/
+    services/
   api/
     routes/
   e2e/
-```
-
 ```
 
 ## Test levels
@@ -95,4 +96,3 @@ Every branch should pass:
 - relevant tests
 
 Integration branch should also run a core e2e smoke suite.
-```

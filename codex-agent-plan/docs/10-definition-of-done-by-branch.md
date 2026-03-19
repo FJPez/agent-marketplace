@@ -286,15 +286,6 @@
 
 - payment logic
 
-### Required tests
-
-- health persistence tests
-- publish blocked on failed health where applicable
-
-### Out of scope
-
-- payment logic
-
 ## `feat/ledger-and-earnings`
 
 ### Deliverables

@@ -134,9 +134,15 @@ resolved as `service_id` only and does not fall back to slug matching.
 
 - `GET /v1/provider/earnings`
 - `GET /v1/provider/ledger`
+- `GET /v1/provider/payouts`
+- `POST /v1/provider/payouts`
 
 Finance routes require bearer auth and are scoped to the authenticated account.
-Payout reporting is not part of the current route surface.
+
+- earnings and ledger reads accept generic bearer auth
+- payout reporting accepts generic bearer auth and supports an optional
+  `status` filter
+- payout execution requires JWT auth plus an `Idempotency-Key` header
 
 ## Admin routes
 

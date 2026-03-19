@@ -10,6 +10,40 @@ Companion references:
 - [Example scripts](../examples/README.md)
 - [Full paid demo setup](demo-setup.md)
 
+## Before You Start
+
+For the examples in this guide, set:
+
+- `CONSUMER_PRIVATE_KEY` for wallet authentication and invoke examples
+- `PROVIDER_PRIVATE_KEY` if you want to publish the local demo service
+- `API_BASE_URL`, which defaults to `http://127.0.0.1:8000`
+- `SIWE_DOMAIN`, which defaults to `127.0.0.1`
+
+The lightweight local flow still needs valid EVM private keys for the provider
+and consumer, but those wallets do not need Base Sepolia funds unless you plan
+to run the paid x402 settlement path described in [demo-setup.md](demo-setup.md).
+
+Install the client-side Python packages used in the examples:
+
+```bash
+uv add httpx eth-account
+```
+
+## Minimal Client Setup
+
+All snippets below assume your `httpx.AsyncClient` is created with `base_url`
+set to the marketplace API:
+
+```python
+import httpx
+
+API_BASE_URL = "http://127.0.0.1:8000"
+
+
+async with httpx.AsyncClient(base_url=API_BASE_URL, timeout=30.0) as client:
+    access_token = await authenticate(client, private_key=consumer_private_key)
+```
+
 ## Consumer Flow
 
 The typical consumer path is:
@@ -110,6 +144,9 @@ Use the schema and pricing responses to decide:
 Quotes matter for paid endpoints because they bind the exact payload, service
 revision, and change token used during invoke.
 
+This route is public. If your client already has bearer auth you can still send
+it, but quote creation does not require authentication.
+
 ```python
 async def create_quote(
     client: httpx.AsyncClient,
@@ -196,6 +233,12 @@ If that response is `402`, inspect:
 - `PAYMENT-REQUIRED`
 - `X-Request-ID`
 
+On the retry:
+
+- keep the same `Idempotency-Key`
+- reuse the same request body
+- add the payment headers produced by your x402 client
+
 The full x402 settlement and retry flow is already implemented in
 [examples/client.py](../examples/client.py). Use that script when you want a
 runnable paid example instead of wiring the x402 client yourself.
@@ -217,10 +260,12 @@ Providers use the same wallet-auth flow, then manage services through the
 provider routes:
 
 1. `POST /v1/provider/services`
-2. `POST /v1/provider/services/{service_id}/endpoints`
-3. `PUT /v1/provider/endpoints/{endpoint_id}/upstream`
-4. `POST /v1/provider/services/{service_id}/tags`
-5. `POST /v1/provider/services/{service_id}/publish`
+2. `PATCH /v1/provider/services/{service_id}`
+3. `POST /v1/provider/services/{service_id}/endpoints`
+4. `PATCH /v1/provider/endpoints/{endpoint_id}`
+5. `PUT /v1/provider/endpoints/{endpoint_id}/upstream`
+6. `POST /v1/provider/services/{service_id}/tags`
+7. `POST /v1/provider/services/{service_id}/publish`
 
 When the marketplace forwards a request upstream, it signs the request with:
 

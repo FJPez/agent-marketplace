@@ -25,6 +25,20 @@ The detailed route contract lives in
 [docs/api-reference.md](docs/api-reference.md) and
 [docs/api-reference.pdf](docs/api-reference.pdf).
 
+## Documentation Snapshot
+
+- Main user-facing documentation lives under [docs/](docs/).
+- The API reference is committed in both Markdown and styled PDF form at
+  [docs/api-reference.md](docs/api-reference.md) and
+  [docs/api-reference.pdf](docs/api-reference.pdf).
+- The platform is backed by marketplace resource families including accounts,
+  API keys, services, service endpoints, quotes, invocations, payouts, and
+  moderation actions.
+- The public API is workflow-oriented rather than a single textbook CRUD
+  namespace: provider services cover create/list/detail/update, API keys cover
+  create/list/revoke, and the remaining routes cover discovery, quoting,
+  invoke, moderation, and payout flows.
+
 ## Quick Start
 
 ```bash
@@ -66,6 +80,16 @@ Runnable companion scripts live in [examples/](examples/) and are summarized in
 For a local-safe walkthrough that does not require funded wallets or a live
 facilitator:
 
+Before running the demo scripts, export two valid EVM private keys. They do not
+need Base Sepolia funds unless you want to run the paid x402 settlement path.
+
+```bash
+export CONSUMER_PRIVATE_KEY=0xYOUR_LOCAL_CONSUMER_PRIVATE_KEY
+export PROVIDER_PRIVATE_KEY=0xYOUR_LOCAL_PROVIDER_PRIVATE_KEY
+export API_BASE_URL=http://127.0.0.1:8000
+export SIWE_DOMAIN=127.0.0.1
+```
+
 ```bash
 make demo-upstream
 make demo-api
@@ -90,6 +114,13 @@ make demo-provider
 - [Full demo setup](docs/demo-setup.md)
 - [Railway deployment guide](docs/deployment/railway.md)
 - [Example scripts](examples/)
+- Interactive FastAPI docs at `/docs` and `/redoc` once the app is running
+
+Regenerate the styled API-reference PDF with:
+
+```bash
+make docs-pdf
+```
 
 ## Environment Notes
 
