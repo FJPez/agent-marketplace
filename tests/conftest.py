@@ -4,6 +4,12 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import suppress
 from pathlib import Path
 
+# These must be set before any import of app.main, which creates the
+# FastAPI application (and validates Settings) at module level.
+os.environ.setdefault("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+os.environ.setdefault("APP_SIWE_DOMAIN", "testserver")
+os.environ.setdefault("APP_ENV_FILE", ".env.test")
+
 import coredis
 import pytest
 from alembic import command
