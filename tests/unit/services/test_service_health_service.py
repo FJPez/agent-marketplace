@@ -7,6 +7,7 @@ from app.core.enums import ServiceHealthStatus
 from app.db.models import ServiceHealthCheck
 from app.services.service_health_service import (
     HEALTH_CHECK_FAILURE_SUMMARY,
+    MISSING_HEALTH_CHECK_SUMMARY,
     PUBLISH_READINESS_CHECK_NAME,
     ServiceHealthCheckFailedError,
     ServiceHealthOutcome,
@@ -213,14 +214,22 @@ async def test_get_latest_check_delegates_to_repository() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_publish_ready_allows_missing_or_passing_check() -> None:
+async def test_ensure_publish_ready_rejects_missing_latest_check() -> None:
     service = ServiceHealthService(
         cast("AsyncSession", FakeSession()),
         service_health_check_repo=FakeServiceHealthCheckRepository(),
     )
 
-    await service.ensure_publish_ready(service_id=901)
+    with pytest.raises(
+        ServiceHealthCheckFailedError, match="latest health check is not passing"
+    ) as exc_info:
+        await service.ensure_publish_ready(service_id=901)
 
+    assert exc_info.value.summary == MISSING_HEALTH_CHECK_SUMMARY
+
+
+@pytest.mark.asyncio
+async def test_ensure_publish_ready_allows_passing_check() -> None:
     repo = FakeServiceHealthCheckRepository()
     repo.latest_check = ServiceHealthCheck(
         id=8,

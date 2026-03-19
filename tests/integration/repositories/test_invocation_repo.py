@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
+from app.core.json_types import to_json_value
 from app.db.models import Account, Service, ServiceEndpoint
 from app.repositories.invocation_repo import InvocationRepository
 
@@ -53,7 +54,7 @@ async def test_invocation_repository_persists_and_lists_by_consumer(
             idempotency_key="key-1",
             request_hash="a" * 64,
             status=InvocationStatus.SUCCEEDED,
-            response_payload={"result": "one"},
+            response_payload=to_json_value({"result": "one"}),
             upstream_status_code=200,
             error_message=None,
             failure_reason=None,

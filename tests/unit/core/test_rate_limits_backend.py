@@ -40,10 +40,10 @@ def test_build_actor_rate_limit_key_prefers_cached_owner_key() -> None:
     assert build_actor_rate_limit_key(request) == "account:42"
 
 
-def test_build_actor_rate_limit_key_hashes_api_key_tokens() -> None:
+def test_build_actor_rate_limit_key_falls_back_to_client_key_without_cached_owner() -> None:
     request = _build_request(authorization="Bearer amp_example")
 
-    assert build_actor_rate_limit_key(request).startswith("api_key:")
+    assert build_actor_rate_limit_key(request) == "client:127.0.0.1"
 
 
 @pytest.mark.asyncio

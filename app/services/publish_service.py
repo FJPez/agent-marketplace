@@ -1,9 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import ServiceLifecycle
 from app.db.models.service import Service
-from app.integrations.provider_gateway.signing import get_hmac_auth_config
 from app.repositories.service_repo import ServiceRepository
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.provider_service_errors import (
@@ -11,41 +10,13 @@ from app.services.provider_service_errors import (
     ProviderServiceStateError,
     ProviderServiceValidationError,
 )
+from app.services.publish_readiness import PublishReadinessChecker
 from app.services.revision_service import RevisionService
 from app.services.service_health_service import (
+    PUBLISH_READINESS_CHECK_NAME,
     ServiceHealthCheckFailedError,
     ServiceHealthService,
 )
-
-
-def validate_service_for_publish(service: Service) -> None:
-    if not service.endpoints:
-        raise ProviderServiceValidationError(
-            "service must define at least one endpoint before publish",
-        )
-
-    enabled_endpoints = [endpoint for endpoint in service.endpoints if endpoint.is_enabled]
-    if not enabled_endpoints:
-        raise ProviderServiceValidationError(
-            "service must enable at least one endpoint before publish",
-        )
-
-    for endpoint in enabled_endpoints:
-        if endpoint.upstream is None:
-            raise ProviderServiceValidationError(
-                f"enabled endpoint '{endpoint.key}' must define upstream before publish",
-            )
-        if get_hmac_auth_config(endpoint.upstream.config) is None:
-            raise ProviderServiceValidationError(
-                f"enabled endpoint '{endpoint.key}' must define hmac auth config before publish",
-            )
-        if endpoint.access_mode is AccessMode.PAID and (
-            endpoint.pricing is None
-            or endpoint.pricing.pricing_type is not PricingModelType.FIXED_PER_CALL
-        ):
-            raise ProviderServiceValidationError(
-                f"paid endpoint '{endpoint.key}' must define fixed_per_call pricing before publish",
-            )
 
 
 class PublishService:
@@ -75,12 +46,16 @@ class PublishService:
         except ServiceUnavailableError as exc:
             raise ProviderServiceStateError(f"service is {exc.state.value}") from exc
 
-        validate_service_for_publish(service)
+        await self._service_health_service.run_check(
+            service_id=service.id,
+            check_name=PUBLISH_READINESS_CHECK_NAME,
+            checker=PublishReadinessChecker(self._session),
+        )
         try:
             await self._service_health_service.ensure_publish_ready(service_id=service.id)
         except ServiceHealthCheckFailedError as exc:
             raise ProviderServiceValidationError(
-                "service failed latest publish-readiness health check",
+                exc.summary or "service failed latest publish-readiness health check",
             ) from exc
         if service.current_revision_id is None or service.current_change_token is None:
             await self._revision_service.create_revision(service)

@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.request_schema_validation import PayloadSchemaMismatchError
+from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.services.moderation_service import (
@@ -91,6 +93,9 @@ def _service(
     change_token: str | None = "b" * 64,
     endpoint_key: str = "translate",
     endpoint_enabled: bool = True,
+    access_mode: AccessMode = AccessMode.PAID,
+    pricing_type: PricingModelType | None = PricingModelType.FIXED_PER_CALL,
+    request_schema: dict[str, object] | None = None,
 ) -> Service:
     service = Service(
         id=101,
@@ -110,12 +115,19 @@ def _service(
         name="Translate",
         summary=None,
         description=None,
-        access_mode=AccessMode.PAID,
-        request_schema={"type": "object"},
+        access_mode=access_mode,
+        request_schema=request_schema or {"type": "object"},
         response_schema={"type": "object"},
         timeout_seconds=30,
         is_enabled=endpoint_enabled,
     )
+    if pricing_type is not None:
+        endpoint.pricing = PricingModel(
+            endpoint_id=endpoint.id,
+            pricing_type=pricing_type,
+            amount_minor=500,
+            currency="USD",
+        )
     service.endpoints = [endpoint]
     return service
 
@@ -251,6 +263,69 @@ async def test_create_quote_rejects_missing_contract_binding() -> None:
             service_id_or_slug="quote-service",
             endpoint_key="translate",
             payload={"message": "hello"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_quote_rejects_free_endpoint() -> None:
+    quote = _quote()
+    service = QuoteService(cast("AsyncSession", FakeSession()))
+    service._quote_repo = FakeQuoteRepository(quote)
+    service._service_repo = FakeServiceRepository(
+        _service(access_mode=AccessMode.FREE, pricing_type=PricingModelType.FREE),
+    )
+    service._moderation_service = FakeModerationService()
+
+    with pytest.raises(QuoteUnavailableError, match="endpoint is not quoteable"):
+        await service.create_quote(
+            service_id_or_slug="quote-service",
+            endpoint_key="translate",
+            payload={"message": "hello"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_quote_rejects_paid_endpoint_without_fixed_pricing() -> None:
+    quote = _quote()
+    service = QuoteService(cast("AsyncSession", FakeSession()))
+    service._quote_repo = FakeQuoteRepository(quote)
+    service._service_repo = FakeServiceRepository(
+        _service(pricing_type=PricingModelType.FREE),
+    )
+    service._moderation_service = FakeModerationService()
+
+    with pytest.raises(QuoteUnavailableError, match="endpoint is not quoteable"):
+        await service.create_quote(
+            service_id_or_slug="quote-service",
+            endpoint_key="translate",
+            payload={"message": "hello"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_quote_rejects_payload_that_does_not_match_endpoint_schema() -> None:
+    quote = _quote()
+    service = QuoteService(cast("AsyncSession", FakeSession()))
+    service._quote_repo = FakeQuoteRepository(quote)
+    service._service_repo = FakeServiceRepository(
+        _service(
+            request_schema={
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": ["message"],
+                "additionalProperties": False,
+            }
+        ),
+    )
+    service._moderation_service = FakeModerationService()
+
+    with pytest.raises(
+        PayloadSchemaMismatchError, match="request payload does not match endpoint schema"
+    ):
+        await service.create_quote(
+            service_id_or_slug="quote-service",
+            endpoint_key="translate",
+            payload={"message": 123},
         )
 
 

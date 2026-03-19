@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -19,6 +20,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.core.json_types import JsonValue
+else:
+    JsonValue = object
 
 
 class Invocation(Base):
@@ -68,7 +74,7 @@ class Invocation(Base):
             values_callable=lambda values: [value.value for value in values],
         ),
     )
-    response_payload: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    response_payload: Mapped[JsonValue | None] = mapped_column(JSONB, nullable=True)
     upstream_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[InvocationFailureReason | None] = mapped_column(

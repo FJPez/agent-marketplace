@@ -26,6 +26,8 @@ from app.services.revision_service import UpdateImpact
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+_UNSET = object()
+
 
 class FakeSession:
     def __init__(self) -> None:
@@ -127,9 +129,23 @@ class FakeServiceRepo:
             return []
         return [self.service]
 
-    def update_service(self, service: Service, **kwargs: object) -> Service:
-        for field, value in kwargs.items():
-            setattr(service, field, value)
+    def update_service(
+        self,
+        service: Service,
+        *,
+        name: str | object = _UNSET,
+        summary: str | object = _UNSET,
+        description: str | None | object = _UNSET,
+    ) -> Service:
+        if name is not _UNSET:
+            assert isinstance(name, str)
+            service.name = name
+        if summary is not _UNSET:
+            assert isinstance(summary, str)
+            service.summary = summary
+        if description is not _UNSET:
+            assert description is None or isinstance(description, str)
+            service.description = description
         return service
 
     async def replace_tags(self, service: Service, *, tags: list[str]) -> Service:
@@ -142,22 +158,35 @@ class FakeEndpointRepo:
     def __init__(self, endpoint: ServiceEndpoint | None = None) -> None:
         self.endpoint = endpoint
 
-    def add(self, **kwargs: object) -> ServiceEndpoint:
+    def add(
+        self,
+        *,
+        service_id: int,
+        key: str,
+        name: str,
+        summary: str | None,
+        description: str | None,
+        access_mode: AccessMode,
+        request_schema: dict[str, object],
+        response_schema: dict[str, object],
+        timeout_seconds: int,
+        is_enabled: bool,
+    ) -> ServiceEndpoint:
         self.endpoint = ServiceEndpoint(
             id=303,
-            service_id=cast("int", kwargs["service_id"]),
-            key=cast("str", kwargs["key"]),
-            name=cast("str", kwargs["name"]),
-            summary=cast("str | None", kwargs["summary"]),
-            description=cast("str | None", kwargs["description"]),
-            access_mode=cast("AccessMode", kwargs["access_mode"]),
-            request_schema=cast("dict[str, object]", kwargs["request_schema"]),
-            response_schema=cast("dict[str, object]", kwargs["response_schema"]),
-            timeout_seconds=cast("int", kwargs["timeout_seconds"]),
-            is_enabled=cast("bool", kwargs["is_enabled"]),
+            service_id=service_id,
+            key=key,
+            name=name,
+            summary=summary,
+            description=description,
+            access_mode=access_mode,
+            request_schema=request_schema,
+            response_schema=response_schema,
+            timeout_seconds=timeout_seconds,
+            is_enabled=is_enabled,
         )
         self.endpoint.service = Service(
-            id=cast("int", kwargs["service_id"]),
+            id=service_id,
             provider_account_id=42,
             slug="service",
             name="Service",
@@ -177,9 +206,43 @@ class FakeEndpointRepo:
         _ = provider_account_id
         return self.endpoint
 
-    def update_endpoint(self, endpoint: ServiceEndpoint, **kwargs: object) -> ServiceEndpoint:
-        for field, value in kwargs.items():
-            setattr(endpoint, field, value)
+    def update_endpoint(
+        self,
+        endpoint: ServiceEndpoint,
+        *,
+        name: str | object = _UNSET,
+        summary: str | None | object = _UNSET,
+        description: str | None | object = _UNSET,
+        access_mode: AccessMode | object = _UNSET,
+        request_schema: dict[str, object] | object = _UNSET,
+        response_schema: dict[str, object] | object = _UNSET,
+        timeout_seconds: int | object = _UNSET,
+        is_enabled: bool | object = _UNSET,
+    ) -> ServiceEndpoint:
+        if name is not _UNSET:
+            assert isinstance(name, str)
+            endpoint.name = name
+        if summary is not _UNSET:
+            assert summary is None or isinstance(summary, str)
+            endpoint.summary = summary
+        if description is not _UNSET:
+            assert description is None or isinstance(description, str)
+            endpoint.description = description
+        if access_mode is not _UNSET:
+            assert isinstance(access_mode, AccessMode)
+            endpoint.access_mode = access_mode
+        if request_schema is not _UNSET:
+            assert isinstance(request_schema, dict)
+            object.__setattr__(endpoint, "request_schema", request_schema)
+        if response_schema is not _UNSET:
+            assert isinstance(response_schema, dict)
+            object.__setattr__(endpoint, "response_schema", response_schema)
+        if timeout_seconds is not _UNSET:
+            assert isinstance(timeout_seconds, int)
+            endpoint.timeout_seconds = timeout_seconds
+        if is_enabled is not _UNSET:
+            assert isinstance(is_enabled, bool)
+            endpoint.is_enabled = is_enabled
         return endpoint
 
 
@@ -187,14 +250,22 @@ class FakeUpstreamRepo:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def upsert(self, endpoint: ServiceEndpoint, **kwargs: object) -> object:
+    async def upsert(
+        self,
+        endpoint: ServiceEndpoint,
+        *,
+        base_url: str,
+        path: str,
+        http_method: str,
+        config: dict[str, object],
+    ) -> object:
         self.calls += 1
         endpoint.upstream = ProviderUpstream(
             endpoint_id=endpoint.id,
-            base_url=cast("str", kwargs["base_url"]),
-            path=cast("str", kwargs["path"]),
-            http_method=cast("str", kwargs["http_method"]),
-            config=cast("dict[str, object]", kwargs["config"]),
+            base_url=base_url,
+            path=path,
+            http_method=http_method,
+            config=config,
         )
         return endpoint.upstream
 
@@ -669,7 +740,7 @@ async def test_upsert_upstream_marks_endpoint_as_having_upstream() -> None:
         endpoint_id=303,
         request=EndpointUpstreamRequest.model_validate(
             {
-                "base_url": "https://provider.internal",
+                "base_url": "http://127.0.0.1:9000",
                 "path": "/translate",
                 "http_method": "POST",
                 "config": {"auth": {"type": "bearer"}},

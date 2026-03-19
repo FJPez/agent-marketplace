@@ -4,8 +4,8 @@ from pydantic import BaseModel, ConfigDict
 
 from app.core.enums import PricingModelType
 from app.db.models import Quote
-from app.schemas.common import Id, RequestHash, Timestamp
-from app.schemas.service import CurrencyCode, SchemaObject, Slug
+from app.schemas.common import Id, JsonValue, RequestHash, Timestamp
+from app.schemas.service import CurrencyCode, Slug
 
 
 class QuoteCreateRequest(BaseModel):
@@ -23,7 +23,7 @@ class QuoteCreateRequest(BaseModel):
     )
 
     endpoint_key: Slug
-    payload: SchemaObject
+    payload: JsonValue
 
 
 class QuoteResponse(BaseModel):

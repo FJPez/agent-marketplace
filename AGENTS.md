@@ -22,8 +22,17 @@ For any task, read in this order:
 3. `codex-agent-plan/README.md`
 4. `codex-agent-plan/docs/00-repo-bootstrap-contract.md`
 5. `codex-agent-plan/docs/10-definition-of-done-by-branch.md`
-6. The branch-specific prompt in `codex-agent-plan/PROMPTS/` if one exists
-7. Any branch-specific docs referenced by the prompt
+6. Any current-state docs most relevant to the touched area, such as:
+   - `codex-agent-plan/docs/04-api-contract.md`
+   - `docs/api-reference.md`
+   - `docs/agent-setup.md`
+   - `docs/demo-setup.md`
+7. The branch-specific prompt in `codex-agent-plan/PROMPTS/` if the task is explicitly tied to the historical phase plan
+8. Any branch-specific docs referenced by that prompt
+
+`codex-agent-plan/PROMPTS/` contains retained branch handoff artifacts from the
+staged build-out of the repo. Treat those prompts as historical execution
+context unless the current task explicitly maps to that plan.
 
 ## Stack baseline
 
@@ -89,12 +98,22 @@ alembic/
 
 Only the owning branch should create the migration for its table family.
 
-Table ownership:
+Historical note:
+
+- the earliest phase plan used legacy `provider_profiles` and
+  `consumer_profiles` tables
+- current head no longer uses those tables; do not treat them as active schema
+
+Current table ownership:
 
 - `feat/database-core`
-  - `accounts`
-  - `provider_profiles`
-  - `consumer_profiles`
+  - Alembic and DB scaffolding
+  - original `accounts` baseline
+
+- `feat/auth-and-identity`
+  - current unified `accounts` shape
+  - `api_keys`
+  - `wallet_change_log`
 
 - `feat/provider-services`
   - `services`

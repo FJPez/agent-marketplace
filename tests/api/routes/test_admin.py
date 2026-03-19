@@ -1,75 +1,31 @@
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.domain import (
+    AdminAccountFactory,
+    ConsumerAccountFactory,
+    ProviderAccountFactory,
+    ServiceFactory,
+)
 from tests.helpers.auth import auth_headers_for_account_id
-
-from app.db.models import Account, Service
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
     return auth_headers_for_account_id(account_id)
 
 
-async def _create_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account()
-        session.add(account)
-        await session.flush()
-        return account.id
-
-
-async def _create_admin_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(is_admin=True)
-        session.add(account)
-        await session.flush()
-        return account.id
-
-
-async def _create_provider_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
-        session.add(account)
-        await session.flush()
-        return account.id
-
-
-async def _seed_service(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    *,
-    provider_account_id: int,
-    slug: str,
-) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name=f"{slug} name",
-            summary=f"{slug} summary",
-            description=None,
-        )
-        session.add(service)
-        await session.flush()
-        return service.id
-
-
 @pytest.mark.asyncio
 async def test_suspend_route_records_action(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
 ) -> None:
-    actor_account_id = await _create_admin_account(db_session_factory)
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
+    actor_account_id = await admin_account_factory()
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
         provider_account_id=provider_account_id,
         slug="admin-target",
+        description=None,
     )
 
     response = await async_client.post(
@@ -88,14 +44,16 @@ async def test_suspend_route_records_action(
 @pytest.mark.asyncio
 async def test_restore_route_clears_previous_state(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
 ) -> None:
-    actor_account_id = await _create_admin_account(db_session_factory)
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
+    actor_account_id = await admin_account_factory()
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
         provider_account_id=provider_account_id,
         slug="restore-target",
+        description=None,
     )
 
     suspend_response = await async_client.post(
@@ -118,14 +76,16 @@ async def test_restore_route_clears_previous_state(
 @pytest.mark.asyncio
 async def test_list_actions_route_returns_history_for_service(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
 ) -> None:
-    actor_account_id = await _create_admin_account(db_session_factory)
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
+    actor_account_id = await admin_account_factory()
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
         provider_account_id=provider_account_id,
         slug="history-target",
+        description=None,
     )
 
     await async_client.post(
@@ -164,9 +124,9 @@ async def test_admin_routes_require_authentication(
 @pytest.mark.asyncio
 async def test_admin_routes_reject_non_admin_user(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    consumer_account_factory: ConsumerAccountFactory,
 ) -> None:
-    non_admin_id = await _create_account(db_session_factory)
+    non_admin_id = await consumer_account_factory(display_name="User")
     headers = _auth_headers(non_admin_id)
 
     suspend = await async_client.post(
@@ -201,9 +161,9 @@ async def test_admin_routes_reject_non_admin_user(
 @pytest.mark.asyncio
 async def test_suspend_rejects_empty_reason(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
 ) -> None:
-    admin_id = await _create_admin_account(db_session_factory)
+    admin_id = await admin_account_factory()
 
     response = await async_client.post(
         "/v1/admin/services/1/suspend",
@@ -217,9 +177,9 @@ async def test_suspend_rejects_empty_reason(
 @pytest.mark.asyncio
 async def test_suspend_rejects_whitespace_only_reason(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
 ) -> None:
-    admin_id = await _create_admin_account(db_session_factory)
+    admin_id = await admin_account_factory()
 
     response = await async_client.post(
         "/v1/admin/services/1/suspend",
@@ -233,9 +193,9 @@ async def test_suspend_rejects_whitespace_only_reason(
 @pytest.mark.asyncio
 async def test_suspend_nonexistent_service_returns_404(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
 ) -> None:
-    admin_id = await _create_admin_account(db_session_factory)
+    admin_id = await admin_account_factory()
 
     response = await async_client.post(
         "/v1/admin/services/999999/suspend",
@@ -249,14 +209,16 @@ async def test_suspend_nonexistent_service_returns_404(
 @pytest.mark.asyncio
 async def test_restore_clear_service_returns_409(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
 ) -> None:
-    admin_id = await _create_admin_account(db_session_factory)
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
+    admin_id = await admin_account_factory()
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
         provider_account_id=provider_account_id,
         slug="clear-service",
+        description=None,
     )
 
     response = await async_client.post(
@@ -271,14 +233,16 @@ async def test_restore_clear_service_returns_409(
 @pytest.mark.asyncio
 async def test_delist_route_records_action(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    admin_account_factory: AdminAccountFactory,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
 ) -> None:
-    admin_id = await _create_admin_account(db_session_factory)
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
+    admin_id = await admin_account_factory()
+    provider_account_id = await provider_account_factory()
+    service_id = await service_factory(
         provider_account_id=provider_account_id,
         slug="delist-target",
+        description=None,
     )
 
     response = await async_client.post(

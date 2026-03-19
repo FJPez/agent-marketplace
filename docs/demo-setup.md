@@ -251,6 +251,11 @@ In a second terminal, seed the demo service:
 make seed
 ```
 
+This guide uses `make seed` for the deterministic paid-demo path. If you want
+to exercise provider authoring through the public API instead of seeding the
+database, use `uv run python examples/provider_publish.py`; that manual authoring
+flow is described in [`examples/README.md`](../examples/README.md).
+
 Expected output:
 
 ```text
@@ -364,6 +369,12 @@ curl -X POST http://127.0.0.1:8000/v1/auth/api-keys \
 
 The response includes the plaintext `api_key` once. You can then replace the
 JWT with `Authorization: Bearer amp_...` for later quote or invoke calls.
+
+For a runnable version of that lifecycle, use:
+
+```bash
+uv run python examples/api_key_client.py
+```
 
 ## Expected Results
 

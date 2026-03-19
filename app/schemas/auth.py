@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.account import AccountResponse
 
@@ -63,8 +63,26 @@ class ApiKeyCreateRequest(BaseModel):
         }
     )
 
-    name: str | None = None
+    name: str | None = Field(default=None, max_length=255)
     expires_at: datetime | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("name must not be blank")
+        return value
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expires_at(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("expires_at must include timezone information")
+        return value
 
 
 class ApiKeyResponse(BaseModel):

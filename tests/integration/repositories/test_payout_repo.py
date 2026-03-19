@@ -2,166 +2,138 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.domain import (
+    ConsumerAccountFactory,
+    EndpointFactory,
+    InvocationFactory,
+    PaymentAttemptFactory,
+    PricingFactory,
+    ProviderAccountFactory,
+    QuoteFactory,
+    ServiceFactory,
+)
 
 from app.core.enums import (
     AccessMode,
     InvocationStatus,
+    PaymentAttemptStatus,
     PayoutStatus,
     PricingModelType,
-    ServiceLifecycle,
-)
-from app.db.models import (
-    Account,
-    Invocation,
-    PaymentAttempt,
-    Quote,
-    Service,
-    ServiceEndpoint,
-    ServiceRevision,
 )
 from app.repositories.payout_repo import PayoutExecutionRepository, PayoutReportingRepository
 
 
 async def _seed_payout_dependencies(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+    quote_factory: QuoteFactory,
+    invocation_factory: InvocationFactory,
+    payment_attempt_factory: PaymentAttemptFactory,
 ) -> tuple[int, int, int, int, int, int]:
-    async with db_session_factory.begin() as session:
-        provider = Account(
-            display_name="Provider",
-            wallet_address="0x00000000000000000000000000000000000000aa",
-        )
-        consumer = Account(display_name="Consumer")
-        session.add_all([provider, consumer])
-        await session.flush()
+    provider_account_id = await provider_account_factory(
+        display_name="Provider",
+        wallet_address="0x00000000000000000000000000000000000000aa",
+    )
+    consumer_account_id = await consumer_account_factory(display_name="Consumer")
+    service_id = await service_factory(
+        provider_account_id=provider_account_id,
+        slug="payout-reporting",
+        with_revision=True,
+    )
+    endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        access_mode=AccessMode.PAID,
+    )
+    await pricing_factory(
+        endpoint_id=endpoint_id,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=500,
+        currency="USD",
+    )
+    quote_id = await quote_factory(
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    invocation_id = await invocation_factory(
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.PAID,
+        quote_id=quote_id,
+        idempotency_key="payout-repo-key",
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "bonjour"},
+        upstream_status_code=200,
+    )
+    retry_invocation_id = await invocation_factory(
+        consumer_account_id=consumer_account_id,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        endpoint_key="translate",
+        access_mode=AccessMode.PAID,
+        quote_id=quote_id,
+        idempotency_key="payout-repo-key-2",
+        payload={"text": "retry"},
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "salut"},
+        upstream_status_code=200,
+    )
+    payment_attempt_id = await payment_attempt_factory(
+        consumer_account_id=consumer_account_id,
+        quote_id=quote_id,
+        invocation_id=invocation_id,
+        idempotency_key="payout-repo-key",
+        payment_identifier="payout-repo-payment",
+        status=PaymentAttemptStatus.CONSUMED,
+        payment_requirement={"payment_amount": 5_000_000},
+        payment_payload={"payment_identifier": "payout-repo-payment"},
+        verify_outcome={"ok": True},
+        settle_outcome={"ok": True},
+        facilitator_reference="settle-payout-repo",
+    )
+    retry_attempt_id = await payment_attempt_factory(
+        consumer_account_id=consumer_account_id,
+        quote_id=quote_id,
+        invocation_id=retry_invocation_id,
+        idempotency_key="payout-repo-key-2",
+        payment_identifier="payout-repo-payment-2",
+        status=PaymentAttemptStatus.CONSUMED,
+        payment_requirement={"payment_amount": 5_000_000},
+        payment_payload={"payment_identifier": "payout-repo-payment-2"},
+        verify_outcome={"ok": True},
+        settle_outcome={"ok": True},
+        facilitator_reference="settle-payout-repo-2",
+    )
 
-        service = Service(
-            provider_account_id=provider.id,
-            slug="payout-reporting",
-            name="Payout Reporting",
-            summary="Summary",
-            description=None,
-            lifecycle=ServiceLifecycle.ACTIVE,
-        )
-        session.add(service)
-        await session.flush()
-
-        endpoint = ServiceEndpoint(
-            service_id=service.id,
-            key="translate",
-            name="Translate",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.PAID,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-
-        revision = ServiceRevision(
-            service_id=service.id,
-            revision_number=1,
-            change_token="c" * 64,
-            snapshot={"slug": service.slug},
-        )
-        session.add(revision)
-        await session.flush()
-
-        quote = Quote(
-            service_id=service.id,
-            endpoint_id=endpoint.id,
-            endpoint_key=endpoint.key,
-            request_hash="a" * 64,
-            pricing_type=PricingModelType.FIXED_PER_CALL,
-            amount_minor=500,
-            currency="USD",
-            service_revision_id=revision.id,
-            service_change_token=revision.change_token,
-            expires_at=datetime.now(UTC) + timedelta(minutes=5),
-        )
-        session.add(quote)
-        await session.flush()
-
-        invocation = Invocation(
-            consumer_account_id=consumer.id,
-            service_id=service.id,
-            endpoint_id=endpoint.id,
-            endpoint_key=endpoint.key,
-            access_mode=AccessMode.PAID,
-            quote_id=quote.id,
-            idempotency_key="payout-repo-key",
-            request_hash="b" * 64,
-            status=InvocationStatus.SUCCEEDED,
-            response_payload={"result": "bonjour"},
-            upstream_status_code=200,
-            error_message=None,
-            failure_reason=None,
-        )
-        session.add(invocation)
-        await session.flush()
-        retry_invocation = Invocation(
-            consumer_account_id=consumer.id,
-            service_id=service.id,
-            endpoint_id=endpoint.id,
-            endpoint_key=endpoint.key,
-            access_mode=AccessMode.PAID,
-            quote_id=quote.id,
-            idempotency_key="payout-repo-key-2",
-            request_hash="c" * 64,
-            status=InvocationStatus.SUCCEEDED,
-            response_payload={"result": "salut"},
-            upstream_status_code=200,
-            error_message=None,
-            failure_reason=None,
-        )
-        session.add(retry_invocation)
-        await session.flush()
-
-        attempt = PaymentAttempt(
-            consumer_account_id=consumer.id,
-            quote_id=quote.id,
-            invocation_id=invocation.id,
-            idempotency_key="payout-repo-key",
-            payment_identifier="payout-repo-payment",
-            payment_requirement={"payment_amount": 5_000_000},
-            payment_payload={"payment_identifier": "payout-repo-payment"},
-            verify_outcome={"ok": True},
-            settle_outcome={"ok": True},
-            facilitator_reference="settle-payout-repo",
-        )
-        session.add(attempt)
-        await session.flush()
-        retry_attempt = PaymentAttempt(
-            consumer_account_id=consumer.id,
-            quote_id=quote.id,
-            invocation_id=retry_invocation.id,
-            idempotency_key="payout-repo-key-2",
-            payment_identifier="payout-repo-payment-2",
-            payment_requirement={"payment_amount": 5_000_000},
-            payment_payload={"payment_identifier": "payout-repo-payment-2"},
-            verify_outcome={"ok": True},
-            settle_outcome={"ok": True},
-            facilitator_reference="settle-payout-repo-2",
-        )
-        session.add(retry_attempt)
-        await session.flush()
-
-        return (
-            provider.id,
-            service.id,
-            invocation.id,
-            attempt.id,
-            retry_invocation.id,
-            retry_attempt.id,
-        )
+    return (
+        provider_account_id,
+        service_id,
+        invocation_id,
+        payment_attempt_id,
+        retry_invocation_id,
+        retry_attempt_id,
+    )
 
 
 @pytest.mark.asyncio
 async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+    quote_factory: QuoteFactory,
+    invocation_factory: InvocationFactory,
+    payment_attempt_factory: PaymentAttemptFactory,
 ) -> None:
     _ = migrated_database
     (
@@ -171,7 +143,16 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
         payment_attempt_id,
         retry_invocation_id,
         retry_attempt_id,
-    ) = await _seed_payout_dependencies(db_session_factory)
+    ) = await _seed_payout_dependencies(
+        provider_account_factory=provider_account_factory,
+        consumer_account_factory=consumer_account_factory,
+        service_factory=service_factory,
+        endpoint_factory=endpoint_factory,
+        pricing_factory=pricing_factory,
+        quote_factory=quote_factory,
+        invocation_factory=invocation_factory,
+        payment_attempt_factory=payment_attempt_factory,
+    )
 
     async with db_session_factory.begin() as session:
         execution_repo = PayoutExecutionRepository(session)
@@ -224,7 +205,7 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
     assert [payout.status.value for payout in payouts] == ["failed", "sent"]
     assert failed[0].error_message == "rpc unavailable"
     assert [payout.id for payout in replay] == [first.id, second.id]
-    assert max_chain_nonce == 9
+    assert max_chain_nonce == 10
     assert len(summaries) == 1
     summary = summaries[0]
     assert summary.currency == "USDC"
@@ -239,6 +220,14 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
 async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+    quote_factory: QuoteFactory,
+    invocation_factory: InvocationFactory,
+    payment_attempt_factory: PaymentAttemptFactory,
 ) -> None:
     _ = migrated_database
     (
@@ -248,7 +237,16 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
         payment_attempt_id,
         retry_invocation_id,
         retry_attempt_id,
-    ) = await _seed_payout_dependencies(db_session_factory)
+    ) = await _seed_payout_dependencies(
+        provider_account_factory=provider_account_factory,
+        consumer_account_factory=consumer_account_factory,
+        service_factory=service_factory,
+        endpoint_factory=endpoint_factory,
+        pricing_factory=pricing_factory,
+        quote_factory=quote_factory,
+        invocation_factory=invocation_factory,
+        payment_attempt_factory=payment_attempt_factory,
+    )
 
     async with db_session_factory.begin() as session:
         execution_repo = PayoutExecutionRepository(session)

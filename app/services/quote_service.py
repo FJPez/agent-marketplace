@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.enums import PricingModelType
+from app.core.enums import AccessMode, PricingModelType
 from app.core.logging import (
     QUOTE_ID_FIELD,
     SERVICE_ID_FIELD,
@@ -11,6 +11,7 @@ from app.core.logging import (
     get_logger,
 )
 from app.core.request_hash import hash_request_body
+from app.core.request_schema_validation import validate_request_payload
 from app.db.models import Quote, ServiceEndpoint
 from app.repositories.quote_repo import QuoteRepository
 from app.repositories.service_repo import ServiceRepository
@@ -51,7 +52,7 @@ class QuoteService:
         *,
         service_id_or_slug: str,
         endpoint_key: str,
-        payload: dict[str, object],
+        payload: object,
     ) -> Quote:
         service = await self._service_repo.get_public(service_id_or_slug=service_id_or_slug)
         if service is None:
@@ -65,6 +66,12 @@ class QuoteService:
         endpoint = self._get_enabled_endpoint(service.endpoints, endpoint_key=endpoint_key)
         if endpoint is None:
             raise QuoteNotFoundError("endpoint not found")
+        self._ensure_endpoint_is_quoteable(endpoint)
+        validate_request_payload(
+            payload=payload,
+            request_schema=endpoint.request_schema,
+        )
+        assert endpoint.pricing is not None
 
         request_hash = hash_request_body(payload)
         ttl = timedelta(seconds=get_settings().quote_ttl_seconds)
@@ -75,9 +82,9 @@ class QuoteService:
             endpoint_id=endpoint.id,
             endpoint_key=endpoint.key,
             request_hash=request_hash,
-            pricing_type=self._get_pricing_type(endpoint),
-            amount_minor=None if endpoint.pricing is None else endpoint.pricing.amount_minor,
-            currency=None if endpoint.pricing is None else endpoint.pricing.currency,
+            pricing_type=endpoint.pricing.pricing_type,
+            amount_minor=endpoint.pricing.amount_minor,
+            currency=endpoint.pricing.currency,
             service_revision_id=service.current_revision_id,
             service_change_token=service.current_change_token,
             expires_at=expires_at,
@@ -100,7 +107,7 @@ class QuoteService:
         self,
         *,
         quote_id: int,
-        payload: dict[str, object],
+        payload: object,
         now: datetime | None = None,
     ) -> Quote:
         quote = await self._quote_repo.get(quote_id=quote_id)
@@ -147,11 +154,6 @@ class QuoteService:
                 return endpoint
         return None
 
-    def _get_pricing_type(self, endpoint: ServiceEndpoint) -> PricingModelType:
-        if endpoint.pricing is not None:
-            return endpoint.pricing.pricing_type
-        return PricingModelType.FREE
-
     async def _ensure_service_is_listed(self, service_id: int) -> None:
         try:
             await self._moderation_service.ensure_service_listed(service_id)
@@ -166,3 +168,15 @@ class QuoteService:
     ) -> None:
         if service_revision_id is None or service_change_token is None:
             raise QuoteUnavailableError("service contract is not quoteable")
+
+    def _ensure_endpoint_is_quoteable(self, endpoint: ServiceEndpoint) -> None:
+        pricing = endpoint.pricing
+        if endpoint.access_mode is not AccessMode.PAID:
+            raise QuoteUnavailableError("endpoint is not quoteable")
+        if (
+            pricing is None
+            or pricing.pricing_type is not PricingModelType.FIXED_PER_CALL
+            or pricing.amount_minor is None
+            or pricing.currency is None
+        ):
+            raise QuoteUnavailableError("endpoint is not quoteable")

@@ -4,33 +4,31 @@ import pytest
 from pydantic import HttpUrl, TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.domain import (
+    create_endpoint_record,
+    create_pricing_record,
+    create_provider_account_record,
+    create_service_record,
+    create_upstream_record,
+)
 
 from app.core.actor import ActorContext
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
-from app.db.models import (
-    Account,
-    PricingModel,
-    ProviderUpstream,
-    Service,
-    ServiceEndpoint,
-    ServiceRevision,
-)
+from app.db.models import Service, ServiceRevision
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
 from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
 from app.services.provider_endpoint_service import ProviderEndpointService
-from app.services.provider_service_errors import ProviderServiceStateError
 from app.services.publish_service import PublishService
 
 
 async def _create_provider_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_provider_account_record(
+        db_session_factory,
+        display_name="Provider",
+    )
 
 
 async def _seed_service(
@@ -40,18 +38,12 @@ async def _seed_service(
     slug: str,
     lifecycle: ServiceLifecycle,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name=f"{slug} name",
-            summary=f"{slug} summary",
-            description=f"{slug} description",
-            lifecycle=lifecycle,
-        )
-        session.add(service)
-        await session.flush()
-        return service.id
+    return await create_service_record(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug=slug,
+        lifecycle=lifecycle,
+    )
 
 
 async def _seed_endpoint(
@@ -61,22 +53,12 @@ async def _seed_endpoint(
     key: str = "translate",
     access_mode: AccessMode = AccessMode.FREE,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key=key,
-            name=f"{key} name",
-            summary=f"{key} summary",
-            description=f"{key} description",
-            access_mode=access_mode,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-        return endpoint.id
+    return await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key=key,
+        access_mode=access_mode,
+    )
 
 
 async def _seed_fixed_price(
@@ -86,15 +68,13 @@ async def _seed_fixed_price(
     amount_minor: int = 1500,
     currency: str = "USD",
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            PricingModel(
-                endpoint_id=endpoint_id,
-                pricing_type=PricingModelType.FIXED_PER_CALL,
-                amount_minor=amount_minor,
-                currency=currency,
-            ),
-        )
+    await create_pricing_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=amount_minor,
+        currency=currency,
+    )
 
 
 async def _seed_upstream(
@@ -103,22 +83,11 @@ async def _seed_upstream(
     endpoint_id: int,
     path: str = "/invoke",
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint_id,
-                base_url="https://provider.internal",
-                path=path,
-                http_method="POST",
-                config={
-                    "auth": {
-                        "type": "hmac_sha256",
-                        "key_id": "gateway-key",
-                        "secret": "super-secret",
-                    },
-                },
-            ),
-        )
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        path=path,
+    )
 
 
 @pytest.mark.asyncio
@@ -141,14 +110,21 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
     )
 
     original_next_revision_number = ServiceRevisionRepository.next_revision_number
+    first_revision_lookup = asyncio.Event()
+    release_first_revision_lookup = asyncio.Event()
+    next_revision_lookup_calls = 0
 
     async def delayed_next_revision_number(
         self: ServiceRevisionRepository,
         *,
         service_id: int,
     ) -> int:
+        nonlocal next_revision_lookup_calls
         revision_number = await original_next_revision_number(self, service_id=service_id)
-        await asyncio.sleep(0.05)
+        next_revision_lookup_calls += 1
+        if next_revision_lookup_calls == 1:
+            first_revision_lookup.set()
+            await release_first_revision_lookup.wait()
         return revision_number
 
     monkeypatch.setattr(
@@ -166,10 +142,11 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
                 request=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
             )
 
-    await asyncio.gather(
-        update_timeout(45),
-        update_timeout(60),
-    )
+    first_update = asyncio.create_task(update_timeout(45))
+    await first_revision_lookup.wait()
+    second_update = asyncio.create_task(update_timeout(60))
+    release_first_revision_lookup.set()
+    await asyncio.gather(first_update, second_update)
 
     async with db_session_factory() as session:
         revision_count = await session.scalar(
@@ -186,7 +163,7 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
 
 
 @pytest.mark.asyncio
-async def test_publish_wins_over_concurrent_draft_upstream_mutation(
+async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -207,8 +184,10 @@ async def test_publish_wins_over_concurrent_draft_upstream_mutation(
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
 
     publish_has_lock = asyncio.Event()
+    mutation_lookup_started = asyncio.Event()
     release_publish = asyncio.Event()
     original_get_owned_for_update = ServiceRepository.get_owned_for_update
+    owned_lookup_calls = 0
 
     async def delayed_get_owned_for_update(
         self: ServiceRepository,
@@ -216,12 +195,16 @@ async def test_publish_wins_over_concurrent_draft_upstream_mutation(
         service_id: int,
         provider_account_id: int,
     ) -> Service | None:
+        nonlocal owned_lookup_calls
+        owned_lookup_calls += 1
+        if owned_lookup_calls == 2:
+            mutation_lookup_started.set()
         service = await original_get_owned_for_update(
             self,
             service_id=service_id,
             provider_account_id=provider_account_id,
         )
-        if service is not None and service.id == service_id:
+        if owned_lookup_calls == 1 and service is not None and service.id == service_id:
             publish_has_lock.set()
             await release_publish.wait()
         return service
@@ -244,26 +227,34 @@ async def test_publish_wins_over_concurrent_draft_upstream_mutation(
         await publish_has_lock.wait()
         async with db_session_factory() as session:
             service = ProviderEndpointService(session)
-            with pytest.raises(
-                ProviderServiceStateError,
-                match="service is not mutable outside draft",
-            ):
-                await service.upsert_upstream(
-                    ActorContext(account_id=provider_account_id),
-                    endpoint_id=endpoint_id,
-                    request=EndpointUpstreamRequest(
-                        base_url=TypeAdapter(HttpUrl).validate_python(
-                            "https://provider.internal",
-                        ),
-                        path="/mutated",
-                        http_method="POST",
-                        config={},
+            await service.upsert_upstream(
+                ActorContext(account_id=provider_account_id),
+                endpoint_id=endpoint_id,
+                request=EndpointUpstreamRequest(
+                    base_url=TypeAdapter(HttpUrl).validate_python(
+                        "http://127.0.0.1:9000",
                     ),
-                )
+                    path="/mutated",
+                    http_method="POST",
+                    config={},
+                ),
+            )
 
     publish_task = asyncio.create_task(publish_service())
     await publish_has_lock.wait()
     mutate_task = asyncio.create_task(mutate_upstream())
+    await mutation_lookup_started.wait()
     release_publish.set()
     await publish_task
     await mutate_task
+
+    async with db_session_factory() as session:
+        service = await ServiceRepository(session).get_owned(
+            service_id=service_id,
+            provider_account_id=provider_account_id,
+        )
+
+    assert service is not None
+    assert service.lifecycle is ServiceLifecycle.ACTIVE
+    assert service.endpoints[0].upstream is not None
+    assert service.endpoints[0].upstream.path == "/mutated"

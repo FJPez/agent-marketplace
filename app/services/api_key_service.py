@@ -30,13 +30,18 @@ class ApiKeyService:
         name: str | None,
         expires_at: datetime | None,
     ) -> tuple[ApiKey, str]:
+        normalized_name = name.strip() if name is not None else None
+        if normalized_name is not None and not normalized_name:
+            raise ApiKeyValidationError("name must not be blank")
+        if expires_at is not None and (expires_at.tzinfo is None or expires_at.utcoffset() is None):
+            raise ApiKeyValidationError("expires_at must include timezone information")
         if expires_at is not None and expires_at <= datetime.now(UTC):
             raise ApiKeyValidationError("expires_at must be in the future")
 
         material = generate_api_key(self._settings.api_key_prefix)
         api_key = self._api_key_repo.add(
             account_id=actor.account_id,
-            name=name,
+            name=normalized_name,
             key_prefix=material.key_prefix,
             key_hash=material.key_hash,
             expires_at=expires_at,

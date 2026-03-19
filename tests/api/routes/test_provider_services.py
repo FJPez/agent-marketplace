@@ -2,23 +2,30 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.domain import (
+    create_admin_account_record,
+    create_consumer_account_record,
+    create_endpoint_record,
+    create_health_check_record,
+    create_moderation_action_record,
+    create_pricing_record,
+    create_provider_account_record,
+    create_service_record,
+    create_upstream_record,
+)
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
-from app.db.models import (
-    Account,
-    ModerationAction,
-    PricingModel,
-    ProviderUpstream,
-    Service,
-    ServiceEndpoint,
-    ServiceHealthCheck,
-    ServiceRevision,
-)
+from app.core.security import hash_api_key
+from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
     return auth_headers_for_account_id(account_id)
+
+
+def _api_key_headers(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 async def _create_provider_account(
@@ -26,11 +33,10 @@ async def _create_provider_account(
     *,
     display_name: str = "Provider Account",
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name=display_name)
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await create_provider_account_record(
+        db_session_factory,
+        display_name=display_name,
+    )
 
 
 async def _create_account(
@@ -38,11 +44,12 @@ async def _create_account(
     *,
     is_admin: bool = False,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(is_admin=is_admin)
-        session.add(account)
-        await session.flush()
-        return account.id
+    if is_admin:
+        return await create_admin_account_record(db_session_factory)
+    return await create_consumer_account_record(
+        db_session_factory,
+        display_name="Authenticated User",
+    )
 
 
 async def _seed_service(
@@ -55,18 +62,15 @@ async def _seed_service(
     description: str | None = "Seeded description",
     lifecycle: ServiceLifecycle = ServiceLifecycle.DRAFT,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name=name,
-            summary=summary,
-            description=description,
-            lifecycle=lifecycle,
-        )
-        session.add(service)
-        await session.flush()
-        return service.id
+    return await create_service_record(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug=slug,
+        name=name,
+        summary=summary,
+        description=description,
+        lifecycle=lifecycle,
+    )
 
 
 async def _seed_endpoint(
@@ -77,22 +81,15 @@ async def _seed_endpoint(
     name: str = "Translate",
     access_mode: AccessMode = AccessMode.FREE,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key=key,
-            name=name,
-            summary="Endpoint summary",
-            description="Endpoint description",
-            access_mode=access_mode,
-            request_schema={"type": "object"},
-            response_schema={"type": "object"},
-            timeout_seconds=30,
-            is_enabled=True,
-        )
-        session.add(endpoint)
-        await session.flush()
-        return endpoint.id
+    return await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key=key,
+        name=name,
+        summary="Endpoint summary",
+        description="Endpoint description",
+        access_mode=access_mode,
+    )
 
 
 async def _seed_upstream(
@@ -100,22 +97,10 @@ async def _seed_upstream(
     *,
     endpoint_id: int,
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ProviderUpstream(
-                endpoint_id=endpoint_id,
-                base_url="https://provider.internal",
-                path="/invoke",
-                http_method="POST",
-                config={
-                    "auth": {
-                        "type": "hmac_sha256",
-                        "key_id": "gateway-key",
-                        "secret": "super-secret",
-                    },
-                },
-            ),
-        )
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+    )
 
 
 async def _seed_pricing(
@@ -126,15 +111,13 @@ async def _seed_pricing(
     amount_minor: int | None = 1500,
     currency: str | None = "USD",
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            PricingModel(
-                endpoint_id=endpoint_id,
-                pricing_type=pricing_type,
-                amount_minor=amount_minor,
-                currency=currency,
-            ),
-        )
+    await create_pricing_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        pricing_type=pricing_type,
+        amount_minor=amount_minor,
+        currency=currency,
+    )
 
 
 async def _seed_health_check(
@@ -144,16 +127,12 @@ async def _seed_health_check(
     status: ServiceHealthStatus,
     summary: str = "unhealthy",
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ServiceHealthCheck(
-                service_id=service_id,
-                check_name="publish-readiness",
-                status=status,
-                summary=summary,
-                details={"source": "test"},
-            ),
-        )
+    await create_health_check_record(
+        db_session_factory,
+        service_id=service_id,
+        status=status,
+        summary=summary,
+    )
 
 
 async def _seed_moderation_action(
@@ -162,15 +141,29 @@ async def _seed_moderation_action(
     service_id: int,
     action: str,
 ) -> None:
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=service_id,
+        action=action,
+    )
+
+
+async def _seed_api_key(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+    plaintext: str = "amp_provider-test-key",
+) -> str:
     async with db_session_factory.begin() as session:
         session.add(
-            ModerationAction(
-                service_id=service_id,
-                actor_account_id=None,
-                action=action,
-                reason="policy",
-            ),
+            ApiKey(
+                account_id=account_id,
+                name="provider-key",
+                key_prefix=plaintext[:16],
+                key_hash=hash_api_key(plaintext),
+            )
         )
+    return plaintext
 
 
 @pytest.mark.asyncio
@@ -253,6 +246,29 @@ async def test_create_provider_service_returns_created_draft_service(
     assert response.json()["endpoints"] == []
     assert response.json()["created_at"]
     assert response.json()["updated_at"]
+
+
+@pytest.mark.asyncio
+async def test_create_provider_service_accepts_api_key_bearer(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    api_key = await _seed_api_key(db_session_factory, account_id=account_id)
+
+    response = await async_client.post(
+        "/v1/provider/services",
+        headers=_api_key_headers(api_key),
+        json={
+            "slug": "api-key-service",
+            "name": "API Key Service",
+            "summary": "Created with a provider API key.",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["provider_account_id"] == account_id
+    assert response.json()["slug"] == "api-key-service"
 
 
 @pytest.mark.asyncio
@@ -611,7 +627,7 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.internal",
+            "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
             "config": {"auth": {"type": "bearer"}},
@@ -633,6 +649,68 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
     assert "path" not in endpoint
     assert "http_method" not in endpoint
     assert "config" not in endpoint
+
+
+@pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_unsafe_private_target(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": "https://127.0.0.1:9000",
+            "path": "/translate",
+            "http_method": "POST",
+            "config": {"auth": {"type": "bearer"}},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "upstream target is not allowed"}
+
+
+@pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_slashless_path(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": "http://127.0.0.1:9000",
+            "path": "translate",
+            "http_method": "POST",
+            "config": {"auth": {"type": "bearer"}},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "path"]
 
 
 @pytest.mark.asyncio
@@ -696,7 +774,7 @@ async def test_suspended_service_mutations_return_conflict(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.internal",
+            "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
             "config": {"auth": {"type": "bearer"}},
@@ -967,11 +1045,23 @@ async def test_publish_service_rejects_service_without_endpoints(
         f"/v1/provider/services/{service_id}/publish",
         headers=_auth_headers(account_id),
     )
+    async with db_session_factory() as session:
+        latest_check = await session.scalar(
+            select(ServiceHealthCheck)
+            .where(
+                ServiceHealthCheck.service_id == service_id,
+                ServiceHealthCheck.check_name == "publish-readiness",
+            )
+            .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
+        )
 
     assert response.status_code == 422
     assert response.json() == {
         "detail": "service must define at least one endpoint before publish",
     }
+    assert latest_check is not None
+    assert latest_check.status is ServiceHealthStatus.FAIL
+    assert latest_check.summary == "service must define at least one endpoint before publish"
 
 
 @pytest.mark.asyncio
@@ -1035,14 +1125,25 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)
+        latest_check = await session.scalar(
+            select(ServiceHealthCheck)
+            .where(
+                ServiceHealthCheck.service_id == service_id,
+                ServiceHealthCheck.check_name == "publish-readiness",
+            )
+            .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
+        )
 
     assert service is not None
     assert service.current_revision_id is not None
     assert service.current_change_token is not None
+    assert latest_check is not None
+    assert latest_check.status is ServiceHealthStatus.PASS
+    assert latest_check.summary == "service is publish-ready"
 
 
 @pytest.mark.asyncio
-async def test_publish_service_rejects_service_with_failed_latest_publish_readiness(
+async def test_publish_service_replaces_stale_failed_publish_readiness_with_fresh_pass(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -1067,11 +1168,28 @@ async def test_publish_service_rejects_service_with_failed_latest_publish_readin
         f"/v1/provider/services/{service_id}/publish",
         headers=_auth_headers(account_id),
     )
+    async with db_session_factory() as session:
+        checks = list(
+            (
+                await session.execute(
+                    select(ServiceHealthCheck)
+                    .where(
+                        ServiceHealthCheck.service_id == service_id,
+                        ServiceHealthCheck.check_name == "publish-readiness",
+                    )
+                    .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
 
-    assert response.status_code == 422
-    assert response.json() == {
-        "detail": "service failed latest publish-readiness health check",
-    }
+    assert response.status_code == 200
+    assert response.json()["lifecycle"] == "active"
+    assert len(checks) == 2
+    assert checks[0].status is ServiceHealthStatus.PASS
+    assert checks[0].summary == "service is publish-ready"
+    assert checks[1].status is ServiceHealthStatus.FAIL
 
 
 @pytest.mark.asyncio

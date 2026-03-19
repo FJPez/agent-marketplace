@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -9,7 +10,7 @@ class HmacAuthConfig:
     secret: str
 
 
-def get_hmac_auth_config(config: dict[str, object]) -> HmacAuthConfig | None:
+def get_hmac_auth_config(config: Mapping[str, object]) -> HmacAuthConfig | None:
     auth = config.get("auth")
     if not isinstance(auth, dict):
         return None

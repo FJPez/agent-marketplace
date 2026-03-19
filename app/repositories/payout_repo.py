@@ -212,7 +212,7 @@ class PayoutExecutionRepository:
     async def get_max_claimed_chain_nonce(self) -> int | None:
         statement = select(func.max(Payout.chain_nonce)).where(
             Payout.chain_nonce.is_not(None),
-            Payout.status.in_((PayoutStatus.PENDING, PayoutStatus.SENT)),
+            Payout.status.in_((PayoutStatus.PENDING, PayoutStatus.SENT, PayoutStatus.FAILED)),
         )
         value = await self._session.scalar(statement)
         if value is None:

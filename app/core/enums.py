@@ -26,6 +26,7 @@ class PricingModelType(StrEnum):
 
 
 class InvocationStatus(StrEnum):
+    IN_PROGRESS = "in_progress"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
@@ -34,6 +35,16 @@ class InvocationFailureReason(StrEnum):
     UPSTREAM_TIMEOUT = "upstream_timeout"
     UPSTREAM_TRANSPORT = "upstream_transport"
     UPSTREAM_RESPONSE = "upstream_response"
+
+
+class PaymentAttemptStatus(StrEnum):
+    CHALLENGED = "challenged"
+    VERIFIED = "verified"
+    VERIFY_FAILED = "verify_failed"
+    SETTLE_FAILED = "settle_failed"
+    SETTLED = "settled"
+    CONSUMED = "consumed"
+    COMPENSATION_REQUIRED = "compensation_required"
 
 
 class LedgerEntryType(StrEnum):

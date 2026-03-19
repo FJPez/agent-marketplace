@@ -1,11 +1,14 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Generator
+from contextlib import suppress
 from pathlib import Path
 
-os.environ["APP_JWT_SECRET_KEY"] = "test-secret-key-with-32-bytes-123"
-os.environ["APP_SIWE_DOMAIN"] = "testserver"
-os.environ["APP_ENV_FILE"] = ".env.test"
+# These must be set before any import of app.main, which creates the
+# FastAPI application (and validates Settings) at module level.
+os.environ.setdefault("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+os.environ.setdefault("APP_SIWE_DOMAIN", "testserver")
+os.environ.setdefault("APP_ENV_FILE", ".env.test")
 
 import coredis
 import pytest
@@ -16,6 +19,7 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.integration.db.support import (
+    PostgresUnavailableError,
     drop_test_database,
     get_test_database_url,
     recreate_test_database,
@@ -26,23 +30,34 @@ from app.core.config import Settings, get_settings
 from app.db.session import create_engine, create_session_factory
 from app.main import create_app
 
+pytest_plugins = (
+    "tests.fixtures.auth",
+    "tests.fixtures.domain",
+    "tests.fixtures.settings",
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="session")
-def use_dedicated_test_database() -> Generator[None, None, None]:
+def use_dedicated_test_database(base_test_env: None) -> Generator[None, None, None]:
+    _ = base_test_env
     original_database_url = os.environ.get("APP_DATABASE_URL")
     base_database_url = original_database_url or Settings().database_url
     test_database_url = get_test_database_url(base_database_url)
     get_settings.cache_clear()
-    asyncio.run(recreate_test_database(test_database_url))
+    try:
+        asyncio.run(recreate_test_database(test_database_url))
+    except PostgresUnavailableError as exc:
+        raise pytest.skip.Exception(f"{exc}. Start PostgreSQL to run DB-backed tests.") from exc
     os.environ["APP_DATABASE_URL"] = test_database_url
     get_settings.cache_clear()
 
     try:
         yield
     finally:
-        asyncio.run(drop_test_database(test_database_url))
+        with suppress(PostgresUnavailableError):
+            asyncio.run(drop_test_database(test_database_url))
         if original_database_url is None:
             os.environ.pop("APP_DATABASE_URL", None)
         else:
@@ -110,8 +125,9 @@ def migrated_database(alembic_config: Config) -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def app(use_dedicated_test_database: None) -> FastAPI:
+def app(use_dedicated_test_database: None, base_test_env: None) -> FastAPI:
     _ = use_dedicated_test_database
+    _ = base_test_env
     get_settings.cache_clear()
     return create_app()
 

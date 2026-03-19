@@ -4,70 +4,53 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from tests.helpers.auth import auth_headers_for_account_id, wallet_address_for_index
+from tests.fixtures.domain import (
+    ConsumerAccountFactory,
+    EndpointFactory,
+    ModerationActionFactory,
+    PricingFactory,
+    ProviderAccountFactory,
+    ServiceFactory,
+)
+from tests.helpers.auth import (
+    auth_headers_for_account,
+    auth_headers_for_account_id,
+    wallet_address_for_index,
+)
 
 from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.logging import EVENT_FIELD, QUOTE_ID_FIELD, REQUEST_ID_FIELD, SERVICE_ID_FIELD
-from app.db.models import (
-    Account,
-    ModerationAction,
-    PricingModel,
-    Quote,
-    Service,
-    ServiceEndpoint,
-    ServiceRevision,
-)
+from app.db.models import Account, Quote
 from app.main import create_app
 
 
 async def _create_provider_account(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Provider")
-        session.add(account)
-        await session.flush()
-        return account.id
+    return await provider_account_factory()
 
 
 async def _seed_service(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    service_factory: ServiceFactory,
     *,
     provider_account_id: int,
     slug: str,
     lifecycle: ServiceLifecycle = ServiceLifecycle.ACTIVE,
     with_revision: bool = False,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        service = Service(
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name=f"{slug} name",
-            summary=f"{slug} summary",
-            description=f"{slug} description",
-            lifecycle=lifecycle,
-        )
-        session.add(service)
-        await session.flush()
-
-        if with_revision:
-            revision = ServiceRevision(
-                service_id=service.id,
-                revision_number=1,
-                change_token="a" * 64,
-                snapshot={"slug": slug},
-            )
-            session.add(revision)
-            await session.flush()
-            service.current_revision_id = revision.id
-            service.current_change_token = revision.change_token
-
-        return service.id
+    return await service_factory(
+        provider_account_id=provider_account_id,
+        slug=slug,
+        lifecycle=lifecycle,
+        with_revision=with_revision,
+        change_token="a" * 64,
+    )
 
 
 async def _seed_endpoint(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     *,
     service_id: int,
     key: str,
@@ -75,63 +58,51 @@ async def _seed_endpoint(
     is_enabled: bool = True,
     pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
 ) -> int:
-    async with db_session_factory.begin() as session:
-        endpoint = ServiceEndpoint(
-            service_id=service_id,
-            key=key,
-            name=f"{key} name",
-            summary=f"{key} summary",
-            description=f"{key} description",
-            access_mode=access_mode,
-            request_schema={"type": "object", "properties": {"text": {"type": "string"}}},
-            response_schema={"type": "object", "properties": {"result": {"type": "string"}}},
-            timeout_seconds=30,
-            is_enabled=is_enabled,
-        )
-        session.add(endpoint)
-        await session.flush()
-        session.add(
-            PricingModel(
-                endpoint_id=endpoint.id,
-                pricing_type=pricing_type,
-                amount_minor=None if pricing_type is PricingModelType.FREE else 500,
-                currency=None if pricing_type is PricingModelType.FREE else "USD",
-            )
-        )
-        return endpoint.id
+    endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key=key,
+        access_mode=access_mode,
+        is_enabled=is_enabled,
+        request_schema={"type": "object", "properties": {"text": {"type": "string"}}},
+        response_schema={"type": "object", "properties": {"result": {"type": "string"}}},
+    )
+    await pricing_factory(
+        endpoint_id=endpoint_id,
+        pricing_type=pricing_type,
+        amount_minor=None if pricing_type is PricingModelType.FREE else 500,
+        currency=None if pricing_type is PricingModelType.FREE else "USD",
+    )
+    return endpoint_id
 
 
 async def _seed_moderation_action(
-    db_session_factory: async_sessionmaker[AsyncSession],
+    moderation_action_factory: ModerationActionFactory,
     *,
     service_id: int,
     action: str,
 ) -> None:
-    async with db_session_factory.begin() as session:
-        session.add(
-            ModerationAction(
-                service_id=service_id,
-                actor_account_id=None,
-                action=action,
-                reason="policy",
-            ),
-        )
+    await moderation_action_factory(service_id=service_id, action=action)
 
 
 @pytest.mark.asyncio
 async def test_create_quote_returns_snapshot_for_active_public_endpoint(
     async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
@@ -165,18 +136,22 @@ async def test_create_quote_returns_snapshot_for_active_public_endpoint(
 @pytest.mark.asyncio
 async def test_create_quote_logs_correlated_quote_event(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-log-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
@@ -202,19 +177,23 @@ async def test_create_quote_logs_correlated_quote_event(
 
 
 @pytest.mark.asyncio
-async def test_create_quote_returns_free_pricing_snapshot_for_free_endpoint(
+async def test_create_quote_returns_conflict_for_free_endpoint(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="free-quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
         access_mode=AccessMode.FREE,
@@ -226,10 +205,8 @@ async def test_create_quote_returns_free_pricing_snapshot_for_free_endpoint(
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 
-    assert response.status_code == 201
-    assert response.json()["pricing_type"] == "free"
-    assert response.json()["amount_minor"] is None
-    assert response.json()["currency"] is None
+    assert response.status_code == 409
+    assert response.json() == {"detail": "endpoint is not quoteable"}
 
 
 @pytest.mark.asyncio
@@ -248,11 +225,12 @@ async def test_create_quote_returns_not_found_for_unknown_service(
 @pytest.mark.asyncio
 async def test_create_quote_returns_not_found_for_missing_endpoint(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
         with_revision=True,
@@ -270,7 +248,10 @@ async def test_create_quote_returns_not_found_for_missing_endpoint(
 @pytest.mark.asyncio
 async def test_create_quote_rate_limits_repeated_requests(
     migrated_database: None,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _ = migrated_database
@@ -279,15 +260,16 @@ async def test_create_quote_rate_limits_repeated_requests(
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
 
     get_settings.cache_clear()
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
@@ -317,6 +299,11 @@ async def test_create_quote_rate_limits_repeated_requests(
 @pytest.mark.asyncio
 async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     migrated_database: None,
+    provider_account_factory: ProviderAccountFactory,
+    consumer_account_factory: ConsumerAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -326,18 +313,21 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
 
     get_settings.cache_clear()
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
+    first_consumer_account_id = await consumer_account_factory()
+    second_consumer_account_id = await consumer_account_factory()
 
     app = create_app()
     async with app.router.lifespan_context(app):
@@ -348,12 +338,18 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
         ) as rate_limited_client:
             first = await rate_limited_client.post(
                 "/v1/services/quote-service/quote",
-                headers=auth_headers_for_account_id(111),
+                headers=await auth_headers_for_account(
+                    db_session_factory,
+                    account_id=first_consumer_account_id,
+                ),
                 json={"endpoint_key": "translate", "payload": {"text": "hello"}},
             )
             second = await rate_limited_client.post(
                 "/v1/services/quote-service/quote",
-                headers=auth_headers_for_account_id(222),
+                headers=await auth_headers_for_account(
+                    db_session_factory,
+                    account_id=second_consumer_account_id,
+                ),
                 json={"endpoint_key": "translate", "payload": {"text": "hello"}},
             )
     get_settings.cache_clear()
@@ -365,17 +361,21 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
 @pytest.mark.asyncio
 async def test_create_quote_returns_not_found_for_disabled_endpoint(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
         is_enabled=False,
@@ -391,20 +391,32 @@ async def test_create_quote_returns_not_found_for_disabled_endpoint(
 
 
 @pytest.mark.asyncio
-async def test_create_quote_rejects_non_object_payload(
+async def test_create_quote_accepts_non_object_payload_when_endpoint_schema_allows_it(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
+        with_revision=True,
     )
-    await _seed_endpoint(
-        db_session_factory,
+    endpoint_id = await endpoint_factory(
         service_id=service_id,
         key="translate",
+        access_mode=AccessMode.PAID,
+        request_schema={"type": "array", "items": {"type": "string"}},
+        response_schema={"type": "string"},
+    )
+    await pricing_factory(
+        endpoint_id=endpoint_id,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=500,
+        currency="USD",
     )
 
     response = await async_client.post(
@@ -412,23 +424,104 @@ async def test_create_quote_rejects_non_object_payload(
         json={"endpoint_key": "translate", "payload": ["not", "an", "object"]},
     )
 
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_create_quote_rejects_payload_that_does_not_match_endpoint_schema(
+    async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+) -> None:
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    service_id = await _seed_service(
+        service_factory,
+        provider_account_id=provider_account_id,
+        slug="quote-schema-service",
+        with_revision=True,
+    )
+    endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key="translate",
+        access_mode=AccessMode.PAID,
+        request_schema={
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": False,
+        },
+        response_schema={"type": "object"},
+    )
+    await pricing_factory(
+        endpoint_id=endpoint_id,
+        pricing_type=PricingModelType.FIXED_PER_CALL,
+        amount_minor=500,
+        currency="USD",
+    )
+
+    response = await async_client.post(
+        "/v1/services/quote-schema-service/quote",
+        json={"endpoint_key": "translate", "payload": {"text": 123}},
+    )
+
     assert response.status_code == 422
+    assert response.json() == {"detail": "request payload does not match endpoint schema"}
+
+
+@pytest.mark.asyncio
+async def test_create_quote_returns_conflict_for_paid_endpoint_without_fixed_pricing(
+    async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+) -> None:
+    provider_account_id = await _create_provider_account(provider_account_factory)
+    service_id = await _seed_service(
+        service_factory,
+        provider_account_id=provider_account_id,
+        slug="unpriced-quote-service",
+        with_revision=True,
+    )
+    await _seed_endpoint(
+        endpoint_factory,
+        pricing_factory,
+        service_id=service_id,
+        key="translate",
+        access_mode=AccessMode.PAID,
+        pricing_type=PricingModelType.FREE,
+    )
+
+    response = await async_client.post(
+        "/v1/services/unpriced-quote-service/quote",
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "endpoint is not quoteable"}
 
 
 @pytest.mark.asyncio
 async def test_create_quote_persists_quote_record(
     async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="quote-service",
         with_revision=True,
     )
     endpoint_id = await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
@@ -456,17 +549,22 @@ async def test_create_quote_persists_quote_record(
 @pytest.mark.asyncio
 async def test_create_quote_works_with_authenticated_consumer(
     async_client: AsyncClient,
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="auth-quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
@@ -489,17 +587,21 @@ async def test_create_quote_works_with_authenticated_consumer(
 @pytest.mark.asyncio
 async def test_create_quote_returns_not_found_for_draft_service(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="draft-quote-service",
         lifecycle=ServiceLifecycle.DRAFT,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
@@ -516,22 +618,27 @@ async def test_create_quote_returns_not_found_for_draft_service(
 @pytest.mark.asyncio
 async def test_create_quote_returns_not_found_for_suspended_service(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+    moderation_action_factory: ModerationActionFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="suspended-quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
     await _seed_moderation_action(
-        db_session_factory,
+        moderation_action_factory,
         service_id=service_id,
         action="suspend",
     )
@@ -548,22 +655,27 @@ async def test_create_quote_returns_not_found_for_suspended_service(
 @pytest.mark.asyncio
 async def test_create_quote_returns_not_found_for_delisted_service(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
+    moderation_action_factory: ModerationActionFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="delisted-quote-service",
         with_revision=True,
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )
     await _seed_moderation_action(
-        db_session_factory,
+        moderation_action_factory,
         service_id=service_id,
         action="delist",
     )
@@ -580,16 +692,20 @@ async def test_create_quote_returns_not_found_for_delisted_service(
 @pytest.mark.asyncio
 async def test_create_quote_returns_conflict_when_service_lacks_contract_binding(
     async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
+    provider_account_factory: ProviderAccountFactory,
+    service_factory: ServiceFactory,
+    endpoint_factory: EndpointFactory,
+    pricing_factory: PricingFactory,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
+    provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
-        db_session_factory,
+        service_factory,
         provider_account_id=provider_account_id,
         slug="unbound-quote-service",
     )
     await _seed_endpoint(
-        db_session_factory,
+        endpoint_factory,
+        pricing_factory,
         service_id=service_id,
         key="translate",
     )

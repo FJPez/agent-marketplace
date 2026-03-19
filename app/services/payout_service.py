@@ -256,11 +256,11 @@ class PayoutExecutionService:
             batch_count = len(existing_batch)
             is_terminal = self._batch_is_terminal(existing_batch)
             await self._session.rollback()
-            replay_batch = await self._payout_repo.list_for_provider_request(
-                provider_account_id=actor.account_id,
-                request_idempotency_key=idempotency_key,
-            )
             if is_terminal:
+                replay_batch = await self._payout_repo.list_for_provider_request(
+                    provider_account_id=actor.account_id,
+                    request_idempotency_key=idempotency_key,
+                )
                 logger.info(
                     "provider payout request replayed",
                     extra=build_event_context(
@@ -277,25 +277,16 @@ class PayoutExecutionService:
                 )
 
             logger.info(
-                "provider payout request resumed",
+                "provider payout request already in progress",
                 extra=build_event_context(
-                    "payout.request_resumed",
+                    "payout.request_in_progress",
                     **{
                         PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
                         PAYOUT_COUNT_FIELD: batch_count,
                     },
                 ),
             )
-            resumed_batch = replay_batch
-            pending_batch = [
-                payout for payout in resumed_batch if payout.status is PayoutStatus.PENDING
-            ]
-            if pending_batch:
-                await self._send_batch(pending_batch)
-            return PayoutRequestResult(
-                idempotency_key=idempotency_key,
-                payouts=_order_payouts_for_response(resumed_batch),
-            )
+            raise PayoutConflictError("provider payout batch already in progress")
 
         in_flight = await self._payout_repo.list_in_flight_for_provider(
             provider_account_id=actor.account_id,
@@ -393,11 +384,11 @@ class PayoutExecutionService:
                     reference=payout.transfer_reference or "",
                 )
             except (PayoutExecutionError, RuntimeError, ValueError) as exc:
-                payout.status = PayoutStatus.PENDING
+                payout.status = PayoutStatus.FAILED
                 payout.failure_code = PayoutFailureCode.EXECUTOR_ERROR
                 payout.error_message = str(exc)
                 logger.error(
-                    "provider payout remains pending",
+                    "provider payout failed",
                     extra=build_event_context(
                         "payout.failed",
                         **{

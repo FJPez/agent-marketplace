@@ -121,7 +121,12 @@ class ProviderDraftService:
         service_id: int,
         request: ServiceTagsUpdateRequest,
     ) -> Service:
-        service = await self.get_service(actor, service_id=service_id)
+        service = await self._service_repo.get_owned_for_update(
+            service_id=service_id,
+            provider_account_id=actor.account_id,
+        )
+        if service is None:
+            raise ProviderServiceNotFoundError("service not found")
         self._ensure_draft(service)
         normalized_tags = sorted({self._normalize_tag(tag) for tag in request.tags})
         await self._service_repo.replace_tags(service, tags=normalized_tags)

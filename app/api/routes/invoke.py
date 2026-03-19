@@ -1,10 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
+from app.api.deps.headers import ValidatedIdempotencyKey
 from app.core.enums import AccessMode
 from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
@@ -140,7 +141,7 @@ async def invoke_service(
     fastapi_request: Request,
     response: Response,
     session: Annotated[AsyncSession, Depends(get_db_session)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    idempotency_key: ValidatedIdempotencyKey,
 ) -> InvocationResponse | JSONResponse:
     invoke_service = InvokeService(session, http_client=_get_http_client(fastapi_request))
     try:
@@ -161,11 +162,18 @@ async def invoke_service(
                     x402_resource_server=_get_x402_resource_server(fastapi_request),
                     settings=get_app_state(fastapi_request.app).settings,
                 )
-                for header_name, header_value in (
-                    await payment_service.build_success_headers_for_invocation(replayed.id)
-                ).items():
-                    response.headers[header_name] = header_value
-            return InvocationResponse.from_model(replayed)
+                replay_headers = await payment_service.build_success_headers_for_invocation(
+                    replayed.id
+                )
+                if not replay_headers:
+                    replayed = None
+                else:
+                    for header_name, header_value in replay_headers.items():
+                        response.headers[header_name] = header_value
+            if replayed is not None:
+                if replayed.access_mode is not AccessMode.PAID:
+                    return InvocationResponse.from_model(replayed)
+                return InvocationResponse.from_model(replayed)
 
         resolved = await invoke_service.resolve_target(
             actor,

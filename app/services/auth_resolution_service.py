@@ -41,7 +41,7 @@ class AuthResolutionService:
         return await self._resolve_jwt_actor(token)
 
     async def resolve_jwt_actor(self, *, authorization: str) -> ActorContext:
-        actor = await self.resolve_actor(authorization=authorization)
+        actor = await self.resolve_actor(authorization=authorization, touch_api_key=False)
         if actor.auth_method != "jwt":
             raise JwtAuthRequiredError("jwt authentication required")
         return actor

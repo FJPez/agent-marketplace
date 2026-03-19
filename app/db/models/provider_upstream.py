@@ -10,7 +10,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.core.json_types import JsonObject
     from app.db.models.service_endpoint import ServiceEndpoint
+else:
+    JsonObject = dict[str, object]
 
 
 class ProviderUpstream(Base):
@@ -24,7 +27,7 @@ class ProviderUpstream(Base):
     base_url: Mapped[str] = mapped_column(Text)
     path: Mapped[str] = mapped_column(Text)
     http_method: Mapped[str] = mapped_column(String(16))
-    config: Mapped[dict[str, object]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    config: Mapped[JsonObject] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

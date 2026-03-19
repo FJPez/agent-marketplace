@@ -17,9 +17,10 @@ Read these in order:
 
 1. `AGENTS.md`
 2. `README.md`
-3. `docs/00-repo-bootstrap-contract.md`
-4. `docs/01-overview-and-goals.md`
-5. `docs/10-definition-of-done-by-branch.md`
+3. `codex-agent-plan/README.md`
+4. `docs/00-repo-bootstrap-contract.md`
+5. `docs/01-overview-and-goals.md`
+6. `docs/10-definition-of-done-by-branch.md`
 
 Then read the docs most relevant to the assigned branch.
 
@@ -99,6 +100,11 @@ Then read the docs most relevant to the assigned branch.
   - required tests
   - out-of-scope guidance
 
+- `docs/11-auth-redesign-plan.md`
+  - applied historical redesign plan
+  - explains the move from legacy profile tables to unified accounts, API keys,
+    and wallet rotation
+
 ## Prompts
 
 - Phase 0
@@ -128,6 +134,16 @@ Then read the docs most relevant to the assigned branch.
   - `PROMPTS/phase-5-coordination.md`
   - `PROMPTS/phase-5-invoke-core.md`
   - `PROMPTS/phase-5-x402-payment.md`
+- Phase 6
+  - `PROMPTS/phase-6-coordination.md`
+  - `PROMPTS/phase-6-ledger-and-earnings.md`
+  - `PROMPTS/phase-6-platform-guardrails.md`
+- Phase 7
+  - `PROMPTS/phase-7-observability-and-audit-completion.md`
+  - `PROMPTS/phase-7-parallel-coordination.md`
+  - `PROMPTS/phase-7-payouts-reporting.md`
+  - `PROMPTS/phase-7-provider-payout-execution.md`
+    - superseded historical prompt retained for reference
 
 ## Suggested usage
 

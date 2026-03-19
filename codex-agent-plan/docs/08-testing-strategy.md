@@ -20,8 +20,6 @@ tests/
   e2e/
 ```
 
-```
-
 ## Test levels
 
 ### Unit tests
@@ -95,4 +93,3 @@ Every branch should pass:
 - relevant tests
 
 Integration branch should also run a core e2e smoke suite.
-```

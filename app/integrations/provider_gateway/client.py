@@ -7,6 +7,7 @@ from typing import Protocol, runtime_checkable
 import httpx
 from httpx import Response
 
+from app.core.upstream_targets import UnsafeUpstreamTargetError, validate_upstream_base_url
 from app.integrations.provider_gateway.signing import HmacAuthConfig, build_signed_headers
 
 
@@ -15,6 +16,10 @@ class ProviderGatewayTimeoutError(Exception):
 
 
 class ProviderGatewayTransportError(Exception):
+    pass
+
+
+class ProviderGatewayTargetError(Exception):
     pass
 
 
@@ -27,7 +32,7 @@ class ProviderGatewayResponseError(Exception):
 @dataclass(frozen=True, slots=True)
 class ProviderGatewayResult:
     status_code: int
-    payload: dict[str, object]
+    payload: object
 
 
 @runtime_checkable
@@ -37,7 +42,7 @@ class SupportsRequest(Protocol):
         method: str,
         url: str,
         *,
-        json: dict[str, object],
+        json: object,
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response: ...
@@ -55,7 +60,7 @@ class ProviderGatewayClient:
         base_url: str,
         path: str,
         http_method: str,
-        payload: dict[str, object],
+        payload: object,
         request_hash: str,
         invocation_id: int,
         timeout_seconds: int,
@@ -72,7 +77,12 @@ class ProviderGatewayClient:
             timestamp=timestamp,
         )
         headers["Content-Type"] = "application/json"
-        url = f"{base_url.rstrip('/')}{path}"
+        try:
+            validated_base_url = validate_upstream_base_url(base_url)
+        except UnsafeUpstreamTargetError as exc:
+            raise ProviderGatewayTargetError(str(exc)) from exc
+
+        url = f"{validated_base_url.rstrip('/')}{path}"
         try:
             response = await self._http_client.request(
                 http_method,
@@ -99,10 +109,4 @@ class ProviderGatewayClient:
                 "upstream returned invalid json",
                 upstream_status_code=response.status_code,
             ) from exc
-        if not isinstance(body, dict):
-            raise ProviderGatewayResponseError(
-                "upstream returned invalid json",
-                upstream_status_code=response.status_code,
-            )
-
         return ProviderGatewayResult(status_code=response.status_code, payload=body)

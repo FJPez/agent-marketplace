@@ -4,7 +4,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
+from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.json_types import JsonObject
+from app.core.upstream_targets import UnsafeUpstreamTargetError, validate_upstream_base_url
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.repositories.pricing_model_repo import PricingModelRepository
@@ -32,8 +35,8 @@ class _EndpointUpdateFields(TypedDict, total=False):
     summary: str | None
     description: str | None
     access_mode: AccessMode
-    request_schema: dict[str, object]
-    response_schema: dict[str, object]
+    request_schema: JsonObject
+    response_schema: JsonObject
     timeout_seconds: int
     is_enabled: bool
 
@@ -192,9 +195,16 @@ class ProviderEndpointService:
             endpoint_id=endpoint_id,
         )
         self._ensure_draft(service)
+        try:
+            validated_base_url = validate_upstream_base_url(
+                str(request.base_url),
+                settings=get_settings(),
+            )
+        except UnsafeUpstreamTargetError as exc:
+            raise ProviderServiceValidationError(str(exc)) from exc
         await self._upstream_repo.upsert(
             endpoint,
-            base_url=str(request.base_url),
+            base_url=validated_base_url,
             path=request.path,
             http_method=request.http_method,
             config=request.config,
@@ -235,12 +245,16 @@ class ProviderEndpointService:
         *,
         endpoint_id: int,
     ) -> tuple[Service, ServiceEndpoint]:
-        service = await self._service_repo.get_owned_by_endpoint_for_update(
+        endpoint = await self._endpoint_repo.get_owned(
             endpoint_id=endpoint_id,
             provider_account_id=provider_account_id,
         )
-        if service is None:
+        if endpoint is None:
             raise ProviderServiceNotFoundError("endpoint not found")
+        service = await self._get_owned_service_for_update(
+            provider_account_id,
+            service_id=endpoint.service_id,
+        )
         endpoint = next(
             (candidate for candidate in service.endpoints if candidate.id == endpoint_id),
             None,

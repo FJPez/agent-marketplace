@@ -1,5 +1,11 @@
 # 11 — Account & Auth Redesign Plan
 
+> Historical note
+>
+> This redesign plan is retained as an applied reference artifact. It explains
+> the migration from legacy profile-based identity to the current unified
+> account, API-key, and wallet-rotation model.
+
 ## Current State
 
 - **3 identity tables**: `accounts` (id, is_admin, created_at), `provider_profiles`, `consumer_profiles` — separate one-to-one tables.

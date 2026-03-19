@@ -239,6 +239,7 @@ Example request:
 
 - Auth: generic bearer
 - Request: body with `base_url`, `path`, `http_method`, and optional `config`
+- Validation: `path` must start with `/` and must not include a scheme, host, query string, or fragment
 - Success: `204` with no body
 - Errors: `404` if the endpoint is not owned, `409` on invalid state transitions, `422` for invalid input
 
@@ -294,6 +295,7 @@ Example upstream config payload:
 
 - Auth: none
 - Request: body with `endpoint_key` and `payload`
+- Payload shape: `payload` may be any JSON value that matches the endpoint request schema, not only an object
 - Success: `201` with a quote bound to the request payload
 - Errors: `404` when the service or endpoint cannot be found, `409` when the quote cannot be created for the current state
 
@@ -317,7 +319,7 @@ Example response:
   "endpoint_key": "paid-summary",
   "pricing_type": "fixed_per_call",
   "amount_minor": 100,
-  "currency": "USDC",
+  "currency": "USD",
   "request_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "service_revision_id": 1,
   "service_change_token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -332,9 +334,12 @@ Example response:
 
 - Auth: generic bearer
 - Request: body with `endpoint_key`, `payload`, and optional `quote_id`
+- Payload shape: `payload` may be any JSON value that matches the endpoint request schema, not only an object
 - Required header: `Idempotency-Key`
 - Success: `200` with the invocation record, or `402` for unpaid paid-endpoint requests
 - Errors: `404` for missing services or invocations, `409` for conflicts or in-progress requests, `502` for upstream failures, `504` for upstream timeouts
+- Invocation status values: `in_progress`, `succeeded`, `failed`
+- Upstream idempotency: the forwarded `X-Agent-Marketplace-Invocation-Id` header is stable across retries for the same invocation and should be treated as the provider-side idempotency key
 
 Example free-invoke request:
 
@@ -455,10 +460,10 @@ Example response:
 - Success: `200` with the moderation action history
 - Errors: `422` for invalid query values
 
-## Notes for Examiners
+## Design Notes
 
-- Quote creation is public in the codebase. Consumers do not need to authenticate to ask for a quote.
+- Quote creation is public. Consumers do not need to authenticate to request a quote.
 - Discovery routes only expose public, active service data.
-- Provider upstream URLs and upstream credentials are never returned by public discovery responses.
+- Provider upstream URLs and credentials are never returned by discovery responses.
 - The paid invoke flow is a two-step `402` challenge/settle flow backed by x402-compatible headers.
 - The provider payout request path is separate from payout reporting and requires JWT auth plus idempotency protection.

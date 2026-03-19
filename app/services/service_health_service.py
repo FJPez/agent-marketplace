@@ -12,6 +12,7 @@ from app.repositories.service_health_check_repo import ServiceHealthCheckReposit
 logger = get_logger(__name__)
 PUBLISH_READINESS_CHECK_NAME = "publish-readiness"
 HEALTH_CHECK_FAILURE_SUMMARY = "health check failed"
+MISSING_HEALTH_CHECK_SUMMARY = "publish-readiness check has not been run"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,9 +48,16 @@ class ServiceHealthCheckStore(Protocol):
 
 
 class ServiceHealthCheckFailedError(Exception):
-    def __init__(self, *, service_id: int, status: ServiceHealthStatus) -> None:
+    def __init__(
+        self,
+        *,
+        service_id: int,
+        status: ServiceHealthStatus,
+        summary: str | None = None,
+    ) -> None:
         self.service_id = service_id
         self.status = status
+        self.summary = summary
         super().__init__("latest health check is not passing")
 
 
@@ -126,9 +134,16 @@ class ServiceHealthService:
             service_id=service_id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
         )
-        if latest_check is None or latest_check.status is ServiceHealthStatus.PASS:
+        if latest_check is None:
+            raise ServiceHealthCheckFailedError(
+                service_id=service_id,
+                status=ServiceHealthStatus.FAIL,
+                summary=MISSING_HEALTH_CHECK_SUMMARY,
+            )
+        if latest_check.status is ServiceHealthStatus.PASS:
             return
         raise ServiceHealthCheckFailedError(
             service_id=service_id,
             status=latest_check.status,
+            summary=latest_check.summary,
         )

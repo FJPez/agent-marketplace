@@ -187,9 +187,51 @@ async def test_api_key_crud_routes_require_jwt_and_support_create_list_revoke(
 
     assert api_key_response.status_code == 403
 
+    generic_auth_response = await async_client.get(
+        "/v1/provider/services",
+        headers={"Authorization": f"Bearer {plaintext_api_key}"},
+    )
+
+    assert generic_auth_response.status_code == 200
+    assert generic_auth_response.json() == []
+
     revoke_response = await async_client.delete(
         f"/v1/auth/api-keys/{api_key_id}",
         headers=auth_headers,
     )
 
     assert revoke_response.status_code == 204
+
+    revoked_response = await async_client.get(
+        "/v1/provider/services",
+        headers={"Authorization": f"Bearer {plaintext_api_key}"},
+    )
+
+    assert revoked_response.status_code == 401
+    assert revoked_response.json() == {"detail": "invalid api key"}
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_rejects_blank_name(async_client: AsyncClient) -> None:
+    _, access_token = await _authenticate(async_client)
+
+    response = await async_client.post(
+        "/v1/auth/api-keys",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"name": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_api_key_rejects_naive_expiration(async_client: AsyncClient) -> None:
+    _, access_token = await _authenticate(async_client)
+
+    response = await async_client.post(
+        "/v1/auth/api-keys",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"expires_at": "2030-01-01T12:00:00"},
+    )
+
+    assert response.status_code == 422

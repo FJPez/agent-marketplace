@@ -27,6 +27,9 @@
   - list returns metadata only
   - delete revokes an existing key and returns `204`
 
+Current route examples and payload shapes live in `docs/api-reference.md`. This
+document is the planning summary, not the canonical rendered API reference.
+
 ## Account routes
 
 - `GET /v1/account/me`
@@ -134,9 +137,12 @@ resolved as `service_id` only and does not fall back to slug matching.
 
 - `GET /v1/provider/earnings`
 - `GET /v1/provider/ledger`
+- `GET /v1/provider/payouts`
+- `POST /v1/provider/payouts`
 
 Finance routes require bearer auth and are scoped to the authenticated account.
-Payout reporting is not part of the current route surface.
+Provider earnings, ledger, and payout routes accept generic bearer auth for the
+authenticated account.
 
 ## Admin routes
 
@@ -150,9 +156,13 @@ that drive service availability.
 
 ## Service health routes
 
-No public service-health route surface is implemented beyond `GET /health`.
-`service_health_checks` currently acts as internal persistence and
-publish-readiness scaffolding.
+- `GET /health`
+- `GET /health/live`
+- `GET /health/ready`
+
+Health routes are public operational endpoints. Provider-facing service-health
+checks remain internal persistence and publish-readiness scaffolding rather than
+a separate public route family.
 
 ## Behavioural rules
 
