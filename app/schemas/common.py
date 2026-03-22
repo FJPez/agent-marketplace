@@ -20,3 +20,11 @@ JsonObject = CoreJsonObject
 
 class HealthResponse(BaseModel):
     status: Literal["ok"]
+
+
+class ServiceEntrypointResponse(BaseModel):
+    name: str
+    status: Literal["ok"]
+    docs: str
+    health: str
+    ready: str

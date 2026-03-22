@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
@@ -17,30 +17,9 @@ from app.schemas.service import (
 )
 from app.services.provider_draft_service import ProviderDraftService
 from app.services.provider_endpoint_service import ProviderEndpointService
-from app.services.provider_service_errors import (
-    ProviderServiceConflictError,
-    ProviderServiceNotFoundError,
-    ProviderServiceStateError,
-    ProviderServiceValidationError,
-)
 from app.services.publish_service import PublishService
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
-
-
-def _to_http_exception(exc: Exception) -> HTTPException:
-    if isinstance(exc, ProviderServiceConflictError):
-        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    if isinstance(exc, ProviderServiceNotFoundError):
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    if isinstance(exc, ProviderServiceStateError):
-        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    if isinstance(exc, ProviderServiceValidationError):
-        return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        )
-    return HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
 
 
 @router.post(
@@ -81,17 +60,7 @@ async def create_provider_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ServiceResponse:
     service = ProviderDraftService(session)
-
-    try:
-        created = await service.create_service(actor, request)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    created = await service.create_service(actor, request)
     return ServiceResponse.from_model(created)
 
 
@@ -107,17 +76,7 @@ async def list_provider_services(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[ServiceResponse]:
     service = ProviderDraftService(session)
-
-    try:
-        services = await service.list_services(actor)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    services = await service.list_services(actor)
     return [ServiceResponse.from_model(item) for item in services]
 
 
@@ -137,17 +96,7 @@ async def get_provider_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ServiceResponse:
     service = ProviderDraftService(session)
-
-    try:
-        found = await service.get_service(actor, service_id=service_id)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    found = await service.get_service(actor, service_id=service_id)
     return ServiceResponse.from_model(found)
 
 
@@ -187,17 +136,7 @@ async def update_provider_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ServiceResponse:
     service = ProviderDraftService(session)
-
-    try:
-        updated = await service.update_service(actor, service_id=service_id, request=request)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    updated = await service.update_service(actor, service_id=service_id, request=request)
     return ServiceResponse.from_model(updated)
 
 
@@ -230,17 +169,7 @@ async def replace_provider_service_tags(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ServiceResponse:
     service = ProviderDraftService(session)
-
-    try:
-        updated = await service.replace_tags(actor, service_id=service_id, request=request)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    updated = await service.replace_tags(actor, service_id=service_id, request=request)
     return ServiceResponse.from_model(updated)
 
 
@@ -265,17 +194,7 @@ async def publish_provider_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ServiceResponse:
     service = PublishService(session)
-
-    try:
-        published = await service.publish_service(actor, service_id=service_id)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    published = await service.publish_service(actor, service_id=service_id)
     return ServiceResponse.from_model(published)
 
 
@@ -330,17 +249,7 @@ async def create_provider_endpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> EndpointResponse:
     service = ProviderEndpointService(session)
-
-    try:
-        endpoint = await service.create_endpoint(actor, service_id=service_id, request=request)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    endpoint = await service.create_endpoint(actor, service_id=service_id, request=request)
     return EndpointResponse.from_model(endpoint)
 
 
@@ -381,21 +290,11 @@ async def update_provider_endpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> EndpointResponse:
     service = ProviderEndpointService(session)
-
-    try:
-        endpoint = await service.update_endpoint(
-            actor,
-            endpoint_id=endpoint_id,
-            request=request,
-        )
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    endpoint = await service.update_endpoint(
+        actor,
+        endpoint_id=endpoint_id,
+        request=request,
+    )
     return EndpointResponse.from_model(endpoint)
 
 
@@ -442,15 +341,5 @@ async def put_provider_endpoint_upstream(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> Response:
     service = ProviderEndpointService(session)
-
-    try:
-        await service.upsert_upstream(actor, endpoint_id=endpoint_id, request=request)
-    except (
-        ProviderServiceConflictError,
-        ProviderServiceNotFoundError,
-        ProviderServiceStateError,
-        ProviderServiceValidationError,
-    ) as exc:
-        raise _to_http_exception(exc) from exc
-
+    await service.upsert_upstream(actor, endpoint_id=endpoint_id, request=request)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

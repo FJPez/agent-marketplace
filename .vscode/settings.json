@@ -1,0 +1,11 @@
+{
+  "markdown-pdf.styles": [
+    "docs/technical-report/technical-report.css"
+  ],
+  "markdown-pdf.format": "A4",
+  "markdown-pdf.margin.top": "16mm",
+  "markdown-pdf.margin.right": "16mm",
+  "markdown-pdf.margin.bottom": "18mm",
+  "markdown-pdf.margin.left": "16mm",
+  "markdown-pdf.displayHeaderFooter": false
+}

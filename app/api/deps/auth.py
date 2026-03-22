@@ -6,11 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.actor import ActorContext
 from app.core.config import get_settings
 from app.db.session import get_db_session
-from app.services.auth_resolution_service import (
-    AuthResolutionError,
-    AuthResolutionService,
-    JwtAuthRequiredError,
-)
+from app.services.auth_resolution_service import AuthResolutionService
 
 AUTHORIZATION_HEADER = "Authorization"
 
@@ -31,10 +27,7 @@ async def get_optional_current_actor(
         return None
 
     service = AuthResolutionService(session, settings=get_settings())
-    try:
-        return await service.resolve_actor(authorization=authorization)
-    except AuthResolutionError as exc:
-        raise _unauthorized(str(exc)) from exc
+    return await service.resolve_actor(authorization=authorization)
 
 
 async def get_current_actor(
@@ -46,10 +39,7 @@ async def get_current_actor(
         raise _unauthorized(detail)
 
     service = AuthResolutionService(session, settings=get_settings())
-    try:
-        return await service.resolve_actor(authorization=authorization)
-    except AuthResolutionError as exc:
-        raise _unauthorized(str(exc)) from exc
+    return await service.resolve_actor(authorization=authorization)
 
 
 async def get_current_jwt_actor(
@@ -61,12 +51,7 @@ async def get_current_jwt_actor(
         raise _unauthorized(detail)
 
     service = AuthResolutionService(session, settings=get_settings())
-    try:
-        return await service.resolve_jwt_actor(authorization=authorization)
-    except AuthResolutionError as exc:
-        raise _unauthorized(str(exc)) from exc
-    except JwtAuthRequiredError as exc:
-        raise _forbidden(str(exc)) from exc
+    return await service.resolve_jwt_actor(authorization=authorization)
 
 
 async def get_admin_actor(

@@ -1,12 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.db.session import get_db_session
 from app.schemas.quote import QuoteCreateRequest, QuoteResponse
-from app.services.quote_service import QuoteNotFoundError, QuoteService, QuoteUnavailableError
+from app.services.quote_service import QuoteService
 
 router = APIRouter(tags=["quotes"])
 
@@ -15,22 +14,6 @@ QUOTE_ROUTE_DESCRIPTION = (
     "be invoked. This route is publicly accessible, but quotes are still bound to the "
     "service revision, change token, request hash, and expiry window."
 )
-
-
-def _to_http_exception(exc: Exception) -> HTTPException:
-    if isinstance(exc, QuoteNotFoundError):
-        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
-    if isinstance(exc, PayloadSchemaMismatchError):
-        return HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        )
-    if isinstance(exc, QuoteUnavailableError):
-        return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
-    return HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="internal server error",
-    )
 
 
 @router.post(
@@ -66,13 +49,9 @@ async def create_quote(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> QuoteResponse:
     service = QuoteService(session)
-    try:
-        quote = await service.create_quote(
-            service_id_or_slug=service_id_or_slug,
-            endpoint_key=request.endpoint_key,
-            payload=request.payload,
-        )
-    except (PayloadSchemaMismatchError, QuoteNotFoundError, QuoteUnavailableError) as exc:
-        raise _to_http_exception(exc) from exc
-
+    quote = await service.create_quote(
+        service_id_or_slug=service_id_or_slug,
+        endpoint_key=request.endpoint_key,
+        payload=request.payload,
+    )
     return QuoteResponse.from_model(quote)

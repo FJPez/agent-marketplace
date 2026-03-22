@@ -9,6 +9,8 @@ with, and operating the marketplace.
 - [External agent setup guide](agent-setup.md)
 - [API reference source](api-reference.md)
 - [API reference PDF](api-reference.pdf)
+- [Technical report source](technical-report/technical-report.md)
+- [Technical report appendix template](technical-report/technical-report-appendix.md)
 - [Example scripts](../examples/)
 
 ## Operations And Demos
