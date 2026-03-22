@@ -1,13 +1,8 @@
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 
 from app.core.lifespan import get_app_state
 from app.schemas.common import HealthResponse, ServiceEntrypointResponse
-from app.services.health_service import (
-    ReadinessCheckError,
-    get_health_response,
-    get_readiness_response,
-)
+from app.services.health_service import get_health_response, get_readiness_response
 
 router = APIRouter(tags=["health"])
 
@@ -70,11 +65,5 @@ def read_health_live() -> HealthResponse:
         503: {"description": "A required dependency is unavailable."},
     },
 )
-async def read_health_ready(request: Request) -> HealthResponse | JSONResponse:
-    try:
-        return await get_readiness_response(get_app_state(request.app))
-    except ReadinessCheckError as exc:
-        return JSONResponse(
-            status_code=503,
-            content={"detail": str(exc)},
-        )
+async def read_health_ready(request: Request) -> HealthResponse:
+    return await get_readiness_response(get_app_state(request.app))

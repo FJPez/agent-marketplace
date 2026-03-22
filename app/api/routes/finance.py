@@ -20,11 +20,7 @@ from app.schemas.finance import (
     ProviderPayoutSummaryResponse,
 )
 from app.services.ledger_service import LedgerService
-from app.services.payout_service import (
-    PayoutConflictError,
-    PayoutExecutionService,
-    PayoutReportingService,
-)
+from app.services.payout_service import PayoutExecutionService, PayoutReportingService
 
 router = APIRouter(prefix="/provider", tags=["finance"])
 
@@ -143,10 +139,7 @@ async def request_provider_payouts(
         session,
         payout_executor=_get_payout_executor(fastapi_request),
     )
-    try:
-        result = await service.request_provider_payouts(actor, idempotency_key=idempotency_key)
-    except PayoutConflictError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    result = await service.request_provider_payouts(actor, idempotency_key=idempotency_key)
     return ProviderPayoutRequestResponse.from_values(
         idempotency_key=result.idempotency_key,
         requested_count=result.requested_count,

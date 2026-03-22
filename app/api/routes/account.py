@@ -6,11 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps.auth import CurrentJwtActor
 from app.db.session import get_db_session
 from app.schemas.account import AccountResponse, AccountUpdateRequest
-from app.services.account_service import (
-    AccountNotFoundError,
-    AccountService,
-    AccountValidationError,
-)
+from app.services.account_service import AccountService
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -34,12 +30,7 @@ async def get_account_me(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AccountResponse:
     service = AccountService(session)
-    try:
-        account = await service.get_current_account(actor)
-    except AccountNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="account not found"
-        ) from exc
+    account = await service.get_current_account(actor)
     return AccountResponse.model_validate(account)
 
 
@@ -69,14 +60,5 @@ async def patch_account_me(
             detail="at least one field must be provided",
         )
     service = AccountService(session)
-    try:
-        account = await service.update_current_account(actor, display_name=request.display_name)
-    except AccountNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="account not found"
-        ) from exc
-    except AccountValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
-        ) from exc
+    account = await service.update_current_account(actor, display_name=request.display_name)
     return AccountResponse.model_validate(account)

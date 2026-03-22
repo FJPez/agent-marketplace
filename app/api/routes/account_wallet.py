@@ -14,7 +14,7 @@ from app.schemas.account import (
     WalletChangeInitiateRequest,
     WalletChangeInitiateResponse,
 )
-from app.services.wallet_change_service import WalletChangeError, WalletChangeService
+from app.services.wallet_change_service import WalletChangeService
 
 router = APIRouter(prefix="/account/wallet", tags=["account"])
 
@@ -50,8 +50,6 @@ async def initiate_wallet_change(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
-    except WalletChangeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return WalletChangeInitiateResponse(nonce=challenge.nonce, expires_at=challenge.expires_at)
 
 
@@ -75,14 +73,11 @@ async def confirm_wallet_change(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WalletChangeConfirmResponse:
     service = WalletChangeService(session, settings=get_settings())
-    try:
-        account, tokens = await service.confirm_change(
-            actor,
-            message=request.message,
-            signature=request.signature,
-        )
-    except WalletChangeError as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    account, tokens = await service.confirm_change(
+        actor,
+        message=request.message,
+        signature=request.signature,
+    )
     return WalletChangeConfirmResponse(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,

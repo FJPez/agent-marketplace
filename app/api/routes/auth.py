@@ -18,8 +18,8 @@ from app.schemas.auth import (
     AuthVerifyRequest,
     AuthVerifyResponse,
 )
-from app.services.api_key_service import ApiKeyNotFoundError, ApiKeyService, ApiKeyValidationError
-from app.services.auth_service import AuthenticationError, AuthService
+from app.services.api_key_service import ApiKeyService
+from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -70,13 +70,10 @@ async def verify_auth(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AuthVerifyResponse:
     service = AuthService(session, settings=get_settings())
-    try:
-        result = await service.verify_wallet(
-            message=request.message,
-            signature=request.signature,
-        )
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    result = await service.verify_wallet(
+        message=request.message,
+        signature=request.signature,
+    )
     return AuthVerifyResponse(
         access_token=result.access_token,
         refresh_token=result.refresh_token,
@@ -99,10 +96,7 @@ async def refresh_auth(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> AuthRefreshResponse:
     service = AuthService(session, settings=get_settings())
-    try:
-        access_token = await service.refresh_access_token(refresh_token=request.refresh_token)
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    access_token = await service.refresh_access_token(refresh_token=request.refresh_token)
     return AuthRefreshResponse(access_token=access_token)
 
 
@@ -127,17 +121,11 @@ async def create_api_key(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ApiKeyCreateResponse:
     service = ApiKeyService(session, settings=get_settings())
-    try:
-        api_key, plaintext = await service.create_key(
-            actor,
-            name=request.name,
-            expires_at=request.expires_at,
-        )
-    except ApiKeyValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
+    api_key, plaintext = await service.create_key(
+        actor,
+        name=request.name,
+        expires_at=request.expires_at,
+    )
     return ApiKeyCreateResponse(
         id=api_key.id,
         name=api_key.name,
@@ -200,11 +188,5 @@ async def revoke_api_key(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> Response:
     service = ApiKeyService(session, settings=get_settings())
-    try:
-        await service.revoke_key(actor, api_key_id=api_key_id)
-    except ApiKeyNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="api key not found",
-        ) from exc
+    await service.revoke_key(actor, api_key_id=api_key_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps.auth import get_current_actor
+from app.api.exception_handlers import install_exception_handlers
 from app.core.config import Settings
 from app.core.security import hash_api_key
 from app.db.session import get_db_session
@@ -108,6 +109,7 @@ def auth_client_factory(
         )
 
         app = FastAPI()
+        install_exception_handlers(app)
 
         @app.get("/protected")
         async def read_protected(
