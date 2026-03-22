@@ -4,7 +4,8 @@
 **Artefact:** Technical report for the Agent Marketplace Backend repository  
 **Public GitHub repository:** <https://github.com/FJPez/agent-marketplace>  
 **API documentation (PDF):** <https://github.com/FJPez/agent-marketplace/blob/main/docs/api-reference.pdf>  
-**Optional live deployment URL:** <https://api-production-b705.up.railway.app>
+**Live deployment URL:** <https://api-production-b705.up.railway.app>  
+**Presentation Slides:** <https://docs.google.com/presentation/d/1O4cJ9IYXcOrrxucqrTvgFnUAQfciI4e7zgBCn5c5uDM/edit?usp=sharing>
 
 ## 1. Introduction and Project Scope
 
@@ -16,14 +17,14 @@ The core operational lifecycle is `publish -> discover -> quote -> invoke -> pay
 
 The coursework brief asks for a database-backed web API, at least four endpoints, appropriate JSON responses and status codes, documentation, version control evidence, and demonstrable execution. Table 1 maps those requirements to repository evidence.
 
-| Brief requirement | Repository evidence |
-| --- | --- |
-| Database-backed API | PostgreSQL is the persistence layer, modelled through SQLAlchemy async ORM with Alembic migrations under `alembic/versions/`. |
-| Four or more HTTP endpoints | The current route surface contains 39 route handlers across the root entrypoint, auth, account, provider, discovery, quotes, invoke, finance, admin, and health. |
-| JSON responses and industry status codes | FastAPI response models and route tests cover `200`, `201`, `204`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, and `402 Payment Required`. |
-| Clear API documentation | The repository contains both [`docs/api-reference.md`](https://github.com/FJPez/agent-marketplace/blob/main/docs/api-reference.md) and a committed PDF version. |
-| Visible version control | The public Git history contains 242 commits, which provides clear evidence of iterative development. |
-| Demonstrable execution | The project is locally runnable via `uv`, includes demo scripts, and contains a concrete Railway deployment runbook with health checks and smoke tests. |
+| Brief requirement                        | Repository evidence                                                                                                                                              |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Database-backed API                      | PostgreSQL is the persistence layer, modelled through SQLAlchemy async ORM with Alembic migrations under `alembic/versions/`.                                    |
+| Four or more HTTP endpoints              | The current route surface contains 39 route handlers across the root entrypoint, auth, account, provider, discovery, quotes, invoke, finance, admin, and health. |
+| JSON responses and industry status codes | FastAPI response models and route tests cover `200`, `201`, `204`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, and `402 Payment Required`.           |
+| Clear API documentation                  | The repository contains both [`docs/api-reference.md`](https://github.com/FJPez/agent-marketplace/blob/main/docs/api-reference.md) and a committed PDF version.  |
+| Visible version control                  | The public Git history contains 242 commits, which provides clear evidence of iterative development.                                                             |
+| Demonstrable execution                   | The project is locally runnable via `uv`, includes demo scripts, and contains a concrete Railway deployment runbook with health checks and smoke tests.          |
 
 The brief also asks for CRUD. In this repository, CRUD behaviour is distributed across persisted resources rather than exposed as one textbook CRUD resource. For example, provider services support create, read, and update flows; accounts support read and update flows; API keys support create, read, and delete flows; and the database layer persists additional entities such as quotes, invocations, payment attempts, ledger entries, and payouts. I therefore present CRUD capability honestly as a repository-wide persistence pattern rather than overstating a single-resource CRUD surface.
 
