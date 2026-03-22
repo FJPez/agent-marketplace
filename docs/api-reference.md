@@ -8,7 +8,7 @@ The implementation is HTTP-first, versioned under `/v1` for domain routes, and u
 
 ### Base URLs
 
-- Health routes: `/health`, `/health/live`, `/health/ready`
+- Root and health routes: `/`, `/health`, `/health/live`, `/health/ready`
 - Domain routes: `/v1/...`
 
 ### Common Headers
@@ -33,11 +33,18 @@ Most route handlers raise FastAPI HTTP errors with JSON bodies shaped like:
 
 ## Authentication Matrix
 
-- Public: health routes, discovery routes, quote creation, and auth nonce / verify / refresh
+- Public: root and health routes, discovery routes, quote creation, and auth nonce / verify / refresh
 - Generic bearer auth: provider authoring, invoke, invocation reads, provider earnings, ledger, public payout reads, and admin routes
 - JWT-only: API-key lifecycle, account self-service, wallet rotation, and provider payout execution
 
 ## Health
+
+### `GET /`
+
+- Auth: none
+- Request: no body, no parameters
+- Success: `200` with `{"name":"Agent Marketplace Backend","status":"ok","docs":"/docs","health":"/health","ready":"/health/ready"}`
+- Errors: none expected in the normal path
 
 ### `GET /health`
 

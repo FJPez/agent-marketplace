@@ -5,6 +5,19 @@ from app.core.lifespan import get_app_state
 from app.main import create_app
 
 
+def test_root_route_returns_service_entrypoint(client: TestClient) -> None:
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "name": "Agent Marketplace Backend",
+        "status": "ok",
+        "docs": "/docs",
+        "health": "/health",
+        "ready": "/health/ready",
+    }
+
+
 def test_health_route_returns_ok(client: TestClient) -> None:
     response = client.get("/health")
 

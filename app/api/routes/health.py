@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.core.lifespan import get_app_state
-from app.schemas.common import HealthResponse
+from app.schemas.common import HealthResponse, ServiceEntrypointResponse
 from app.services.health_service import (
     ReadinessCheckError,
     get_health_response,
@@ -10,6 +10,26 @@ from app.services.health_service import (
 )
 
 router = APIRouter(tags=["health"])
+
+
+@router.get(
+    "/",
+    response_model=ServiceEntrypointResponse,
+    summary="Read the API entrypoint",
+    description=(
+        "Returns a minimal service summary for human and agent clients hitting the "
+        "deployment root URL directly."
+    ),
+    responses={200: {"description": "Service entrypoint returned successfully."}},
+)
+def read_root() -> ServiceEntrypointResponse:
+    return ServiceEntrypointResponse(
+        name="Agent Marketplace Backend",
+        status="ok",
+        docs="/docs",
+        health="/health",
+        ready="/health/ready",
+    )
 
 
 @router.get(

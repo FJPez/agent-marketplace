@@ -19,7 +19,7 @@ The coursework brief asks for a database-backed web API, at least four endpoints
 | Brief requirement | Repository evidence |
 | --- | --- |
 | Database-backed API | PostgreSQL is the persistence layer, modelled through SQLAlchemy async ORM with Alembic migrations under `alembic/versions/`. |
-| Four or more HTTP endpoints | The current route surface contains 38 route handlers across auth, account, provider, discovery, quotes, invoke, finance, admin, and health. |
+| Four or more HTTP endpoints | The current route surface contains 39 route handlers across the root entrypoint, auth, account, provider, discovery, quotes, invoke, finance, admin, and health. |
 | JSON responses and industry status codes | FastAPI response models and route tests cover `200`, `201`, `204`, `401`, `403`, `404`, `409`, `413`, `422`, `429`, `500`, and `402 Payment Required`. |
 | Clear API documentation | The repository contains both [`docs/api-reference.md`](https://github.com/FJPez/agent-marketplace/blob/main/docs/api-reference.md) and a committed PDF version. |
 | Visible version control | The public Git history contains 242 commits, which provides clear evidence of iterative development. |
