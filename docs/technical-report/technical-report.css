@@ -1,0 +1,96 @@
+@page {
+  size: A4;
+  margin: 16mm 16mm 18mm 16mm;
+}
+
+body {
+  color: #111;
+  font-family: "Georgia", "Times New Roman", serif;
+  font-size: 10.5pt;
+  line-height: 1.35;
+  margin: 0 auto;
+  max-width: 100%;
+}
+
+h1,
+h2 {
+  color: #0f2740;
+  line-height: 1.15;
+}
+
+h1 {
+  font-size: 18pt;
+  margin: 0 0 10pt;
+}
+
+h2 {
+  border-bottom: 1px solid #c7d4df;
+  font-size: 12.5pt;
+  margin: 12pt 0 6pt;
+  padding-bottom: 2pt;
+}
+
+p,
+li,
+td,
+th {
+  orphans: 2;
+  widows: 2;
+}
+
+table {
+  border-collapse: collapse;
+  font-size: 9.5pt;
+  margin: 8pt 0 10pt;
+  width: 100%;
+}
+
+th,
+td {
+  border: 1px solid #c7d4df;
+  padding: 5pt 6pt;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #eef4f8;
+}
+
+pre {
+  background: #f5f7f9;
+  border: 1px solid #d9e3ea;
+  font-family: "Menlo", "Courier New", monospace;
+  font-size: 8.3pt;
+  line-height: 1.22;
+  overflow-wrap: anywhere;
+  padding: 8pt;
+  white-space: pre-wrap;
+}
+
+.figure-block {
+  break-inside: avoid-page;
+  display: table;
+  margin: 8pt 0 10pt;
+  page-break-inside: avoid;
+  width: 100%;
+}
+
+.figure-block p {
+  font-weight: 700;
+  margin: 0 0 4pt;
+}
+
+.figure-block pre {
+  margin: 0;
+}
+
+code {
+  font-family: "Menlo", "Courier New", monospace;
+  font-size: 0.92em;
+}
+
+a {
+  color: #0b4f82;
+  text-decoration: none;
+}
