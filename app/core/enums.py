@@ -35,6 +35,7 @@ class InvocationFailureReason(StrEnum):
     UPSTREAM_TIMEOUT = "upstream_timeout"
     UPSTREAM_TRANSPORT = "upstream_transport"
     UPSTREAM_RESPONSE = "upstream_response"
+    UPSTREAM_SCHEMA = "upstream_schema"
 
 
 class PaymentAttemptStatus(StrEnum):

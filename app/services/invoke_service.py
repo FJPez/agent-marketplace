@@ -16,6 +16,10 @@ from app.core.logging import (
 )
 from app.core.request_hash import hash_request_body
 from app.core.request_schema_validation import PayloadSchemaMismatchError, validate_request_payload
+from app.core.response_schema_validation import (
+    ResponseSchemaMismatchError,
+    validate_response_payload,
+)
 from app.integrations.provider_gateway.client import (
     ProviderGatewayClient,
     ProviderGatewayResponseError,
@@ -248,6 +252,30 @@ class InvokeService:
             invocation.error_message = str(exc)
             invocation.upstream_status_code = exc.upstream_status_code
             invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
+            invocation.status = InvocationStatus.FAILED
+            await self._persist_and_refresh(invocation)
+            logger.error(
+                "invoke failed",
+                extra=build_event_context(
+                    "invoke.failed",
+                    **{
+                        ACCOUNT_ID_FIELD: actor.account_id,
+                        INVOCATION_ID_FIELD: invocation.id,
+                        SERVICE_ID_FIELD: resolved.service.id,
+                    },
+                ),
+            )
+            raise InvokeBadGatewayError(str(exc)) from exc
+
+        try:
+            validate_response_payload(
+                payload=gateway_result.payload,
+                response_schema=resolved.endpoint.response_schema,
+            )
+        except ResponseSchemaMismatchError as exc:
+            invocation.error_message = str(exc)
+            invocation.upstream_status_code = gateway_result.status_code
+            invocation.failure_reason = InvocationFailureReason.UPSTREAM_SCHEMA
             invocation.status = InvocationStatus.FAILED
             await self._persist_and_refresh(invocation)
             logger.error(

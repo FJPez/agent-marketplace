@@ -10,6 +10,7 @@ from app.core.enums import AccessMode, InvocationFailureReason, InvocationStatus
 from app.db.models import Invocation, ProviderUpstream, Service, ServiceEndpoint
 from app.integrations.provider_gateway.signing import HmacAuthConfig
 from app.services.invoke_service import (
+    InvokeBadGatewayError,
     InvokeGatewayTimeoutError,
     InvokeService,
     ResolvedInvokeTarget,
@@ -437,6 +438,34 @@ async def test_execute_commits_before_and_after_upstream_call() -> None:
     assert session.flushes == 1
     assert session.refreshes == 2
     assert http_client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_rejects_successful_upstream_payload_that_breaks_response_schema() -> None:
+    session = FakeSuccessSession()
+    http_client = FakeHttpClient()
+    service = InvokeService(cast("AsyncSession", session), http_client=http_client)
+    service._invocation_repo = FakeNewInvocationRepository()
+    resolved = _resolved_target()
+    object.__setattr__(
+        resolved.endpoint,
+        "response_schema",
+        {
+            "type": "object",
+            "properties": {"result": {"type": "integer"}},
+            "required": ["result"],
+        },
+    )
+
+    with pytest.raises(InvokeBadGatewayError, match="response schema"):
+        await service.execute(
+            ActorContext(account_id=12),
+            resolved=resolved,
+            idempotency_key="invoke-key",
+        )
+
+    assert http_client.calls == 1
+    assert session.commits == 2
 
 
 @pytest.mark.asyncio

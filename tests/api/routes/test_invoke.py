@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from httpx import AsyncClient, Response, TimeoutException
+from sqlalchemy import select
 from tests.fixtures.domain import (
     ConsumerAccountFactory,
     EndpointFactory,
@@ -115,10 +116,15 @@ async def _seed_endpoint(
     is_enabled: bool = True,
     with_hmac_auth: bool = True,
     request_schema: dict[str, object] | None = None,
+    response_schema: dict[str, object] | None = None,
 ) -> int:
     default_request_schema: dict[str, object] = {"type": "object"}
     resolved_request_schema = (
         request_schema if request_schema is not None else default_request_schema
+    )
+    default_response_schema: dict[str, object] = {"type": "object"}
+    resolved_response_schema = (
+        response_schema if response_schema is not None else default_response_schema
     )
     endpoint_id = await create_endpoint_record(
         db_session_factory,
@@ -129,7 +135,7 @@ async def _seed_endpoint(
         description=None,
         access_mode=access_mode,
         request_schema=resolved_request_schema,
-        response_schema={"type": "object"},
+        response_schema=resolved_response_schema,
         is_enabled=is_enabled,
     )
     upstream_config: dict[str, Any] = {}
@@ -563,6 +569,7 @@ async def test_invoke_accepts_non_object_payload_and_response_when_schema_allows
         db_session_factory,
         service_id=service_id,
         request_schema={"type": "array", "items": {"type": "string"}},
+        response_schema={"type": "string"},
     )
     consumer_account_id = await _create_consumer_account(db_session_factory)
     fake_http_client = _FakeHttpClient(
@@ -579,6 +586,55 @@ async def test_invoke_accepts_non_object_payload_and_response_when_schema_allows
     assert response.status_code == 200
     assert response.json()["response_payload"] == "bonjour"
     assert len(fake_http_client.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_invoke_rejects_provider_response_that_breaks_advertised_response_schema(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    _ = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        response_schema={
+            "type": "object",
+            "properties": {"result": {"type": "integer"}},
+            "required": ["result"],
+        },
+    )
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    fake_http_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+    get_app_state(app).http_client = fake_http_client
+
+    response = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "upstream response does not match advertised response schema",
+    }
+    assert len(fake_http_client.calls) == 1
+    async with db_session_factory() as session:
+        invocation = (
+            await session.execute(
+                select(Invocation).where(
+                    Invocation.consumer_account_id == consumer_account_id,
+                    Invocation.idempotency_key == "invoke-key",
+                ),
+            )
+        ).scalar_one()
+    assert invocation.status is InvocationStatus.FAILED
+    assert invocation.failure_reason == "upstream_schema"
+    assert invocation.upstream_status_code == 200
+    assert invocation.response_payload is None
 
 
 @pytest.mark.asyncio
