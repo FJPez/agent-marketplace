@@ -17,6 +17,7 @@ from app.integrations.x402.facilitator_client import FacilitatorAuthError
 from app.services import payment_service as payment_service_module
 from app.services.invoke_service import (
     InvokeBadGatewayError,
+    InvokeGatewayTimeoutError,
     ResolvedInvokeTarget,
 )
 from app.services.payment_service import PaidInvokeSuccess, PaymentService
@@ -597,14 +598,146 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
 
     attempt = service._attempt_repo.added_attempt
     assert attempt is not None
-    assert attempt.status is PaymentAttemptStatus.SETTLED
-    assert attempt.invocation_id is None
+    assert attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert attempt.invocation_id == 77
     assert attempt.verify_outcome == {"ok": True, "reference": "verify-1"}
     assert attempt.settle_outcome == {"ok": True, "reference": "settle-1"}
-    assert session.commit_calls == 3
+    assert session.commit_calls == 4
     assert service._ledger_service.record_calls == []
     assert invoke_service.execute_calls == 1
-    assert invoke_service.get_invocation_by_idempotency_calls == 0
+    assert invoke_service.get_invocation_by_idempotency_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_paid_invoke_marks_compensation_required_after_settled_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    invoke_service = FakeInvokeService(
+        invocation_for_lookup=FakeInvocation(id=78),
+        execute_exception=InvokeGatewayTimeoutError("upstream request timed out"),
+    )
+    service = _build_service(session)
+    service._attempt_repo = FakePaymentAttemptRepository()
+    service._invoke_service = invoke_service
+    service._ledger_service = FakeLedgerService()
+    monkeypatch.setattr(
+        service,
+        "_build_requirement",
+        lambda *, amount_minor, currency: {
+            "amount_minor": amount_minor,
+            "currency": currency,
+            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "payment_amount": 5_000_000,
+        },
+    )
+
+    with pytest.raises(InvokeGatewayTimeoutError, match="upstream request timed out"):
+        await service.handle_paid_invoke(
+            ActorContext(account_id=12),
+            resolved=_resolved_target(),
+            idempotency_key="invoke-key",
+            request_headers={
+                "PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-timeout")
+            },
+        )
+
+    attempt = service._attempt_repo.added_attempt
+    assert attempt is not None
+    assert attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert attempt.invocation_id == 78
+    assert session.commit_calls == 4
+    assert service._ledger_service.record_calls == []
+    assert invoke_service.execute_calls == 1
+    assert invoke_service.get_invocation_by_idempotency_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_paid_invoke_persists_compensation_without_failed_invocation_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    invoke_service = FakeInvokeService(
+        invocation_for_lookup=None,
+        execute_exception=InvokeBadGatewayError("upstream request failed"),
+    )
+    service = _build_service(session)
+    service._attempt_repo = FakePaymentAttemptRepository()
+    service._invoke_service = invoke_service
+    service._ledger_service = FakeLedgerService()
+    monkeypatch.setattr(
+        service,
+        "_build_requirement",
+        lambda *, amount_minor, currency: {
+            "amount_minor": amount_minor,
+            "currency": currency,
+            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "payment_amount": 5_000_000,
+        },
+    )
+
+    with pytest.raises(InvokeBadGatewayError, match="upstream request failed"):
+        await service.handle_paid_invoke(
+            ActorContext(account_id=12),
+            resolved=_resolved_target(),
+            idempotency_key="invoke-key",
+            request_headers={
+                "PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-no-lookup")
+            },
+        )
+
+    attempt = service._attempt_repo.added_attempt
+    assert attempt is not None
+    assert attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert attempt.invocation_id is None
+    assert session.commit_calls == 4
+    assert service._ledger_service.record_calls == []
+    assert invoke_service.get_invocation_by_idempotency_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_paid_invoke_rejects_compensation_required_replay_without_forwarding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = FakeSession()
+    facilitator_client = FakeFacilitatorClient()
+    attempt = FakeAttempt(
+        id=41,
+        invocation_id=77,
+        quote_id=21,
+        idempotency_key="invoke-key",
+        status=PaymentAttemptStatus.COMPENSATION_REQUIRED,
+        settle_outcome={"ok": True, "reference": "settle-1"},
+    )
+    service = _build_service(session, facilitator_client=facilitator_client)
+    service._attempt_repo = FakePaymentAttemptRepository(existing_attempt=attempt)
+    invoke_service = FakeInvokeService(invocation_for_lookup=FakeInvocation(id=77))
+    service._invoke_service = invoke_service
+    service._ledger_service = FakeLedgerService()
+    monkeypatch.setattr(
+        service,
+        "_build_requirement",
+        lambda *, amount_minor, currency: {
+            "amount_minor": amount_minor,
+            "currency": currency,
+            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            "payment_amount": 5_000_000,
+        },
+    )
+
+    with pytest.raises(InvokeBadGatewayError, match="manual compensation"):
+        await service.handle_paid_invoke(
+            ActorContext(account_id=12),
+            resolved=_resolved_target(),
+            idempotency_key="invoke-key",
+            request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+        )
+
+    assert invoke_service.execute_calls == 0
+    assert service._ledger_service.record_calls == []
+    assert facilitator_client.verify_calls == 0
+    assert facilitator_client.settle_calls == 0
+    assert session.commit_calls == 0
 
 
 @pytest.mark.asyncio

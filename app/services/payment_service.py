@@ -34,6 +34,7 @@ from app.repositories.payment_attempt_repo import PaymentAttemptRepository
 from app.services.invoke_service import (
     InvokeBadGatewayError,
     InvokeConflictError,
+    InvokeGatewayTimeoutError,
     InvokeService,
 )
 from app.services.ledger_service import LedgerService
@@ -214,6 +215,9 @@ class PaymentService:
         if attempt.status is PaymentAttemptStatus.SETTLE_FAILED:
             raise InvokeBadGatewayError("payment settlement failed")
 
+        if attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED:
+            raise InvokeBadGatewayError("settled payment requires manual compensation")
+
         if attempt.status is PaymentAttemptStatus.CHALLENGED:
             if not _payment_payload_matches_requirement(
                 payment_payload=payment_payload,
@@ -266,15 +270,37 @@ class PaymentService:
             attempt.status = PaymentAttemptStatus.SETTLED
             await self._session.commit()
 
-        if attempt.status in {
-            PaymentAttemptStatus.SETTLED,
-            PaymentAttemptStatus.COMPENSATION_REQUIRED,
-        }:
-            invocation = await self._invoke_service.execute(
-                actor,
-                resolved=resolved,
-                idempotency_key=attempt.idempotency_key,
-            )
+        if attempt.status is PaymentAttemptStatus.SETTLED:
+            try:
+                invocation = await self._invoke_service.execute(
+                    actor,
+                    resolved=resolved,
+                    idempotency_key=attempt.idempotency_key,
+                )
+            except (InvokeBadGatewayError, InvokeGatewayTimeoutError):
+                failed_invocation = await self._invoke_service.get_invocation_by_idempotency_key(
+                    actor,
+                    idempotency_key=attempt.idempotency_key,
+                )
+                attempt.invocation_id = (
+                    failed_invocation.id if failed_invocation is not None else None
+                )
+                attempt.status = PaymentAttemptStatus.COMPENSATION_REQUIRED
+                await self._session.commit()
+                logger.error(
+                    "settled payment requires compensation",
+                    extra=build_event_context(
+                        "payment.compensation_required",
+                        **{
+                            PAYMENT_ATTEMPT_ID_FIELD: attempt.id,
+                            QUOTE_ID_FIELD: quote.id,
+                            INVOCATION_ID_FIELD: attempt.invocation_id,
+                            PROVIDER_ACCOUNT_ID_FIELD: resolved.service.provider_account_id,
+                            SERVICE_ID_FIELD: resolved.service.id,
+                        },
+                    ),
+                )
+                raise
             attempt.invocation_id = invocation.id
             await self._ledger_service.record_paid_invocation(
                 provider_account_id=resolved.service.provider_account_id,

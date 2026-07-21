@@ -108,7 +108,12 @@ async def _seed_paid_endpoint(
     *,
     service_id: int,
     currency: str = "USD",
+    response_schema: dict[str, object] | None = None,
 ) -> int:
+    default_response_schema: dict[str, object] = {"type": "object"}
+    resolved_response_schema = (
+        response_schema if response_schema is not None else default_response_schema
+    )
     endpoint_id = await create_endpoint_record(
         db_session_factory,
         service_id=service_id,
@@ -117,6 +122,7 @@ async def _seed_paid_endpoint(
         summary="Translate text",
         description=None,
         access_mode=AccessMode.PAID,
+        response_schema=resolved_response_schema,
     )
     await create_upstream_record(
         db_session_factory,
@@ -782,11 +788,12 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
+    upstream_client = _FakeHttpClient(
+        responses=[Response(status_code=500, json={"detail": "upstream failed"})]
+    )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
-            responses=[Response(status_code=500, json={"detail": "upstream failed"})]
-        ),
+        upstream_client=upstream_client,
         facilitator_client=_FakeFacilitatorClient(
             verify_outcomes=[{"ok": True, "reference": "verify-1"}],
             settle_outcomes=[{"ok": True, "reference": "settle-1"}],
@@ -794,7 +801,7 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     )
 
     with caplog.at_level(logging.ERROR):
-        response = await async_client.post(
+        first_response = await async_client.post(
             "/v1/invoke/paid-invoke-service",
             headers={
                 **_auth_headers(
@@ -806,8 +813,22 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
             json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
         )
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": "upstream request failed"}
+        replay_response = await async_client.post(
+            "/v1/invoke/paid-invoke-service",
+            headers=_auth_headers(
+                consumer_account_id,
+                payment_header=_payment_header(payment_identifier="payment-log-failure"),
+            ),
+            json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+        )
+
+    assert first_response.status_code == 502
+    assert first_response.json() == {"detail": "upstream request failed"}
+    assert replay_response.status_code == 502
+    assert replay_response.json() == {
+        "detail": "settled payment requires manual compensation",
+    }
+    assert len(upstream_client.calls) == 1
     failed_invocation = await _get_invocation_by_idempotency_key(
         db_session_factory,
         idempotency_key="invoke-key",
@@ -821,8 +842,8 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     )
     assert failed_invocation is not None
     assert payment_attempt is not None
-    assert payment_attempt.status is PaymentAttemptStatus.SETTLED
-    assert payment_attempt.invocation_id is None
+    assert payment_attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert payment_attempt.invocation_id == failed_invocation.id
     assert invocation_count == 1
     assert payment_attempt_count == 1
     assert ledger_count == 0
@@ -836,6 +857,88 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     assert getattr(failure_record, REQUEST_ID_FIELD) == "invoke-log-failure"
     assert getattr(failure_record, SERVICE_ID_FIELD) == service_id
     assert getattr(failure_record, INVOCATION_ID_FIELD) == failed_invocation.id
+    compensation_record = next(
+        record
+        for record in caplog.records
+        if record.name == "app.services.payment_service"
+        and getattr(record, EVENT_FIELD, None) == "payment.compensation_required"
+    )
+    assert getattr(compensation_record, PAYMENT_ATTEMPT_ID_FIELD) == payment_attempt.id
+    assert getattr(compensation_record, INVOCATION_ID_FIELD) == failed_invocation.id
+    assert getattr(compensation_record, SERVICE_ID_FIELD) == service_id
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_marks_compensation_when_response_breaks_advertised_schema(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        response_schema={
+            "type": "object",
+            "properties": {"result": {"type": "integer"}},
+            "required": ["result"],
+        },
+    )
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    upstream_client = _FakeHttpClient(
+        responses=[Response(status_code=200, json={"result": "bonjour"})],
+    )
+    _install_payment_state(
+        app,
+        upstream_client=upstream_client,
+        facilitator_client=_FakeFacilitatorClient(
+            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
+            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        ),
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            payment_header=_payment_header(payment_identifier="payment-schema-failure"),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    failed_invocation = await _get_invocation_by_idempotency_key(
+        db_session_factory,
+        idempotency_key="invoke-key",
+    )
+    payment_attempt = await _get_payment_attempt(
+        db_session_factory,
+        payment_identifier="payment-schema-failure",
+    )
+    invocation_count, payment_attempt_count, ledger_count, payout_count = await _count_rows(
+        db_session_factory
+    )
+    assert response.status_code == 502
+    assert response.json() == {
+        "detail": "upstream response does not match advertised response schema",
+    }
+    assert failed_invocation is not None
+    assert failed_invocation.failure_reason == "upstream_schema"
+    assert failed_invocation.upstream_status_code == 200
+    assert payment_attempt is not None
+    assert payment_attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert payment_attempt.invocation_id == failed_invocation.id
+    assert invocation_count == 1
+    assert payment_attempt_count == 1
+    assert ledger_count == 0
+    assert payout_count == 0
+    assert len(upstream_client.calls) == 1
 
 
 @pytest.mark.asyncio
