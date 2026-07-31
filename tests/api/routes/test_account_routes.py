@@ -89,6 +89,22 @@ async def test_patch_account_me_updates_display_name(async_client: AsyncClient) 
 
 
 @pytest.mark.asyncio
+async def test_patch_account_me_rejects_explicit_null_display_name(
+    async_client: AsyncClient,
+) -> None:
+    _, access_token = await _authenticate(async_client)
+
+    response = await async_client.patch(
+        "/v1/account/me",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"display_name": None},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "display_name cannot be null"
+
+
+@pytest.mark.asyncio
 async def test_account_me_rejects_api_key_bearer(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -180,3 +196,11 @@ async def test_wallet_change_initiate_rejects_invalid_wallet_address(
     )
 
     assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    matching_errors = [
+        error
+        for error in body["detail"]
+        if error["loc"][-1] == "wallet_address" and "invalid wallet address" in error["msg"]
+    ]
+    assert matching_errors

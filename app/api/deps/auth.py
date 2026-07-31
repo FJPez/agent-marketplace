@@ -1,64 +1,60 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import Depends, Header
 
+from app.api.deps.database import SessionDep
+from app.api.deps.settings import SettingsDep
 from app.core.actor import ActorContext
-from app.core.config import get_settings
-from app.db.session import get_db_session
-from app.services.auth_resolution_service import AuthResolutionService
+from app.core.errors import PermissionDeniedError, UnauthenticatedError
+from app.services.auth import resolve_actor, resolve_jwt_actor
 
 AUTHORIZATION_HEADER = "Authorization"
 
-
-def _unauthorized(detail: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail)
-
-
-def _forbidden(detail: str) -> HTTPException:
-    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+AuthorizationHeader = Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)]
 
 
 async def get_optional_current_actor(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    authorization: Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)] = None,
+    session: SessionDep,
+    settings: SettingsDep,
+    authorization: AuthorizationHeader = None,
 ) -> ActorContext | None:
     if authorization is None:
         return None
 
-    service = AuthResolutionService(session, settings=get_settings())
-    return await service.resolve_actor(authorization=authorization)
+    return await resolve_actor(session=session, settings=settings, authorization=authorization)
 
 
 async def get_current_actor(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    authorization: Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)] = None,
+    session: SessionDep,
+    settings: SettingsDep,
+    authorization: AuthorizationHeader = None,
 ) -> ActorContext:
     if authorization is None:
-        detail = f"{AUTHORIZATION_HEADER} header is required"
-        raise _unauthorized(detail)
+        raise UnauthenticatedError(f"{AUTHORIZATION_HEADER} header is required")
 
-    service = AuthResolutionService(session, settings=get_settings())
-    return await service.resolve_actor(authorization=authorization)
+    return await resolve_actor(session=session, settings=settings, authorization=authorization)
 
 
 async def get_current_jwt_actor(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-    authorization: Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)] = None,
+    session: SessionDep,
+    settings: SettingsDep,
+    authorization: AuthorizationHeader = None,
 ) -> ActorContext:
     if authorization is None:
-        detail = f"{AUTHORIZATION_HEADER} header is required"
-        raise _unauthorized(detail)
+        raise UnauthenticatedError(f"{AUTHORIZATION_HEADER} header is required")
 
-    service = AuthResolutionService(session, settings=get_settings())
-    return await service.resolve_jwt_actor(authorization=authorization)
+    return await resolve_jwt_actor(
+        session=session,
+        settings=settings,
+        authorization=authorization,
+    )
 
 
 async def get_admin_actor(
     actor: Annotated[ActorContext, Depends(get_current_actor)],
 ) -> ActorContext:
     if not actor.is_admin:
-        raise _forbidden("admin privileges required")
+        raise PermissionDeniedError("admin privileges required")
     return actor
 
 

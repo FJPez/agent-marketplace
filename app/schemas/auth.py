@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -82,6 +82,8 @@ class ApiKeyCreateRequest(BaseModel):
             return None
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("expires_at must include timezone information")
+        if value <= datetime.now(UTC):
+            raise ValueError("expires_at must be in the future")
         return value
 
 

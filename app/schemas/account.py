@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.common import DisplayName, Id, Timestamp
+from app.schemas.common import DisplayName, Id, Timestamp, WalletAddress
 
 
 class AccountResponse(BaseModel):
@@ -32,7 +32,7 @@ class WalletChangeInitiateRequest(BaseModel):
         }
     )
 
-    wallet_address: str
+    wallet_address: WalletAddress
 
 
 class WalletChangeInitiateResponse(BaseModel):

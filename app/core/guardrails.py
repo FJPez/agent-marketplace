@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
+from app.core.errors import UnauthenticatedError
 from app.core.invoke_submission_backend import (
     InvokeSubmissionBackend,
     MemoryInvokeSubmissionBackend,
@@ -19,7 +20,7 @@ from app.core.rate_limits_backend import (
     build_actor_rate_limit_key,
     get_rate_limits_backend,
 )
-from app.services.auth_resolution_service import AuthResolutionError, AuthResolutionService
+from app.services.auth import resolve_actor
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 _INVOKE_PATH_PREFIX = "/v1/invoke/"
@@ -216,13 +217,14 @@ class InvokeGuardrails:
             return owner_key
 
         async with session_factory() as session:
-            service = AuthResolutionService(session, settings=get_settings())
             try:
-                actor = await service.resolve_actor(
+                actor = await resolve_actor(
+                    session=session,
+                    settings=get_settings(),
                     authorization=authorization,
                     touch_api_key=False,
                 )
-            except AuthResolutionError:
+            except UnauthenticatedError:
                 owner_key = build_actor_rate_limit_key(request)
             else:
                 owner_key = f"account:{actor.account_id}"

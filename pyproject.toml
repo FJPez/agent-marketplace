@@ -78,7 +78,6 @@ select = [
     "SIM",
     "SLOT",
     "T20",
-    "TC",
     "UP",
 ]
 

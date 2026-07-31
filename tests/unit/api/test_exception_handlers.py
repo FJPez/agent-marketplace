@@ -6,11 +6,12 @@ from tests.unit.api.conftest import AppFactory
 
 from app.core.errors import (
     ConflictError,
+    InvalidInputError,
     InvalidStateError,
     NotFoundError,
     PermissionDeniedError,
+    UnauthenticatedError,
 )
-from app.services.account_service import AccountNotFoundError
 
 
 class ChildNotFoundError(NotFoundError):
@@ -21,7 +22,13 @@ class ChildNotFoundError(NotFoundError):
     ("exc", "expected_status", "expected_detail"),
     [
         (NotFoundError("thing missing"), status.HTTP_404_NOT_FOUND, "thing missing"),
+        (
+            UnauthenticatedError("credentials required"),
+            status.HTTP_401_UNAUTHORIZED,
+            "credentials required",
+        ),
         (ConflictError("conflicting change"), status.HTTP_409_CONFLICT, "conflicting change"),
+        (InvalidInputError("bad input"), status.HTTP_422_UNPROCESSABLE_CONTENT, "bad input"),
         (PermissionDeniedError("not allowed"), status.HTTP_403_FORBIDDEN, "not allowed"),
         (InvalidStateError("wrong state"), status.HTTP_409_CONFLICT, "wrong state"),
     ],
@@ -68,14 +75,3 @@ def test_specific_registration_beats_base_fallback(
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json() == {"detail": "redacted"}
-
-
-def test_existing_specific_registration_is_undisturbed(
-    handler_app_factory: AppFactory,
-) -> None:
-    client = TestClient(handler_app_factory(AccountNotFoundError("secret internals")))
-
-    response = client.get("/boom")
-
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json() == {"detail": "account not found"}

@@ -54,6 +54,7 @@ class Account(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    pending_wallet_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=_utc_now,

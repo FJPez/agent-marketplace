@@ -1,12 +1,8 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Response, status
 
 from app.api.deps.auth import CurrentJwtActor
-from app.core.config import get_settings
-from app.core.security import normalize_wallet_address
-from app.db.session import get_db_session
+from app.api.deps.database import SessionDep
+from app.api.deps.settings import SettingsDep
 from app.schemas.account import AccountResponse
 from app.schemas.auth import (
     ApiKeyCreateRequest,
@@ -18,8 +14,8 @@ from app.schemas.auth import (
     AuthVerifyRequest,
     AuthVerifyResponse,
 )
-from app.services.api_key_service import ApiKeyService
-from app.services.auth_service import AuthService
+from app.schemas.common import WalletAddress
+from app.services import api_keys, auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -38,17 +34,15 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     },
 )
 async def get_auth_nonce(
-    address: Annotated[str, Query(min_length=42, max_length=42)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    address: WalletAddress,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> AuthNonceResponse:
-    service = AuthService(session, settings=get_settings())
-    try:
-        nonce = await service.issue_nonce(wallet_address=normalize_wallet_address(address))
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
+    nonce = await auth.issue_nonce(
+        session=session,
+        settings=settings,
+        wallet_address=address,
+    )
     return AuthNonceResponse(nonce=nonce)
 
 
@@ -67,10 +61,12 @@ async def get_auth_nonce(
 )
 async def verify_auth(
     request: AuthVerifyRequest,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> AuthVerifyResponse:
-    service = AuthService(session, settings=get_settings())
-    result = await service.verify_wallet(
+    result = await auth.verify_wallet(
+        session=session,
+        settings=settings,
         message=request.message,
         signature=request.signature,
     )
@@ -93,10 +89,14 @@ async def verify_auth(
 )
 async def refresh_auth(
     request: AuthRefreshRequest,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> AuthRefreshResponse:
-    service = AuthService(session, settings=get_settings())
-    access_token = await service.refresh_access_token(refresh_token=request.refresh_token)
+    access_token = await auth.refresh_access_token(
+        session=session,
+        settings=settings,
+        refresh_token=request.refresh_token,
+    )
     return AuthRefreshResponse(access_token=access_token)
 
 
@@ -118,11 +118,13 @@ async def refresh_auth(
 async def create_api_key(
     request: ApiKeyCreateRequest,
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> ApiKeyCreateResponse:
-    service = ApiKeyService(session, settings=get_settings())
-    api_key, plaintext = await service.create_key(
-        actor,
+    api_key, plaintext = await api_keys.create_api_key(
+        session=session,
+        settings=settings,
+        account_id=actor.account_id,
         name=request.name,
         expires_at=request.expires_at,
     )
@@ -153,10 +155,9 @@ async def create_api_key(
 )
 async def list_api_keys(
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> list[ApiKeyResponse]:
-    service = ApiKeyService(session, settings=get_settings())
-    api_keys = await service.list_keys(actor)
+    account_api_keys = await api_keys.list_api_keys(session=session, account_id=actor.account_id)
     return [
         ApiKeyResponse(
             id=api_key.id,
@@ -167,7 +168,7 @@ async def list_api_keys(
             revoked_at=api_key.revoked_at,
             created_at=api_key.created_at,
         )
-        for api_key in api_keys
+        for api_key in account_api_keys
     ]
 
 
@@ -185,8 +186,11 @@ async def list_api_keys(
 async def revoke_api_key(
     api_key_id: int,
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> Response:
-    service = ApiKeyService(session, settings=get_settings())
-    await service.revoke_key(actor, api_key_id=api_key_id)
+    await api_keys.revoke_api_key(
+        session=session,
+        account_id=actor.account_id,
+        api_key_id=api_key_id,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
