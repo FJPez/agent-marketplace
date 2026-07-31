@@ -2,29 +2,28 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.helpers.auth import create_account
 
 from app.repositories.account_repo import AccountRepository
 
+WALLET_ADDRESS = "0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6"
+
 
 @pytest.mark.asyncio
-async def test_account_repository_persists_and_updates_identity_fields(
+async def test_account_repository_updates_identity_fields(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     _ = migrated_database
+    account_id = await create_account(
+        db_session_factory,
+        wallet_address=WALLET_ADDRESS,
+        display_name="Alpha",
+    )
 
     async with db_session_factory.begin() as session:
         repo = AccountRepository(session)
-        account = await repo.create(
-            wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
-            display_name="Alpha",
-        )
-
-    async with db_session_factory.begin() as session:
-        repo = AccountRepository(session)
-        account = await repo.get_by_wallet_address(
-            "0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
-        )
+        account = await repo.get_by_wallet_address(WALLET_ADDRESS)
 
         assert account is not None
         assert account.display_name == "Alpha"
@@ -39,7 +38,7 @@ async def test_account_repository_persists_and_updates_identity_fields(
 
     async with db_session_factory.begin() as session:
         repo = AccountRepository(session)
-        updated_account = await repo.get(account.id)
+        updated_account = await repo.get(account_id)
 
     assert updated_account is not None
     assert updated_account.nonce == "nonce-2"
@@ -53,19 +52,17 @@ async def test_account_repository_updates_wallet_and_change_timestamp(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     _ = migrated_database
-
-    async with db_session_factory.begin() as session:
-        repo = AccountRepository(session)
-        account = await repo.create(
-            wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
-            display_name="Wallet Owner",
-        )
+    account_id = await create_account(
+        db_session_factory,
+        wallet_address=WALLET_ADDRESS,
+        display_name="Wallet Owner",
+    )
 
     changed_at = datetime(2026, 3, 17, 9, 0, tzinfo=UTC)
 
     async with db_session_factory.begin() as session:
         repo = AccountRepository(session)
-        account = await repo.get(account.id)
+        account = await repo.get(account_id)
         assert account is not None
         repo.update_wallet(
             account,

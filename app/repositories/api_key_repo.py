@@ -32,10 +32,6 @@ class ApiKeyRepository:
     async def get(self, api_key_id: int) -> ApiKey | None:
         return await self._session.get(ApiKey, api_key_id)
 
-    async def get_by_hash(self, key_hash: str) -> ApiKey | None:
-        statement = select(ApiKey).where(ApiKey.key_hash == key_hash)
-        return await self._session.scalar(statement)
-
     async def list_for_account(self, *, account_id: int) -> list[ApiKey]:
         statement: Select[tuple[ApiKey]] = (
             select(ApiKey)
@@ -43,10 +39,6 @@ class ApiKeyRepository:
             .order_by(ApiKey.created_at.desc(), ApiKey.id.desc())
         )
         return list(await self._session.scalars(statement))
-
-    def touch_last_used(self, api_key: ApiKey) -> ApiKey:
-        api_key.last_used_at = datetime.now(UTC)
-        return api_key
 
     def revoke(self, api_key: ApiKey) -> ApiKey:
         api_key.revoked_at = datetime.now(UTC)

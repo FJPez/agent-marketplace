@@ -10,26 +10,6 @@ class AccountRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def create(
-        self,
-        *,
-        wallet_address: str,
-        display_name: str = "Anonymous",
-        account_type: str = "human",
-        nonce: str = "",
-        nonce_issued_at: datetime | None = None,
-    ) -> Account:
-        account = Account(
-            wallet_address=wallet_address,
-            display_name=display_name,
-            account_type=account_type,
-            nonce=nonce,
-            nonce_issued_at=nonce_issued_at or datetime.now(UTC),
-        )
-        self._session.add(account)
-        await self._session.flush()
-        return account
-
     async def get(self, account_id: int) -> Account | None:
         return await self._session.get(Account, account_id)
 
@@ -39,12 +19,6 @@ class AccountRepository:
 
     async def get_by_wallet_address(self, wallet_address: str) -> Account | None:
         statement = select(Account).where(Account.wallet_address == wallet_address)
-        return await self._session.scalar(statement)
-
-    async def get_by_wallet_address_for_update(self, wallet_address: str) -> Account | None:
-        statement = (
-            select(Account).where(Account.wallet_address == wallet_address).with_for_update()
-        )
         return await self._session.scalar(statement)
 
     def update_nonce(
