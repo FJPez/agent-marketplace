@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import cast
 
 from jwt import InvalidTokenError
 from sqlalchemy import select
@@ -304,8 +303,5 @@ async def _resolve_jwt_token_actor(
         is_admin=account.is_admin,
         account_type=account.account_type,
         auth_method="jwt",
-        # `ActorContext.wallet_address` is typed `str`, but `Account.wallet_address`
-        # is nullable and the original getattr-based lookup preserved that `None`
-        # when present; cast keeps ty satisfied without changing runtime behavior.
-        wallet_address=cast("str", account.wallet_address),
+        wallet_address=_require_wallet_address(account),
     )

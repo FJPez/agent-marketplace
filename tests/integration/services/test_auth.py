@@ -144,9 +144,6 @@ async def test_issue_nonce_concurrent_calls_create_single_account(
 
     first_nonce, second_nonce = await asyncio.gather(_call(), _call())
 
-    assert first_nonce
-    assert second_nonce
-
     async with db_session_factory() as session:
         rows = list(
             await session.scalars(
@@ -154,6 +151,7 @@ async def test_issue_nonce_concurrent_calls_create_single_account(
             ),
         )
     assert len(rows) == 1
+    assert first_nonce == second_nonce == rows[0].nonce
 
 
 @pytest.mark.asyncio
