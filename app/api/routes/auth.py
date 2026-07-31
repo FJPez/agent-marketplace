@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentJwtActor
+from app.api.deps.database import SessionDep
 from app.core.config import get_settings
 from app.core.security import normalize_wallet_address
 from app.db.session import get_db_session
@@ -18,8 +19,8 @@ from app.schemas.auth import (
     AuthVerifyRequest,
     AuthVerifyResponse,
 )
+from app.services import auth
 from app.services.api_key_service import ApiKeyService
-from app.services.auth_service import AuthService
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -39,11 +40,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 )
 async def get_auth_nonce(
     address: Annotated[str, Query(min_length=42, max_length=42)],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> AuthNonceResponse:
-    service = AuthService(session, settings=get_settings())
     try:
-        nonce = await service.issue_nonce(wallet_address=normalize_wallet_address(address))
+        nonce = await auth.issue_nonce(
+            session=session,
+            settings=get_settings(),
+            wallet_address=normalize_wallet_address(address),
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -67,10 +71,11 @@ async def get_auth_nonce(
 )
 async def verify_auth(
     request: AuthVerifyRequest,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> AuthVerifyResponse:
-    service = AuthService(session, settings=get_settings())
-    result = await service.verify_wallet(
+    result = await auth.verify_wallet(
+        session=session,
+        settings=get_settings(),
         message=request.message,
         signature=request.signature,
     )
@@ -93,10 +98,13 @@ async def verify_auth(
 )
 async def refresh_auth(
     request: AuthRefreshRequest,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> AuthRefreshResponse:
-    service = AuthService(session, settings=get_settings())
-    access_token = await service.refresh_access_token(refresh_token=request.refresh_token)
+    access_token = await auth.refresh_access_token(
+        session=session,
+        settings=get_settings(),
+        refresh_token=request.refresh_token,
+    )
     return AuthRefreshResponse(access_token=access_token)
 
 

@@ -9,8 +9,8 @@ import pytest
 from fastapi import FastAPI
 from starlette.requests import Request
 
+from app.core.errors import UnauthenticatedError
 from app.core.guardrails import InvokeGuardrails
-from app.services.auth_resolution_service import AuthResolutionError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -112,13 +112,13 @@ async def test_resolve_owner_key_uses_validated_actor_context(
     )
 
     async def fake_resolve_actor(
-        self: object, *, authorization: str, touch_api_key: bool = True
+        *, session: object, settings: object, authorization: str, touch_api_key: bool = True
     ) -> ActorContext:
-        _ = self, authorization, touch_api_key
+        _ = session, settings, authorization, touch_api_key
         return ActorContext(account_id=42, wallet_address="0x1")
 
     monkeypatch.setattr(
-        "app.services.auth_resolution_service.AuthResolutionService.resolve_actor",
+        "app.core.guardrails.resolve_actor",
         fake_resolve_actor,
     )
 
@@ -150,13 +150,13 @@ async def test_resolve_owner_key_falls_back_to_client_key_for_unresolved_bearer_
     )
 
     async def fake_resolve_actor(
-        self: object, *, authorization: str, touch_api_key: bool = True
+        *, session: object, settings: object, authorization: str, touch_api_key: bool = True
     ) -> object:
-        _ = self, authorization, touch_api_key
-        raise AuthResolutionError("invalid access token")
+        _ = session, settings, authorization, touch_api_key
+        raise UnauthenticatedError("invalid access token")
 
     monkeypatch.setattr(
-        "app.services.auth_resolution_service.AuthResolutionService.resolve_actor",
+        "app.core.guardrails.resolve_actor",
         fake_resolve_actor,
     )
 

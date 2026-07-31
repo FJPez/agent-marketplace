@@ -31,7 +31,6 @@ from app.db.session import create_engine, create_session_factory
 from app.main import create_app
 
 pytest_plugins = (
-    "tests.fixtures.auth",
     "tests.fixtures.domain",
     "tests.fixtures.settings",
 )

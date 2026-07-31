@@ -1,12 +1,11 @@
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps.database import SessionDep
 from app.core.actor import ActorContext
 from app.core.config import get_settings
-from app.db.session import get_db_session
-from app.services.auth_resolution_service import AuthResolutionService
+from app.services.auth import resolve_actor, resolve_jwt_actor
 
 AUTHORIZATION_HEADER = "Authorization"
 
@@ -20,38 +19,41 @@ def _forbidden(detail: str) -> HTTPException:
 
 
 async def get_optional_current_actor(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
     authorization: Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)] = None,
 ) -> ActorContext | None:
     if authorization is None:
         return None
 
-    service = AuthResolutionService(session, settings=get_settings())
-    return await service.resolve_actor(authorization=authorization)
+    return await resolve_actor(
+        session=session, settings=get_settings(), authorization=authorization
+    )
 
 
 async def get_current_actor(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
     authorization: Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)] = None,
 ) -> ActorContext:
     if authorization is None:
         detail = f"{AUTHORIZATION_HEADER} header is required"
         raise _unauthorized(detail)
 
-    service = AuthResolutionService(session, settings=get_settings())
-    return await service.resolve_actor(authorization=authorization)
+    return await resolve_actor(
+        session=session, settings=get_settings(), authorization=authorization
+    )
 
 
 async def get_current_jwt_actor(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
     authorization: Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)] = None,
 ) -> ActorContext:
     if authorization is None:
         detail = f"{AUTHORIZATION_HEADER} header is required"
         raise _unauthorized(detail)
 
-    service = AuthResolutionService(session, settings=get_settings())
-    return await service.resolve_jwt_actor(authorization=authorization)
+    return await resolve_jwt_actor(
+        session=session, settings=get_settings(), authorization=authorization
+    )
 
 
 async def get_admin_actor(

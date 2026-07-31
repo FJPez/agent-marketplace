@@ -15,8 +15,6 @@ from app.core.errors import (
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.api_key_service import ApiKeyNotFoundError, ApiKeyValidationError
-from app.services.auth_resolution_service import AuthResolutionError, JwtAuthRequiredError
-from app.services.auth_service import AuthenticationError
 from app.services.discovery_service import DiscoveryNotFoundError
 from app.services.health_service import ReadinessCheckError
 from app.services.invoke_service import (
@@ -46,9 +44,6 @@ Handler = Callable[[Request, Exception], Awaitable[Response]]
 # app.core.errors base classes act as fallbacks for any unregistered subclass.
 STATUS_CODES: dict[type[Exception], int] = {
     UnauthenticatedError: status.HTTP_401_UNAUTHORIZED,
-    AuthResolutionError: status.HTTP_401_UNAUTHORIZED,
-    AuthenticationError: status.HTTP_401_UNAUTHORIZED,
-    JwtAuthRequiredError: status.HTTP_403_FORBIDDEN,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     NotFoundError: status.HTTP_404_NOT_FOUND,
     ApiKeyNotFoundError: status.HTTP_404_NOT_FOUND,

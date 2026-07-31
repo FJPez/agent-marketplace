@@ -12,7 +12,7 @@ from app.core.security import (
 )
 from app.repositories.account_repo import AccountRepository
 from app.repositories.wallet_change_log_repo import WalletChangeLogRepository
-from app.services.auth_service import TokenPair, issue_token_pair
+from app.services.auth import TokenPair, issue_token_pair
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
