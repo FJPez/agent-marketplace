@@ -17,8 +17,7 @@ from app.schemas.auth import (
     AuthVerifyRequest,
     AuthVerifyResponse,
 )
-from app.services import auth
-from app.services.api_key_service import ApiKeyService
+from app.services import api_keys, auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -131,9 +130,10 @@ async def create_api_key(
     session: SessionDep,
     settings: SettingsDep,
 ) -> ApiKeyCreateResponse:
-    service = ApiKeyService(session, settings=settings)
-    api_key, plaintext = await service.create_key(
-        actor,
+    api_key, plaintext = await api_keys.create_api_key(
+        session=session,
+        settings=settings,
+        account_id=actor.account_id,
         name=request.name,
         expires_at=request.expires_at,
     )
@@ -165,10 +165,8 @@ async def create_api_key(
 async def list_api_keys(
     actor: CurrentJwtActor,
     session: SessionDep,
-    settings: SettingsDep,
 ) -> list[ApiKeyResponse]:
-    service = ApiKeyService(session, settings=settings)
-    api_keys = await service.list_keys(actor)
+    account_api_keys = await api_keys.list_api_keys(session=session, account_id=actor.account_id)
     return [
         ApiKeyResponse(
             id=api_key.id,
@@ -179,7 +177,7 @@ async def list_api_keys(
             revoked_at=api_key.revoked_at,
             created_at=api_key.created_at,
         )
-        for api_key in api_keys
+        for api_key in account_api_keys
     ]
 
 
@@ -198,8 +196,10 @@ async def revoke_api_key(
     api_key_id: int,
     actor: CurrentJwtActor,
     session: SessionDep,
-    settings: SettingsDep,
 ) -> Response:
-    service = ApiKeyService(session, settings=settings)
-    await service.revoke_key(actor, api_key_id=api_key_id)
+    await api_keys.revoke_api_key(
+        session=session,
+        account_id=actor.account_id,
+        api_key_id=api_key_id,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

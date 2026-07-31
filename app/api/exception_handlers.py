@@ -14,7 +14,6 @@ from app.core.errors import (
     UnauthenticatedError,
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
-from app.services.api_key_service import ApiKeyNotFoundError, ApiKeyValidationError
 from app.services.discovery_service import DiscoveryNotFoundError
 from app.services.health_service import ReadinessCheckError
 from app.services.invoke_service import (
@@ -36,7 +35,6 @@ from app.services.provider_service_errors import (
     ProviderServiceValidationError,
 )
 from app.services.quote_service import QuoteNotFoundError, QuoteUnavailableError
-from app.services.wallet_change_service import WalletChangeError
 
 Handler = Callable[[Request, Exception], Awaitable[Response]]
 
@@ -46,7 +44,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     UnauthenticatedError: status.HTTP_401_UNAUTHORIZED,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     NotFoundError: status.HTTP_404_NOT_FOUND,
-    ApiKeyNotFoundError: status.HTTP_404_NOT_FOUND,
     DiscoveryNotFoundError: status.HTTP_404_NOT_FOUND,
     QuoteNotFoundError: status.HTTP_404_NOT_FOUND,
     InvokeNotFoundError: status.HTTP_404_NOT_FOUND,
@@ -54,7 +51,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     ModeratedServiceNotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     InvalidStateError: status.HTTP_409_CONFLICT,
-    WalletChangeError: status.HTTP_409_CONFLICT,
     QuoteUnavailableError: status.HTTP_409_CONFLICT,
     InvokeConflictError: status.HTTP_409_CONFLICT,
     InvokeUnavailableError: status.HTTP_409_CONFLICT,
@@ -62,7 +58,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     ProviderServiceStateError: status.HTTP_409_CONFLICT,
     InvalidModerationTransitionError: status.HTTP_409_CONFLICT,
     PayoutConflictError: status.HTTP_409_CONFLICT,
-    ApiKeyValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ProviderServiceValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvokeBadGatewayError: status.HTTP_502_BAD_GATEWAY,
@@ -70,19 +65,10 @@ STATUS_CODES: dict[type[Exception], int] = {
     InvokeGatewayTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
 }
 
-# Exceptions whose response detail is a fixed string instead of str(exc), so
-# internal state cannot leak for these resources.
-REDACTED_DETAILS: dict[type[Exception], str] = {
-    ApiKeyNotFoundError: "api key not found",
-}
 
-
-def _build_handler(status_code: int, fixed_detail: str | None) -> Handler:
+def _build_handler(status_code: int) -> Handler:
     async def handle_exception(request: Request, exc: Exception) -> Response:
-        http_exc = HTTPException(
-            status_code=status_code,
-            detail=fixed_detail if fixed_detail is not None else str(exc),
-        )
+        http_exc = HTTPException(status_code=status_code, detail=str(exc))
         return await http_exception_handler(request, http_exc)
 
     return handle_exception
@@ -90,5 +76,4 @@ def _build_handler(status_code: int, fixed_detail: str | None) -> Handler:
 
 def install_exception_handlers(app: FastAPI) -> None:
     for exc_type, status_code in STATUS_CODES.items():
-        handler = _build_handler(status_code, REDACTED_DETAILS.get(exc_type))
-        app.add_exception_handler(exc_type, handler)
+        app.add_exception_handler(exc_type, _build_handler(status_code))
