@@ -1,13 +1,9 @@
 import pytest
-from fastapi import FastAPI, status
+from fastapi import Request, status
+from fastapi.responses import JSONResponse, Response
 from fastapi.testclient import TestClient
+from tests.unit.api.conftest import AppFactory
 
-from app.api.exception_handlers import (
-    ExceptionHandlerConfig,
-    _build_handler,
-    _fixed_detail,
-    install_exception_handlers,
-)
 from app.core.errors import (
     ConflictError,
     InvalidStateError,
@@ -17,19 +13,8 @@ from app.core.errors import (
 from app.services.account_service import AccountNotFoundError
 
 
-class _ChildNotFoundError(NotFoundError):
+class ChildNotFoundError(NotFoundError):
     pass
-
-
-def _build_app(exc: Exception) -> FastAPI:
-    app = FastAPI()
-    install_exception_handlers(app)
-
-    @app.get("/boom")
-    async def raise_exception() -> dict[str, str]:
-        raise exc
-
-    return app
 
 
 @pytest.mark.parametrize(
@@ -42,11 +27,12 @@ def _build_app(exc: Exception) -> FastAPI:
     ],
 )
 def test_base_taxonomy_exceptions_translate_to_http(
+    handler_app_factory: AppFactory,
     exc: Exception,
     expected_status: int,
     expected_detail: str,
 ) -> None:
-    client = TestClient(_build_app(exc))
+    client = TestClient(handler_app_factory(exc))
 
     response = client.get("/boom")
 
@@ -54,8 +40,10 @@ def test_base_taxonomy_exceptions_translate_to_http(
     assert response.json() == {"detail": expected_detail}
 
 
-def test_unregistered_subclass_falls_back_to_base_handler() -> None:
-    client = TestClient(_build_app(_ChildNotFoundError("child missing")))
+def test_unregistered_subclass_falls_back_to_base_handler(
+    handler_app_factory: AppFactory,
+) -> None:
+    client = TestClient(handler_app_factory(ChildNotFoundError("child missing")))
 
     response = client.get("/boom")
 
@@ -63,17 +51,17 @@ def test_unregistered_subclass_falls_back_to_base_handler() -> None:
     assert response.json() == {"detail": "child missing"}
 
 
-def test_specific_registration_beats_base_fallback() -> None:
-    app = _build_app(_ChildNotFoundError("child missing"))
-    app.add_exception_handler(
-        _ChildNotFoundError,
-        _build_handler(
-            ExceptionHandlerConfig(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail_builder=_fixed_detail("redacted"),
-            ),
-        ),
-    )
+def test_specific_registration_beats_base_fallback(
+    handler_app_factory: AppFactory,
+) -> None:
+    async def redacted_handler(request: Request, exc: Exception) -> Response:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": "redacted"},
+        )
+
+    app = handler_app_factory(ChildNotFoundError("child missing"))
+    app.add_exception_handler(ChildNotFoundError, redacted_handler)
     client = TestClient(app)
 
     response = client.get("/boom")
@@ -82,8 +70,10 @@ def test_specific_registration_beats_base_fallback() -> None:
     assert response.json() == {"detail": "redacted"}
 
 
-def test_existing_specific_registration_is_undisturbed() -> None:
-    client = TestClient(_build_app(AccountNotFoundError("secret internals")))
+def test_existing_specific_registration_is_undisturbed(
+    handler_app_factory: AppFactory,
+) -> None:
+    client = TestClient(handler_app_factory(AccountNotFoundError("secret internals")))
 
     response = client.get("/boom")
 
