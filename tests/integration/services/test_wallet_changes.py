@@ -9,9 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
 
-from app.core.actor import ActorContext
 from app.core.config import Settings
-from app.core.errors import ConflictError, InvalidStateError, PermissionDeniedError
+from app.core.errors import ConflictError, InvalidStateError
 from app.core.security import AuthTokenType, decode_jwt
 from app.db.models import Account, WalletChangeLog
 from app.services.wallet_changes import confirm_wallet_change, initiate_wallet_change
@@ -64,10 +63,6 @@ async def _get_account(
     return account
 
 
-def _jwt_actor(account_id: int) -> ActorContext:
-    return ActorContext(account_id=account_id, auth_method="jwt")
-
-
 async def _initiate_and_sign(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -79,7 +74,7 @@ async def _initiate_and_sign(
         challenge = await initiate_wallet_change(
             session=session,
             settings=settings,
-            actor=_jwt_actor(account_id),
+            account_id=account_id,
             wallet_address=new_signer.address,
         )
     issued_at = datetime.now(UTC).replace(microsecond=0)
@@ -104,7 +99,7 @@ async def test_initiate_rejects_current_wallet(
             await initiate_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 wallet_address=wallet_address,
             )
 
@@ -122,7 +117,7 @@ async def test_initiate_rejects_wallet_already_used(
             await initiate_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 wallet_address=other_wallet_address,
             )
 
@@ -143,7 +138,7 @@ async def test_initiate_rejects_during_cooldown(
             await initiate_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 wallet_address=EthAccount.create().address,
             )
 
@@ -160,7 +155,7 @@ async def test_initiate_success_returns_challenge_and_rotates_nonce(
         challenge = await initiate_wallet_change(
             session=session,
             settings=settings,
-            actor=_jwt_actor(account_id),
+            account_id=account_id,
             wallet_address=new_wallet_address,
         )
 
@@ -173,22 +168,6 @@ async def test_initiate_success_returns_challenge_and_rotates_nonce(
     assert challenge.expires_at == after.nonce_issued_at + timedelta(
         seconds=settings.siwe_nonce_expiry,
     )
-
-
-async def test_initiate_requires_jwt_auth_method(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    settings = _wallet_change_settings()
-    account_id = await create_account(db_session_factory)
-
-    async with db_session_factory() as session:
-        with pytest.raises(PermissionDeniedError, match="jwt authentication"):
-            await initiate_wallet_change(
-                session=session,
-                settings=settings,
-                actor=ActorContext(account_id=account_id, auth_method="api_key"),
-                wallet_address=EthAccount.create().address,
-            )
 
 
 async def test_confirm_expired_nonce_raises_invalid_state(
@@ -216,7 +195,7 @@ async def test_confirm_expired_nonce_raises_invalid_state(
             await confirm_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 message=message,
                 signature=signature,
             )
@@ -242,7 +221,7 @@ async def test_confirm_bad_signature_raises_invalid_state(
             await confirm_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 message=message,
                 signature=bad_signature,
             )
@@ -268,7 +247,7 @@ async def test_confirm_wallet_taken_after_initiate_raises_conflict(
             await confirm_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 message=message,
                 signature=signature,
             )
@@ -286,7 +265,7 @@ async def test_confirm_success_updates_account_and_issues_tokens(
         challenge = await initiate_wallet_change(
             session=session,
             settings=settings,
-            actor=_jwt_actor(account_id),
+            account_id=account_id,
             wallet_address=new_signer.address,
         )
     issued_at = datetime.now(UTC).replace(microsecond=0)
@@ -301,7 +280,7 @@ async def test_confirm_success_updates_account_and_issues_tokens(
         account, tokens = await confirm_wallet_change(
             session=session,
             settings=settings,
-            actor=_jwt_actor(account_id),
+            account_id=account_id,
             message=message,
             signature=signature,
         )
@@ -361,7 +340,7 @@ async def test_confirm_concurrent_same_target_wallet_only_one_succeeds(
             await confirm_wallet_change(
                 session=session,
                 settings=settings,
-                actor=_jwt_actor(account_id),
+                account_id=account_id,
                 message=message,
                 signature=signature,
             )

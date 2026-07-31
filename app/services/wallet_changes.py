@@ -5,9 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.actor import ActorContext
 from app.core.config import Settings
-from app.core.errors import ConflictError, InvalidStateError, NotFoundError, PermissionDeniedError
+from app.core.errors import ConflictError, InvalidStateError, NotFoundError
 from app.core.security import generate_nonce, verify_siwe_signature
 from app.db.models import Account, WalletChangeLog
 from app.services.auth import TokenPair, issue_token_pair
@@ -23,13 +22,11 @@ async def initiate_wallet_change(
     *,
     session: AsyncSession,
     settings: Settings,
-    actor: ActorContext,
+    account_id: int,
     wallet_address: str,
 ) -> WalletChangeChallenge:
-    if actor.auth_method != "jwt":
-        raise PermissionDeniedError("wallet change requires jwt authentication")
     now = datetime.now(UTC)
-    account = await _require_account(session=session, account_id=actor.account_id)
+    account = await _require_account(session=session, account_id=account_id)
     if account.wallet_address == wallet_address:
         raise InvalidStateError("new wallet must differ from current wallet")
     _ensure_cooldown(account, settings=settings, now=now)
@@ -54,14 +51,12 @@ async def confirm_wallet_change(
     *,
     session: AsyncSession,
     settings: Settings,
-    actor: ActorContext,
+    account_id: int,
     message: str,
     signature: str,
 ) -> tuple[Account, TokenPair]:
-    if actor.auth_method != "jwt":
-        raise PermissionDeniedError("wallet change requires jwt authentication")
     now = datetime.now(UTC)
-    account = await _require_account(session=session, account_id=actor.account_id)
+    account = await _require_account(session=session, account_id=account_id)
     _ensure_cooldown(account, settings=settings, now=now)
     expires_at = account.nonce_issued_at + timedelta(seconds=settings.siwe_nonce_expiry)
     if expires_at < now:

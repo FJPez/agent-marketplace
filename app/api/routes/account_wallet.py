@@ -1,9 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from app.api.deps.auth import CurrentJwtActor
 from app.api.deps.database import SessionDep
 from app.api.deps.settings import SettingsDep
-from app.core.security import normalize_wallet_address
 from app.schemas.account import (
     AccountResponse,
     WalletChangeConfirmRequest,
@@ -37,18 +36,11 @@ async def initiate_wallet_change(
     session: SessionDep,
     settings: SettingsDep,
 ) -> WalletChangeInitiateResponse:
-    try:
-        wallet_address = normalize_wallet_address(request.wallet_address)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
     challenge = await wallet_changes.initiate_wallet_change(
         session=session,
         settings=settings,
-        actor=actor,
-        wallet_address=wallet_address,
+        account_id=actor.account_id,
+        wallet_address=request.wallet_address,
     )
     return WalletChangeInitiateResponse(nonce=challenge.nonce, expires_at=challenge.expires_at)
 
@@ -76,7 +68,7 @@ async def confirm_wallet_change(
     account, tokens = await wallet_changes.confirm_wallet_change(
         session=session,
         settings=settings,
-        actor=actor,
+        account_id=actor.account_id,
         message=request.message,
         signature=request.signature,
     )
