@@ -1,10 +1,7 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps.auth import CurrentJwtActor
-from app.db.session import get_db_session
+from app.api.deps.database import SessionDep
 from app.schemas.account import AccountResponse, AccountUpdateRequest
 from app.services.accounts import get_account, update_display_name
 
@@ -27,7 +24,7 @@ router = APIRouter(prefix="/account", tags=["account"])
 )
 async def get_account_me(
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> AccountResponse:
     account = await get_account(session=session, account_id=actor.account_id)
     return AccountResponse.model_validate(account)
@@ -51,7 +48,7 @@ async def get_account_me(
 async def patch_account_me(
     request: AccountUpdateRequest,
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> AccountResponse:
     if "display_name" not in request.model_fields_set:
         raise HTTPException(
