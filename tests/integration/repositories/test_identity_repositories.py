@@ -35,7 +35,6 @@ async def test_account_repository_persists_and_updates_identity_fields(
             nonce="nonce-2",
             issued_at=datetime(2026, 3, 16, 12, 5, tzinfo=UTC),
         )
-        repo.update_display_name(account, display_name="Bravo")
         repo.bump_token_version(account)
 
     async with db_session_factory.begin() as session:
@@ -43,7 +42,6 @@ async def test_account_repository_persists_and_updates_identity_fields(
         updated_account = await repo.get(account.id)
 
     assert updated_account is not None
-    assert updated_account.display_name == "Bravo"
     assert updated_account.nonce == "nonce-2"
     assert updated_account.nonce_issued_at == datetime(2026, 3, 16, 12, 5, tzinfo=UTC)
     assert updated_account.token_version == 2

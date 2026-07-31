@@ -30,11 +30,6 @@ class AccountRepository:
         await self._session.flush()
         return account
 
-    async def exists(self, account_id: int) -> bool:
-        statement = select(Account.id).where(Account.id == account_id).limit(1)
-        result = await self._session.scalar(statement)
-        return result is not None
-
     async def get(self, account_id: int) -> Account | None:
         return await self._session.get(Account, account_id)
 
@@ -61,11 +56,6 @@ class AccountRepository:
     ) -> Account:
         account.nonce = nonce
         account.nonce_issued_at = issued_at or datetime.now(UTC)
-        account.updated_at = datetime.now(UTC)
-        return account
-
-    def update_display_name(self, account: Account, *, display_name: str) -> Account:
-        account.display_name = display_name
         account.updated_at = datetime.now(UTC)
         return account
 
