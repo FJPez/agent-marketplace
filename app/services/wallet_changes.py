@@ -6,8 +6,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import ConflictError, InvalidStateError, NotFoundError
-from app.core.security import generate_nonce, verify_siwe_signature
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.security import generate_nonce, normalize_wallet_address, verify_siwe_signature
 from app.db.models import Account, WalletChangeLog
 from app.services.auth import TokenPair, issue_token_pair
 
@@ -25,13 +25,17 @@ async def initiate_wallet_change(
     account_id: int,
     wallet_address: str,
 ) -> WalletChangeChallenge:
+    try:
+        normalized_wallet_address = normalize_wallet_address(wallet_address)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
     now = datetime.now(UTC)
     account = await _require_account(session=session, account_id=account_id)
-    if account.wallet_address == wallet_address:
+    if account.wallet_address == normalized_wallet_address:
         raise InvalidStateError("new wallet must differ from current wallet")
     _ensure_cooldown(account, settings=settings, now=now)
     existing_account = await session.scalar(
-        select(Account).where(Account.wallet_address == wallet_address),
+        select(Account).where(Account.wallet_address == normalized_wallet_address),
     )
     if existing_account is not None:
         raise ConflictError("wallet address is already in use")

@@ -24,5 +24,9 @@ class PermissionDeniedError(Exception):
     """Actor is authenticated but not allowed to perform the action; translates to HTTP 403."""
 
 
+class InvalidInputError(Exception):
+    """Input violates an application rule; translates to HTTP 422."""
+
+
 class InvalidStateError(Exception):
     """Operation is not valid for the entity's current lifecycle state; translates to HTTP 409."""

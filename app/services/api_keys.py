@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidInputError, NotFoundError
 from app.core.security import generate_api_key
 from app.db.models import ApiKey
 
@@ -17,10 +17,12 @@ async def create_api_key(
     name: str | None,
     expires_at: datetime | None,
 ) -> tuple[ApiKey, str]:
+    normalized_name = _normalize_name(name)
+    _validate_expiry(expires_at)
     material = generate_api_key(settings.api_key_prefix)
     api_key = ApiKey(
         account_id=account_id,
-        name=name,
+        name=normalized_name,
         key_prefix=material.key_prefix,
         key_hash=material.key_hash,
         expires_at=expires_at,
@@ -47,3 +49,23 @@ async def revoke_api_key(*, session: AsyncSession, account_id: int, api_key_id: 
     if api_key.revoked_at is None:
         api_key.revoked_at = datetime.now(UTC)
         await session.commit()
+
+
+def _normalize_name(name: str | None) -> str | None:
+    if name is None:
+        return None
+    normalized_name = name.strip()
+    if not normalized_name:
+        raise InvalidInputError("name must not be blank")
+    if len(normalized_name) > 255:
+        raise InvalidInputError("name must be at most 255 characters")
+    return normalized_name
+
+
+def _validate_expiry(expires_at: datetime | None) -> None:
+    if expires_at is None:
+        return
+    if expires_at.tzinfo is None or expires_at.utcoffset() is None:
+        raise InvalidInputError("expires_at must include timezone information")
+    if expires_at <= datetime.now(UTC):
+        raise InvalidInputError("expires_at must be in the future")

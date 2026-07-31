@@ -8,6 +8,7 @@ from fastapi.responses import Response
 
 from app.core.errors import (
     ConflictError,
+    InvalidInputError,
     InvalidStateError,
     NotFoundError,
     PermissionDeniedError,
@@ -59,6 +60,7 @@ STATUS_CODES: dict[type[Exception], int] = {
     InvalidModerationTransitionError: status.HTTP_409_CONFLICT,
     PayoutConflictError: status.HTTP_409_CONFLICT,
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ProviderServiceValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvokeBadGatewayError: status.HTTP_502_BAD_GATEWAY,
     ReadinessCheckError: status.HTTP_503_SERVICE_UNAVAILABLE,

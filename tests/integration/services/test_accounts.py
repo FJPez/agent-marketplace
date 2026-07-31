@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
 
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidInputError, NotFoundError
 from app.services.accounts import get_account, update_display_name
 
 
@@ -57,7 +57,7 @@ async def test_update_display_name_persists_and_advances_updated_at(
         await update_display_name(
             session=session,
             account_id=account_id,
-            display_name="Bravo",
+            display_name="  Bravo  ",
         )
 
     async with db_session_factory() as session:
@@ -65,6 +65,25 @@ async def test_update_display_name_persists_and_advances_updated_at(
 
     assert persisted.display_name == "Bravo"
     assert persisted.updated_at > original_updated_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display_name", ["", "   ", "x" * 256])
+async def test_update_display_name_rejects_invalid_value(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    display_name: str,
+) -> None:
+    _ = migrated_database
+    account_id = await create_account(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await update_display_name(
+                session=session,
+                account_id=account_id,
+                display_name=display_name,
+            )
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
 
 from app.core.config import Settings
-from app.core.errors import ConflictError, InvalidStateError
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
 from app.core.security import AuthTokenType, decode_jwt
 from app.db.models import Account, WalletChangeLog
 from app.services.wallet_changes import confirm_wallet_change, initiate_wallet_change
@@ -100,7 +100,23 @@ async def test_initiate_rejects_current_wallet(
                 session=session,
                 settings=settings,
                 account_id=account_id,
-                wallet_address=wallet_address,
+                wallet_address=wallet_address.lower(),
+            )
+
+
+async def test_initiate_rejects_invalid_wallet_address_for_direct_call(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = _wallet_change_settings()
+    account_id = await create_account(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await initiate_wallet_change(
+                session=session,
+                settings=settings,
+                account_id=account_id,
+                wallet_address="not-a-wallet",
             )
 
 

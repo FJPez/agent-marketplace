@@ -6,6 +6,7 @@ from tests.unit.api.conftest import AppFactory
 
 from app.core.errors import (
     ConflictError,
+    InvalidInputError,
     InvalidStateError,
     NotFoundError,
     PermissionDeniedError,
@@ -27,6 +28,7 @@ class ChildNotFoundError(NotFoundError):
             "credentials required",
         ),
         (ConflictError("conflicting change"), status.HTTP_409_CONFLICT, "conflicting change"),
+        (InvalidInputError("bad input"), status.HTTP_422_UNPROCESSABLE_CONTENT, "bad input"),
         (PermissionDeniedError("not allowed"), status.HTTP_403_FORBIDDEN, "not allowed"),
         (InvalidStateError("wrong state"), status.HTTP_409_CONFLICT, "wrong state"),
     ],

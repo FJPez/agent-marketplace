@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
 
 from app.core.config import Settings
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidInputError, NotFoundError
 from app.core.security import hash_api_key
 from app.db.models import ApiKey
 from app.services.api_keys import create_api_key, list_api_keys, revoke_api_key
@@ -32,7 +32,7 @@ async def test_create_api_key_persists_row_and_returns_plaintext(
             session=session,
             settings=settings,
             account_id=account_id,
-            name="worker-key",
+            name="  worker-key  ",
             expires_at=expires_at,
         )
 
@@ -47,6 +47,48 @@ async def test_create_api_key_persists_row_and_returns_plaintext(
     assert persisted.key_prefix == api_key.key_prefix
     assert persisted.name == "worker-key"
     assert persisted.expires_at == expires_at
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 256])
+async def test_create_api_key_rejects_invalid_name(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    name: str,
+) -> None:
+    account_id = await create_account(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await create_api_key(
+                session=session,
+                settings=_settings(),
+                account_id=account_id,
+                name=name,
+                expires_at=None,
+            )
+
+
+@pytest.mark.parametrize(
+    "expires_at",
+    [
+        datetime.now(UTC) - timedelta(seconds=1),
+        datetime.now(UTC).replace(tzinfo=None),
+    ],
+)
+async def test_create_api_key_rejects_invalid_expiry(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    expires_at: datetime,
+) -> None:
+    account_id = await create_account(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await create_api_key(
+                session=session,
+                settings=_settings(),
+                account_id=account_id,
+                name=None,
+                expires_at=expires_at,
+            )
 
 
 async def test_list_api_keys_returns_only_requesting_account_ordered_desc(
