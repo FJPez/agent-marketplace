@@ -1,13 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.api.deps.auth import CurrentJwtActor
 from app.api.deps.database import SessionDep
-from app.core.config import get_settings
+from app.api.deps.settings import SettingsDep
 from app.core.security import normalize_wallet_address
-from app.db.session import get_db_session
 from app.schemas.account import AccountResponse
 from app.schemas.auth import (
     ApiKeyCreateRequest,
@@ -41,6 +39,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def get_auth_nonce(
     address: Annotated[str, Query(min_length=42, max_length=42)],
     session: SessionDep,
+    settings: SettingsDep,
 ) -> AuthNonceResponse:
     try:
         normalized_address = normalize_wallet_address(address)
@@ -51,7 +50,7 @@ async def get_auth_nonce(
         ) from exc
     nonce = await auth.issue_nonce(
         session=session,
-        settings=get_settings(),
+        settings=settings,
         wallet_address=normalized_address,
     )
     return AuthNonceResponse(nonce=nonce)
@@ -73,10 +72,11 @@ async def get_auth_nonce(
 async def verify_auth(
     request: AuthVerifyRequest,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> AuthVerifyResponse:
     result = await auth.verify_wallet(
         session=session,
-        settings=get_settings(),
+        settings=settings,
         message=request.message,
         signature=request.signature,
     )
@@ -100,10 +100,11 @@ async def verify_auth(
 async def refresh_auth(
     request: AuthRefreshRequest,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> AuthRefreshResponse:
     access_token = await auth.refresh_access_token(
         session=session,
-        settings=get_settings(),
+        settings=settings,
         refresh_token=request.refresh_token,
     )
     return AuthRefreshResponse(access_token=access_token)
@@ -127,9 +128,10 @@ async def refresh_auth(
 async def create_api_key(
     request: ApiKeyCreateRequest,
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> ApiKeyCreateResponse:
-    service = ApiKeyService(session, settings=get_settings())
+    service = ApiKeyService(session, settings=settings)
     api_key, plaintext = await service.create_key(
         actor,
         name=request.name,
@@ -162,9 +164,10 @@ async def create_api_key(
 )
 async def list_api_keys(
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> list[ApiKeyResponse]:
-    service = ApiKeyService(session, settings=get_settings())
+    service = ApiKeyService(session, settings=settings)
     api_keys = await service.list_keys(actor)
     return [
         ApiKeyResponse(
@@ -194,8 +197,9 @@ async def list_api_keys(
 async def revoke_api_key(
     api_key_id: int,
     actor: CurrentJwtActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> Response:
-    service = ApiKeyService(session, settings=get_settings())
+    service = ApiKeyService(session, settings=settings)
     await service.revoke_key(actor, api_key_id=api_key_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

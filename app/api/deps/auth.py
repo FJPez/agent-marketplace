@@ -3,8 +3,8 @@ from typing import Annotated
 from fastapi import Depends, Header
 
 from app.api.deps.database import SessionDep
+from app.api.deps.settings import SettingsDep
 from app.core.actor import ActorContext
-from app.core.config import get_settings
 from app.core.errors import PermissionDeniedError, UnauthenticatedError
 from app.services.auth import resolve_actor, resolve_jwt_actor
 
@@ -15,37 +15,38 @@ AuthorizationHeader = Annotated[str | None, Header(alias=AUTHORIZATION_HEADER)]
 
 async def get_optional_current_actor(
     session: SessionDep,
+    settings: SettingsDep,
     authorization: AuthorizationHeader = None,
 ) -> ActorContext | None:
     if authorization is None:
         return None
 
-    return await resolve_actor(
-        session=session, settings=get_settings(), authorization=authorization
-    )
+    return await resolve_actor(session=session, settings=settings, authorization=authorization)
 
 
 async def get_current_actor(
     session: SessionDep,
+    settings: SettingsDep,
     authorization: AuthorizationHeader = None,
 ) -> ActorContext:
     if authorization is None:
         raise UnauthenticatedError(f"{AUTHORIZATION_HEADER} header is required")
 
-    return await resolve_actor(
-        session=session, settings=get_settings(), authorization=authorization
-    )
+    return await resolve_actor(session=session, settings=settings, authorization=authorization)
 
 
 async def get_current_jwt_actor(
     session: SessionDep,
+    settings: SettingsDep,
     authorization: AuthorizationHeader = None,
 ) -> ActorContext:
     if authorization is None:
         raise UnauthenticatedError(f"{AUTHORIZATION_HEADER} header is required")
 
     return await resolve_jwt_actor(
-        session=session, settings=get_settings(), authorization=authorization
+        session=session,
+        settings=settings,
+        authorization=authorization,
     )
 
 
