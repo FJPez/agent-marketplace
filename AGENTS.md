@@ -4,6 +4,8 @@ This repository contains planning and implementation guidance for a backend-only
 
 All coding agents must follow this file before making changes.
 
+Command commands live in `Makefile`. Understand them and use them when appropriate.
+
 ## Primary goals
 
 - Keep branch scope narrow and easy to review.
@@ -12,27 +14,6 @@ All coding agents must follow this file before making changes.
 - Follow the documented folder structure and layering rules.
 - Write tests as part of the feature, not after it.
 - Do not implement beyond the assigned branch scope unless the task explicitly requires it.
-
-## Read order before coding
-
-For any task, read in this order:
-
-1. `AGENTS.md`
-2. `README.md`
-3. `codex-agent-plan/README.md`
-4. `codex-agent-plan/docs/00-repo-bootstrap-contract.md`
-5. `codex-agent-plan/docs/10-definition-of-done-by-branch.md`
-6. Any current-state docs most relevant to the touched area, such as:
-   - `codex-agent-plan/docs/04-api-contract.md`
-   - `docs/api-reference.md`
-   - `docs/agent-setup.md`
-   - `docs/demo-setup.md`
-7. The branch-specific prompt in `codex-agent-plan/PROMPTS/` if the task is explicitly tied to the historical phase plan
-8. Any branch-specific docs referenced by that prompt
-
-`codex-agent-plan/PROMPTS/` contains retained branch handoff artifacts from the
-staged build-out of the repo. Treat those prompts as historical execution
-context unless the current task explicitly maps to that plan.
 
 ## Stack baseline
 
@@ -49,104 +30,12 @@ context unless the current task explicitly maps to that plan.
 - Ruff
 - ty
 
-## Repository structure rules
-
-Use this structure unless explicitly told otherwise:
-
-```text
-app/
-  api/
-    deps/
-    routes/
-  core/
-  db/
-    models/
-  schemas/
-  repositories/
-  services/
-  integrations/
-    x402/
-    provider_gateway/
-tests/
-  unit/
-  integration/
-  api/
-    routes/
-  e2e/
-alembic/
-```
-
-## Layering rules
-
-- `api/routes` should stay thin.
-- Route handlers should validate transport-level concerns and delegate business logic.
-- `services` own business rules and orchestration.
-- `repositories` own database access.
-- `db/models` contains SQLAlchemy ORM models only.
-- `schemas` contains Pydantic request/response models only.
-- `integrations/x402` owns x402-specific protocol and facilitator code.
-- Do not expose ORM models directly as public API response models.
-
 ## Branch discipline
 
 - One branch should have one dominant concern.
 - Do not mix unrelated features in one branch.
 - Do not refactor unrelated modules while implementing a feature branch.
 - If blocked by another branch, code against an interface or stub and document the dependency clearly.
-
-## Migration ownership
-
-Only the owning branch should create the migration for its table family.
-
-Historical note:
-
-- the earliest phase plan used legacy `provider_profiles` and
-  `consumer_profiles` tables
-- current head no longer uses those tables; do not treat them as active schema
-
-Current table ownership:
-
-- `feat/database-core`
-  - Alembic and DB scaffolding
-  - original `accounts` baseline
-
-- `feat/auth-and-identity`
-  - current unified `accounts` shape
-  - `api_keys`
-  - `wallet_change_log`
-
-- `feat/provider-services`
-  - `services`
-  - `service_tags`
-  - `service_endpoints`
-  - `provider_upstreams`
-
-- `feat/pricing-and-publish`
-  - `pricing_models`
-
-- `feat/revisions-and-change-tokens`
-  - `service_revisions`
-
-- `feat/quote-flow`
-  - `quotes`
-
-- `feat/invoke-core`
-  - `invocations`
-
-- `feat/x402-payment`
-  - `payment_attempts`
-
-- `feat/ledger-and-earnings`
-  - `ledger_entries`
-
-- `feat/payouts-reporting`
-  - `payouts`
-
-- `feat/moderation-admin`
-  - `moderation_actions`
-
-- `feat/service-health`
-  - `service_health_checks`
 
 ## Naming conventions
 
@@ -167,49 +56,8 @@ Avoid vague names like:
 
 ## Linting and typing expectations
 
-Ruff rule families should include at least:
-
-- `E`
-- `F`
-- `I`
-- `B`
-- `UP`
-- `SIM`
-- `N`
-- `RUF`
-- `ANN`
-
-Recommended additions:
-
-- `ASYNC`
-- `A`
-- `C4`
-- `DTZ`
-- `G`
-- `ICN`
-- `ISC`
-- `LOG`
-- `PIE`
-- `PT`
-- `PTH`
-- `RET`
-- `SLOT`
-- `T20`
-- `TC`
-
-Expected selective ignores:
-
-- `ANN101`
-- `ANN102`
-- `D203`
-- `D212`
-
-Any broader ignore set should be justified in the branch.
-
 Use ty on application code and tests.
 Do not use `typing.cast()` unless `ty` fails without it. Prefer explicit typing, narrower code paths, or better-typed intermediates before adding a cast.
-Run `uv run ruff format .` regularly while working and again before each commit to avoid format-only CI failures.
-Run `uv run ruff check .` after formatting so lint verification is based on the formatted tree.
 
 ## Testing rules
 
@@ -265,13 +113,3 @@ Before creating a commit, run the branch verification needed for the touched fil
 - Do not let x402-specific logic leak across unrelated modules.
 - Support both invoke-level idempotency and x402 payment identifier idempotency.
 - Never forward a paid request upstream before safe payment state is confirmed.
-
-## Reporting back after a task
-
-When a task is complete, report:
-
-- summary of changes
-- files changed
-- tests run
-- anything intentionally left out
-- follow-up risks or blockers
