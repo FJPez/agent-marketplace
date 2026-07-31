@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, status
 from app.api.deps.auth import CurrentJwtActor
 from app.api.deps.database import SessionDep
 from app.schemas.account import AccountResponse, AccountUpdateRequest
-from app.services.accounts import get_account, update_display_name
+from app.services import accounts
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -26,7 +26,7 @@ async def get_account_me(
     actor: CurrentJwtActor,
     session: SessionDep,
 ) -> AccountResponse:
-    account = await get_account(session=session, account_id=actor.account_id)
+    account = await accounts.get_account(session=session, account_id=actor.account_id)
     return AccountResponse.model_validate(account)
 
 
@@ -60,7 +60,7 @@ async def patch_account_me(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="display_name cannot be null",
         )
-    account = await update_display_name(
+    account = await accounts.update_display_name(
         session=session,
         account_id=actor.account_id,
         display_name=request.display_name,

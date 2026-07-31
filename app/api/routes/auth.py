@@ -43,16 +43,17 @@ async def get_auth_nonce(
     session: SessionDep,
 ) -> AuthNonceResponse:
     try:
-        nonce = await auth.issue_nonce(
-            session=session,
-            settings=get_settings(),
-            wallet_address=normalize_wallet_address(address),
-        )
+        normalized_address = normalize_wallet_address(address)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         ) from exc
+    nonce = await auth.issue_nonce(
+        session=session,
+        settings=get_settings(),
+        wallet_address=normalized_address,
+    )
     return AuthNonceResponse(nonce=nonce)
 
 
