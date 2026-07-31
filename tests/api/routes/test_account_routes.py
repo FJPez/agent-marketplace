@@ -196,3 +196,11 @@ async def test_wallet_change_initiate_rejects_invalid_wallet_address(
     )
 
     assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    matching_errors = [
+        error
+        for error in body["detail"]
+        if error["loc"][-1] == "wallet_address" and "invalid wallet address" in error["msg"]
+    ]
+    assert matching_errors

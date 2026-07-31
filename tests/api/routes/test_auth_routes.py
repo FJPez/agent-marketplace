@@ -256,3 +256,21 @@ async def test_create_api_key_rejects_past_expiration(async_client: AsyncClient)
         if error["loc"][-1] == "expires_at" and "expires_at must be in the future" in error["msg"]
     ]
     assert matching_errors
+
+
+@pytest.mark.asyncio
+async def test_get_auth_nonce_rejects_invalid_wallet_address(async_client: AsyncClient) -> None:
+    response = await async_client.get(
+        "/v1/auth/nonce",
+        params={"address": "not-a-wallet-address"},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    matching_errors = [
+        error
+        for error in body["detail"]
+        if error["loc"][-1] == "address" and "invalid wallet address" in error["msg"]
+    ]
+    assert matching_errors

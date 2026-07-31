@@ -1,11 +1,8 @@
-from typing import Annotated
-
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Response, status
 
 from app.api.deps.auth import CurrentJwtActor
 from app.api.deps.database import SessionDep
 from app.api.deps.settings import SettingsDep
-from app.core.security import normalize_wallet_address
 from app.schemas.account import AccountResponse
 from app.schemas.auth import (
     ApiKeyCreateRequest,
@@ -17,6 +14,7 @@ from app.schemas.auth import (
     AuthVerifyRequest,
     AuthVerifyResponse,
 )
+from app.schemas.common import WalletAddress
 from app.services import api_keys, auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -36,21 +34,14 @@ router = APIRouter(prefix="/auth", tags=["auth"])
     },
 )
 async def get_auth_nonce(
-    address: Annotated[str, Query(min_length=42, max_length=42)],
+    address: WalletAddress,
     session: SessionDep,
     settings: SettingsDep,
 ) -> AuthNonceResponse:
-    try:
-        normalized_address = normalize_wallet_address(address)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
     nonce = await auth.issue_nonce(
         session=session,
         settings=settings,
-        wallet_address=normalized_address,
+        wallet_address=address,
     )
     return AuthNonceResponse(nonce=nonce)
 
