@@ -10,7 +10,7 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
 )
-from app.services.account_service import AccountNotFoundError
+from app.services.api_key_service import ApiKeyNotFoundError
 
 
 class ChildNotFoundError(NotFoundError):
@@ -73,9 +73,9 @@ def test_specific_registration_beats_base_fallback(
 def test_existing_specific_registration_is_undisturbed(
     handler_app_factory: AppFactory,
 ) -> None:
-    client = TestClient(handler_app_factory(AccountNotFoundError("secret internals")))
+    client = TestClient(handler_app_factory(ApiKeyNotFoundError("secret internals")))
 
     response = client.get("/boom")
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json() == {"detail": "account not found"}
+    assert response.json() == {"detail": "api key not found"}

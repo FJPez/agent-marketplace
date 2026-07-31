@@ -13,7 +13,6 @@ from app.core.errors import (
     PermissionDeniedError,
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
-from app.services.account_service import AccountNotFoundError, AccountValidationError
 from app.services.api_key_service import ApiKeyNotFoundError, ApiKeyValidationError
 from app.services.auth_resolution_service import AuthResolutionError, JwtAuthRequiredError
 from app.services.auth_service import AuthenticationError
@@ -50,7 +49,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     JwtAuthRequiredError: status.HTTP_403_FORBIDDEN,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     NotFoundError: status.HTTP_404_NOT_FOUND,
-    AccountNotFoundError: status.HTTP_404_NOT_FOUND,
     ApiKeyNotFoundError: status.HTTP_404_NOT_FOUND,
     DiscoveryNotFoundError: status.HTTP_404_NOT_FOUND,
     QuoteNotFoundError: status.HTTP_404_NOT_FOUND,
@@ -67,7 +65,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     ProviderServiceStateError: status.HTTP_409_CONFLICT,
     InvalidModerationTransitionError: status.HTTP_409_CONFLICT,
     PayoutConflictError: status.HTTP_409_CONFLICT,
-    AccountValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ApiKeyValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     ProviderServiceValidationError: status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -79,7 +76,6 @@ STATUS_CODES: dict[type[Exception], int] = {
 # Exceptions whose response detail is a fixed string instead of str(exc), so
 # internal state cannot leak for these resources.
 REDACTED_DETAILS: dict[type[Exception], str] = {
-    AccountNotFoundError: "account not found",
     ApiKeyNotFoundError: "api key not found",
 }
 
