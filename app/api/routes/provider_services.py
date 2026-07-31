@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
+from app.api.deps.database import SessionDep
 from app.db.session import get_db_session
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -15,7 +16,7 @@ from app.schemas.service import (
     ServiceTagsUpdateRequest,
     ServiceUpdateRequest,
 )
-from app.services.provider_draft_service import ProviderDraftService
+from app.services import provider_drafts
 from app.services.provider_endpoint_service import ProviderEndpointService
 from app.services.publish_service import PublishService
 
@@ -57,10 +58,16 @@ async def create_provider_service(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    created = await service.create_service(actor, request)
+    created = await provider_drafts.create_service(
+        session=session,
+        account_id=actor.account_id,
+        slug=request.slug,
+        name=request.name,
+        summary=request.summary,
+        description=request.description,
+    )
     return ServiceResponse.from_model(created)
 
 
@@ -73,10 +80,9 @@ async def create_provider_service(
 )
 async def list_provider_services(
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> list[ServiceResponse]:
-    service = ProviderDraftService(session)
-    services = await service.list_services(actor)
+    services = await provider_drafts.list_services(session=session, account_id=actor.account_id)
     return [ServiceResponse.from_model(item) for item in services]
 
 
@@ -93,10 +99,13 @@ async def list_provider_services(
 async def get_provider_service(
     service_id: int,
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    found = await service.get_service(actor, service_id=service_id)
+    found = await provider_drafts.get_service(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+    )
     return ServiceResponse.from_model(found)
 
 
@@ -133,10 +142,14 @@ async def update_provider_service(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    updated = await service.update_service(actor, service_id=service_id, request=request)
+    updated = await provider_drafts.update_service(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+        updates=request.model_dump(exclude_unset=True),
+    )
     return ServiceResponse.from_model(updated)
 
 
@@ -166,10 +179,14 @@ async def replace_provider_service_tags(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    updated = await service.replace_tags(actor, service_id=service_id, request=request)
+    updated = await provider_drafts.replace_tags(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+        tags=request.tags,
+    )
     return ServiceResponse.from_model(updated)
 
 

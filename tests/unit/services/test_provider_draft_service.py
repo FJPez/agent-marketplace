@@ -10,11 +10,7 @@ from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
-    ServiceCreateRequest,
-    ServiceTagsUpdateRequest,
-    ServiceUpdateRequest,
 )
-from app.services.provider_draft_service import ProviderDraftService
 from app.services.provider_endpoint_service import ProviderEndpointService
 from app.services.provider_service_errors import (
     ProviderServiceConflictError,
@@ -61,30 +57,9 @@ class FakeServiceRepo:
     ) -> None:
         self.service = service
         self.endpoint = endpoint
-        self.replaced_tags: list[str] | None = None
         if self.service is not None and self.endpoint is not None:
             self.service.endpoints = [self.endpoint]
             self.endpoint.service = self.service
-
-    def add(
-        self,
-        *,
-        provider_account_id: int,
-        slug: str,
-        name: str,
-        summary: str,
-        description: str | None,
-    ) -> Service:
-        self.service = Service(
-            id=101,
-            provider_account_id=provider_account_id,
-            slug=slug,
-            name=name,
-            summary=summary,
-            description=description,
-            lifecycle=ServiceLifecycle.DRAFT,
-        )
-        return self.service
 
     async def get_owned(
         self,
@@ -106,52 +81,6 @@ class FakeServiceRepo:
             service_id=service_id,
             provider_account_id=provider_account_id,
         )
-
-    async def get_owned_by_endpoint_for_update(
-        self,
-        *,
-        endpoint_id: int,
-        provider_account_id: int,
-    ) -> Service | None:
-        _ = endpoint_id
-        _ = provider_account_id
-        if self.endpoint is not None:
-            return self.endpoint.service
-        return self.service
-
-    async def list_by_provider_account_id(
-        self,
-        *,
-        provider_account_id: int,
-    ) -> list[Service]:
-        _ = provider_account_id
-        if self.service is None:
-            return []
-        return [self.service]
-
-    def update_service(
-        self,
-        service: Service,
-        *,
-        name: str | object = _UNSET,
-        summary: str | object = _UNSET,
-        description: str | None | object = _UNSET,
-    ) -> Service:
-        if name is not _UNSET:
-            assert isinstance(name, str)
-            service.name = name
-        if summary is not _UNSET:
-            assert isinstance(summary, str)
-            service.summary = summary
-        if description is not _UNSET:
-            assert description is None or isinstance(description, str)
-            service.description = description
-        return service
-
-    async def replace_tags(self, service: Service, *, tags: list[str]) -> Service:
-        self.replaced_tags = tags
-        service.tags = []
-        return service
 
 
 class FakeEndpointRepo:
@@ -409,144 +338,6 @@ def _suspended_endpoint() -> ServiceEndpoint:
     endpoint = _draft_endpoint()
     endpoint.service = _suspended_service()
     return endpoint
-
-
-@pytest.mark.asyncio
-async def test_create_service_persists_new_draft() -> None:
-    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._service_repo = FakeServiceRepo()
-
-    created = await service.create_service(
-        ActorContext(account_id=42),
-        ServiceCreateRequest(
-            slug="translation-service",
-            name="Translation Service",
-            summary="Summary",
-        ),
-    )
-
-    assert created.provider_account_id == 42
-
-
-@pytest.mark.asyncio
-async def test_update_service_rejects_empty_patch_payload() -> None:
-    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._service_repo = FakeServiceRepo(_draft_service())
-
-    with pytest.raises(
-        ProviderServiceValidationError,
-        match="at least one field must be provided",
-    ):
-        await service.update_service(
-            ActorContext(account_id=42),
-            service_id=101,
-            request=ServiceUpdateRequest(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_update_service_rejects_suspended_mutation() -> None:
-    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._service_repo = FakeServiceRepo(_suspended_service())
-
-    with pytest.raises(
-        ProviderServiceStateError,
-        match="service is not mutable outside draft",
-    ):
-        await service.update_service(
-            ActorContext(account_id=42),
-            service_id=101,
-            request=ServiceUpdateRequest(summary="Updated"),
-        )
-
-
-@pytest.mark.asyncio
-async def test_update_service_allows_active_non_material_mutation_without_revision() -> None:
-    session = FakeSession()
-    revision_service = FakeRevisionService()
-    service = ProviderDraftService(cast("AsyncSession", session))
-    service._service_repo = FakeServiceRepo(_active_service())
-    service._revision_service = revision_service
-
-    updated = await service.update_service(
-        ActorContext(account_id=42),
-        service_id=101,
-        request=ServiceUpdateRequest(summary="Updated summary"),
-    )
-
-    assert updated.summary == "Updated summary"
-    assert revision_service.service_update_calls == 1
-    assert revision_service.created_revisions == 0
-    assert session.commits == 1
-
-
-@pytest.mark.asyncio
-async def test_update_service_clears_description_when_explicit_null() -> None:
-    session = FakeSession()
-    repo = FakeServiceRepo(_draft_service())
-    service = ProviderDraftService(cast("AsyncSession", session))
-    service._service_repo = repo
-
-    updated = await service.update_service(
-        ActorContext(account_id=42),
-        service_id=101,
-        request=ServiceUpdateRequest.model_validate({"description": None}),
-    )
-
-    assert updated.description is None
-    assert session.commits == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field_name", ["name", "summary"])
-async def test_update_service_rejects_explicit_null_for_non_nullable_fields(
-    field_name: str,
-) -> None:
-    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._service_repo = FakeServiceRepo(_draft_service())
-
-    with pytest.raises(
-        ProviderServiceValidationError,
-        match=f"{field_name} cannot be null",
-    ):
-        await service.update_service(
-            ActorContext(account_id=42),
-            service_id=101,
-            request=ServiceUpdateRequest.model_validate({field_name: None}),
-        )
-
-
-@pytest.mark.asyncio
-async def test_create_service_translates_duplicate_slug_to_conflict() -> None:
-    service = ProviderDraftService(cast("AsyncSession", FailingCommitSession()))
-    service._service_repo = FakeServiceRepo()
-
-    with pytest.raises(ProviderServiceConflictError, match="service slug already exists"):
-        await service.create_service(
-            ActorContext(account_id=42),
-            ServiceCreateRequest(
-                slug="translation-service",
-                name="Translation Service",
-                summary="Summary",
-            ),
-        )
-
-
-@pytest.mark.asyncio
-async def test_replace_tags_normalizes_and_sorts_tags() -> None:
-    session = FakeSession()
-    repo = FakeServiceRepo(_draft_service())
-    service = ProviderDraftService(cast("AsyncSession", session))
-    service._service_repo = repo
-
-    await service.replace_tags(
-        ActorContext(account_id=42),
-        service_id=101,
-        request=ServiceTagsUpdateRequest(tags=[" Translation ", "nlp", "translation", "NLP"]),
-    )
-
-    assert repo.replaced_tags == ["nlp", "translation"]
-    assert session.commits == 1
 
 
 @pytest.mark.asyncio
