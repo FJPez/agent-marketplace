@@ -21,6 +21,11 @@ from app.services.auth import (
     verify_wallet,
 )
 
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.usefixtures("migrated_database"),
+]
+
 
 def _auth_settings() -> Settings:
     return Settings(
@@ -63,12 +68,9 @@ async def _get_account_by_wallet(
         )
 
 
-@pytest.mark.asyncio
 async def test_issue_nonce_creates_account_and_reuses_active_nonce(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
 
@@ -92,12 +94,9 @@ async def test_issue_nonce_creates_account_and_reuses_active_nonce(
     assert second_nonce == first_nonce
 
 
-@pytest.mark.asyncio
 async def test_issue_nonce_issues_new_nonce_after_expiry(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
     stale_issued_at = datetime.now(UTC) - timedelta(seconds=settings.siwe_nonce_expiry + 60)
@@ -125,12 +124,9 @@ async def test_issue_nonce_issues_new_nonce_after_expiry(
     assert account.nonce == new_nonce
 
 
-@pytest.mark.asyncio
 async def test_issue_nonce_concurrent_calls_create_single_account(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
 
@@ -154,12 +150,9 @@ async def test_issue_nonce_concurrent_calls_create_single_account(
     assert first_nonce == second_nonce == rows[0].nonce
 
 
-@pytest.mark.asyncio
 async def test_verify_wallet_success_returns_tokens_and_rotates_nonce(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
 
@@ -191,12 +184,9 @@ async def test_verify_wallet_success_returns_tokens_and_rotates_nonce(
     assert account.nonce != nonce
 
 
-@pytest.mark.asyncio
 async def test_verify_wallet_wrong_nonce_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
 
@@ -221,12 +211,9 @@ async def test_verify_wallet_wrong_nonce_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_verify_wallet_expired_account_nonce_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
 
@@ -286,12 +273,9 @@ async def _verified_tokens(
     return result.access_token, result.refresh_token
 
 
-@pytest.mark.asyncio
 async def test_refresh_access_token_returns_new_access_token(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
     _, refresh_token = await _verified_tokens(db_session_factory, settings, signer)
@@ -306,12 +290,9 @@ async def test_refresh_access_token_returns_new_access_token(
     assert access_token
 
 
-@pytest.mark.asyncio
 async def test_refresh_access_token_garbage_token_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
 
     async with db_session_factory() as session:
@@ -323,12 +304,9 @@ async def test_refresh_access_token_garbage_token_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_refresh_access_token_deleted_account_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
     _, refresh_token = await _verified_tokens(db_session_factory, settings, signer)
@@ -349,12 +327,9 @@ async def test_refresh_access_token_deleted_account_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_refresh_access_token_stale_token_version_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
     _, refresh_token = await _verified_tokens(db_session_factory, settings, signer)
@@ -375,12 +350,9 @@ async def test_refresh_access_token_stale_token_version_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_jwt_path_returns_actor_context(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     signer = EthAccount.create()
     access_token, _ = await _verified_tokens(db_session_factory, settings, signer)
@@ -400,12 +372,9 @@ async def test_resolve_actor_jwt_path_returns_actor_context(
     assert actor.auth_method == "jwt"
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_jwt_path_garbage_token_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
 
     async with db_session_factory() as session:
@@ -417,12 +386,9 @@ async def test_resolve_actor_jwt_path_garbage_token_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_jwt_path_unknown_account_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     token = create_jwt(
         secret_key=settings.jwt_secret_key,
@@ -442,12 +408,9 @@ async def test_resolve_actor_jwt_path_unknown_account_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_jwt_path_stale_token_version_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
     async with db_session_factory() as session:
@@ -502,12 +465,9 @@ async def _create_api_key(
     return raw_key
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_api_key_path_returns_actor_and_touches_last_used(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
     raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
@@ -530,12 +490,9 @@ async def test_resolve_actor_api_key_path_returns_actor_and_touches_last_used(
     assert api_key.last_used_at is not None
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_api_key_path_no_touch_leaves_last_used_none(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
     raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
@@ -556,12 +513,33 @@ async def test_resolve_actor_api_key_path_no_touch_leaves_last_used_none(
     assert api_key.last_used_at is None
 
 
-@pytest.mark.asyncio
-async def test_resolve_actor_api_key_path_revoked_key_raises_unauthenticated(
-    migrated_database: None,
+async def test_resolve_actor_api_key_path_requires_account_wallet(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    settings = _auth_settings()
+    async with db_session_factory.begin() as session:
+        account = Account(display_name="Walletless")
+        session.add(account)
+        await session.flush()
+        account_id = account.id
+    raw_key = await _create_api_key(
+        db_session_factory,
+        account_id=account_id,
+        settings=settings,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(UnauthenticatedError, match="account wallet address is required"):
+            await resolve_actor(
+                session=session,
+                settings=settings,
+                authorization=f"Bearer {raw_key}",
+            )
+
+
+async def test_resolve_actor_api_key_path_revoked_key_raises_unauthenticated(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
     raw_key = await _create_api_key(
@@ -580,12 +558,9 @@ async def test_resolve_actor_api_key_path_revoked_key_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_api_key_path_expired_key_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
     raw_key = await _create_api_key(
@@ -604,12 +579,9 @@ async def test_resolve_actor_api_key_path_expired_key_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_resolve_actor_non_bearer_authorization_raises_unauthenticated(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
 
     async with db_session_factory() as session:
@@ -621,12 +593,9 @@ async def test_resolve_actor_non_bearer_authorization_raises_unauthenticated(
             )
 
 
-@pytest.mark.asyncio
 async def test_resolve_jwt_actor_with_api_key_raises_permission_denied(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
     raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)

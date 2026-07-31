@@ -88,11 +88,11 @@ async def issue_nonce(*, session: AsyncSession, settings: Settings, wallet_addre
                 return account.nonce
             account.nonce = nonce
             account.nonce_issued_at = issued_at
-            account.updated_at = datetime.now(UTC)
+            account.updated_at = issued_at
     else:
         account.nonce = nonce
         account.nonce_issued_at = issued_at
-        account.updated_at = datetime.now(UTC)
+        account.updated_at = issued_at
     await session.commit()
     return nonce
 
@@ -112,13 +112,14 @@ async def verify_wallet(
         raise UnauthenticatedError("account not found for wallet")
     if account.nonce != parsed.nonce:
         raise UnauthenticatedError("nonce is not valid")
+    now = datetime.now(UTC)
     expires_at = account.nonce_issued_at + timedelta(seconds=settings.siwe_nonce_expiry)
-    if expires_at < datetime.now(UTC):
+    if expires_at < now:
         raise UnauthenticatedError("SIWE message has expired")
 
     account.nonce = generate_nonce()
-    account.nonce_issued_at = datetime.now(UTC)
-    account.updated_at = datetime.now(UTC)
+    account.nonce_issued_at = now
+    account.updated_at = now
     await session.commit()
     await session.refresh(account)
     tokens = issue_token_pair(settings=settings, account=account)
@@ -252,7 +253,8 @@ async def _resolve_api_key_actor(
     if api_key is None or api_key.revoked_at is not None:
         msg = "invalid api key"
         raise UnauthenticatedError(msg)
-    if api_key.expires_at is not None and api_key.expires_at <= datetime.now(UTC):
+    now = datetime.now(UTC)
+    if api_key.expires_at is not None and api_key.expires_at <= now:
         msg = "api key has expired"
         raise UnauthenticatedError(msg)
 
@@ -262,14 +264,14 @@ async def _resolve_api_key_actor(
         raise UnauthenticatedError(msg)
 
     if touch_api_key:
-        api_key.last_used_at = datetime.now(UTC)
+        api_key.last_used_at = now
         await session.commit()
     return ActorContext(
         account_id=account.id,
         is_admin=account.is_admin,
         account_type=account.account_type,
         auth_method="api_key",
-        wallet_address=account.wallet_address or "",
+        wallet_address=_require_wallet_address(account),
     )
 
 
