@@ -1,14 +1,14 @@
-from __future__ import annotations
-
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from jwt import InvalidTokenError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
+from app.core.config import Settings
 from app.core.errors import PermissionDeniedError, UnauthenticatedError
 from app.core.security import (
     AuthTokenType,
@@ -22,11 +22,6 @@ from app.core.security import (
     verify_siwe_signature,
 )
 from app.db.models import Account, ApiKey
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from app.core.config import Settings
 
 
 @dataclass(frozen=True, slots=True)
