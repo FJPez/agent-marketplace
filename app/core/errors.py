@@ -12,6 +12,10 @@ class NotFoundError(Exception):
     """Requested resource does not exist; translates to HTTP 404."""
 
 
+class UnauthenticatedError(Exception):
+    """Request lacks valid authentication credentials; translates to HTTP 401."""
+
+
 class ConflictError(Exception):
     """Request conflicts with current resource state; translates to HTTP 409."""
 

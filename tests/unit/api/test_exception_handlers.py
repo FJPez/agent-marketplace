@@ -9,6 +9,7 @@ from app.core.errors import (
     InvalidStateError,
     NotFoundError,
     PermissionDeniedError,
+    UnauthenticatedError,
 )
 from app.services.api_key_service import ApiKeyNotFoundError
 
@@ -21,6 +22,11 @@ class ChildNotFoundError(NotFoundError):
     ("exc", "expected_status", "expected_detail"),
     [
         (NotFoundError("thing missing"), status.HTTP_404_NOT_FOUND, "thing missing"),
+        (
+            UnauthenticatedError("credentials required"),
+            status.HTTP_401_UNAUTHORIZED,
+            "credentials required",
+        ),
         (ConflictError("conflicting change"), status.HTTP_409_CONFLICT, "conflicting change"),
         (PermissionDeniedError("not allowed"), status.HTTP_403_FORBIDDEN, "not allowed"),
         (InvalidStateError("wrong state"), status.HTTP_409_CONFLICT, "wrong state"),

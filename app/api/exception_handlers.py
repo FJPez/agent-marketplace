@@ -11,6 +11,7 @@ from app.core.errors import (
     InvalidStateError,
     NotFoundError,
     PermissionDeniedError,
+    UnauthenticatedError,
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.api_key_service import ApiKeyNotFoundError, ApiKeyValidationError
@@ -44,6 +45,7 @@ Handler = Callable[[Request, Exception], Awaitable[Response]]
 # Starlette resolves handlers by walking the raised exception's MRO, so the
 # app.core.errors base classes act as fallbacks for any unregistered subclass.
 STATUS_CODES: dict[type[Exception], int] = {
+    UnauthenticatedError: status.HTTP_401_UNAUTHORIZED,
     AuthResolutionError: status.HTTP_401_UNAUTHORIZED,
     AuthenticationError: status.HTTP_401_UNAUTHORIZED,
     JwtAuthRequiredError: status.HTTP_403_FORBIDDEN,
