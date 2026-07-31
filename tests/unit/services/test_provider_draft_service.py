@@ -550,22 +550,6 @@ async def test_replace_tags_normalizes_and_sorts_tags() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replace_tags_rejects_non_slug_token_values() -> None:
-    service = ProviderDraftService(cast("AsyncSession", FakeSession()))
-    service._service_repo = FakeServiceRepo(_draft_service())
-
-    with pytest.raises(
-        ProviderServiceValidationError,
-        match="tags must be lowercase slug tokens",
-    ):
-        await service.replace_tags(
-            ActorContext(account_id=42),
-            service_id=101,
-            request=ServiceTagsUpdateRequest(tags=["ml ops", "foo!"]),
-        )
-
-
-@pytest.mark.asyncio
 async def test_create_endpoint_translates_duplicate_key_to_conflict() -> None:
     endpoint_service = ProviderEndpointService(
         cast("AsyncSession", FailingCommitSession()),

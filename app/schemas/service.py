@@ -1,3 +1,4 @@
+import re
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
@@ -18,12 +19,22 @@ from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
 
+TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
 
 def _reject_numeric_only_slug(value: str) -> str:
     if value.isdigit():
         msg = "value must include at least one lowercase letter"
         raise ValueError(msg)
     return value
+
+
+def _normalize_tag(value: str) -> str:
+    normalized_value = value.lower()
+    if TAG_TOKEN_PATTERN.fullmatch(normalized_value) is None:
+        msg = "tags must be lowercase slug tokens"
+        raise ValueError(msg)
+    return normalized_value
 
 
 def _validate_upstream_path(value: str) -> str:
@@ -62,6 +73,7 @@ Description = Annotated[
 Tag = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    AfterValidator(_normalize_tag),
 ]
 SchemaObject = JsonObject
 HttpMethod = Annotated[

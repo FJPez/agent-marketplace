@@ -489,7 +489,14 @@ async def test_replace_service_tags_rejects_non_slug_token_values(
     )
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "tags must be lowercase slug tokens"}
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    matching_errors = [
+        error
+        for error in body["detail"]
+        if "tags" in error["loc"] and "tags must be lowercase slug tokens" in error["msg"]
+    ]
+    assert matching_errors
 
 
 @pytest.mark.asyncio
