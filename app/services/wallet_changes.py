@@ -43,6 +43,7 @@ async def initiate_wallet_change(
     nonce = generate_nonce()
     account.nonce = nonce
     account.nonce_issued_at = now
+    account.pending_wallet_address = normalized_wallet_address
     account.updated_at = now
     await session.commit()
     return WalletChangeChallenge(
@@ -77,6 +78,10 @@ async def confirm_wallet_change(
     except ValueError as exc:
         raise InvalidStateError(str(exc)) from exc
 
+    if account.pending_wallet_address is None:
+        raise InvalidStateError("no wallet change is pending")
+    if parsed.address != account.pending_wallet_address:
+        raise InvalidStateError("signature does not match the pending wallet address")
     if parsed.address == account.wallet_address:
         raise InvalidStateError("new wallet must differ from current wallet")
     existing_account = await session.scalar(
@@ -94,6 +99,7 @@ async def confirm_wallet_change(
     )
     account.wallet_address = parsed.address
     account.wallet_changed_at = now
+    account.pending_wallet_address = None
     account.token_version += 1
     account.nonce = generate_nonce()
     account.nonce_issued_at = now

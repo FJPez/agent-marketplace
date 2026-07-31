@@ -84,6 +84,7 @@ def test_head_migration_expands_accounts_table(
         "nonce_issued_at",
         "token_version",
         "wallet_changed_at",
+        "pending_wallet_address",
         "created_at",
         "updated_at",
     }.issubset(columns)

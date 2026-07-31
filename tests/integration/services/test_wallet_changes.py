@@ -180,6 +180,7 @@ async def test_initiate_success_returns_challenge_and_rotates_nonce(
     after = await _get_account(db_session_factory, account_id)
     assert after.nonce == challenge.nonce
     assert after.nonce != before.nonce
+    assert after.pending_wallet_address == new_wallet_address
     assert after.updated_at > before.updated_at
     assert challenge.expires_at == after.nonce_issued_at + timedelta(
         seconds=settings.siwe_nonce_expiry,
@@ -241,6 +242,43 @@ async def test_confirm_bad_signature_raises_invalid_state(
                 message=message,
                 signature=bad_signature,
             )
+
+
+async def test_confirm_rejects_signer_that_does_not_match_pending_wallet(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = _wallet_change_settings()
+    account_id = await create_account(db_session_factory)
+    intended_signer = EthAccount.create()
+    different_signer = EthAccount.create()
+
+    async with db_session_factory() as session:
+        challenge = await initiate_wallet_change(
+            session=session,
+            settings=settings,
+            account_id=account_id,
+            wallet_address=intended_signer.address,
+        )
+    message = _build_siwe_message(
+        address=different_signer.address,
+        nonce=challenge.nonce,
+        issued_at=datetime.now(UTC).replace(microsecond=0),
+    )
+    signature = _sign_message(different_signer, message)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidStateError, match="pending wallet"):
+            await confirm_wallet_change(
+                session=session,
+                settings=settings,
+                account_id=account_id,
+                message=message,
+                signature=signature,
+            )
+
+    account = await _get_account(db_session_factory, account_id)
+    assert account.wallet_address != different_signer.address
+    assert account.pending_wallet_address == intended_signer.address
 
 
 async def test_confirm_wallet_taken_after_initiate_raises_conflict(
@@ -315,6 +353,7 @@ async def test_confirm_success_updates_account_and_issues_tokens(
     after = await _get_account(db_session_factory, account_id)
     assert after.wallet_address == new_signer.address
     assert after.wallet_changed_at is not None
+    assert after.pending_wallet_address is None
     assert after.updated_at > before.updated_at
     assert after.token_version == before.token_version + 1
     assert after.nonce != challenge.nonce
