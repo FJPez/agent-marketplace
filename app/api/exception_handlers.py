@@ -7,6 +7,12 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import Response
 
+from app.core.errors import (
+    ConflictError,
+    InvalidStateError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.account_service import AccountNotFoundError, AccountValidationError
 from app.services.api_key_service import ApiKeyNotFoundError, ApiKeyValidationError
@@ -89,6 +95,22 @@ EXCEPTION_HANDLERS: tuple[tuple[type[Exception], ExceptionHandlerConfig], ...] =
             detail_builder=_detail_from_exception,
         ),
     ),
+    # base taxonomy fallback (app.core.errors)
+    (
+        PermissionDeniedError,
+        ExceptionHandlerConfig(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail_builder=_detail_from_exception,
+        ),
+    ),
+    # base taxonomy fallback (app.core.errors)
+    (
+        NotFoundError,
+        ExceptionHandlerConfig(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail_builder=_detail_from_exception,
+        ),
+    ),
     (
         AccountNotFoundError,
         ExceptionHandlerConfig(
@@ -135,6 +157,22 @@ EXCEPTION_HANDLERS: tuple[tuple[type[Exception], ExceptionHandlerConfig], ...] =
         ModeratedServiceNotFoundError,
         ExceptionHandlerConfig(
             status_code=status.HTTP_404_NOT_FOUND,
+            detail_builder=_detail_from_exception,
+        ),
+    ),
+    # base taxonomy fallback (app.core.errors)
+    (
+        ConflictError,
+        ExceptionHandlerConfig(
+            status_code=status.HTTP_409_CONFLICT,
+            detail_builder=_detail_from_exception,
+        ),
+    ),
+    # base taxonomy fallback (app.core.errors)
+    (
+        InvalidStateError,
+        ExceptionHandlerConfig(
+            status_code=status.HTTP_409_CONFLICT,
             detail_builder=_detail_from_exception,
         ),
     ),
