@@ -52,7 +52,8 @@ async def create_service(
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
-        if not _is_unique_violation(exc):
+        sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
+        if sqlstate != UNIQUE_VIOLATION_SQLSTATE:
             raise
         raise ConflictError("service slug already exists") from exc
 
@@ -234,8 +235,3 @@ def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) ->
     if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.NON_MATERIAL:
         return
     raise InvalidStateError("service is not mutable outside draft")
-
-
-def _is_unique_violation(exc: IntegrityError) -> bool:
-    sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
-    return sqlstate == UNIQUE_VIOLATION_SQLSTATE
