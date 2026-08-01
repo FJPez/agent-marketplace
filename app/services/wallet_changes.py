@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.security import generate_nonce, normalize_wallet_address, verify_siwe_signature
+from app.db.errors import is_unique_violation
 from app.db.models import Account, WalletChangeLog
 from app.services.auth import TokenPair, issue_token_pair
 
@@ -108,8 +109,9 @@ async def confirm_wallet_change(
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
-        msg = "wallet address is already in use"
-        raise ConflictError(msg) from exc
+        if not is_unique_violation(exc):
+            raise
+        raise ConflictError("wallet address is already in use") from exc
     await session.refresh(account)
     tokens = issue_token_pair(settings=settings, account=account)
     return account, tokens

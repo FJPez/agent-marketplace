@@ -14,6 +14,7 @@ from pydantic import (
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
 from app.core.service_fields import (
+    ENDPOINT_TIMEOUT_MAX_SECONDS,
     SERVICE_DESCRIPTION_MAX_LENGTH,
     SERVICE_NAME_MAX_LENGTH,
     SERVICE_SUMMARY_MAX_LENGTH,
@@ -173,7 +174,7 @@ class EndpointCreateRequest(BaseModel):
     access_mode: AccessMode
     request_schema: SchemaObject
     response_schema: SchemaObject
-    timeout_seconds: Annotated[int, Field(gt=0, le=3600)]
+    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
     is_enabled: bool = True
     pricing: "EndpointPricingRequest | None" = None
 
@@ -198,7 +199,7 @@ class EndpointUpdateRequest(BaseModel):
     access_mode: AccessMode | None = None
     request_schema: SchemaObject | None = None
     response_schema: SchemaObject | None = None
-    timeout_seconds: Annotated[int, Field(gt=0, le=3600)] | None = None
+    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | None = None
     is_enabled: bool | None = None
     pricing: "EndpointPricingRequest | None" = None
 

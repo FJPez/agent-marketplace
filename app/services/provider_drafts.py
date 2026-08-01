@@ -15,12 +15,11 @@ from app.core.service_fields import (
     normalize_slug,
     normalize_tag,
 )
+from app.db.errors import is_unique_violation
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
 from app.services.revision_service import RevisionService, UpdateImpact
-
-UNIQUE_VIOLATION_SQLSTATE = "23505"
 
 
 async def create_service(
@@ -52,8 +51,7 @@ async def create_service(
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
-        sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
-        if sqlstate != UNIQUE_VIOLATION_SQLSTATE:
+        if not is_unique_violation(exc):
             raise
         raise ConflictError("service slug already exists") from exc
 

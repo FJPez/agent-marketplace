@@ -14,6 +14,7 @@ SERVICE_TAGS_MAX_COUNT = 20
 SERVICE_NAME_MAX_LENGTH = 255
 SERVICE_SUMMARY_MAX_LENGTH = 500
 SERVICE_DESCRIPTION_MAX_LENGTH = 5000
+ENDPOINT_TIMEOUT_MAX_SECONDS = 3600
 
 
 def normalize_slug(value: str) -> str:
@@ -61,6 +62,23 @@ def normalize_service_description(value: str | None) -> str | None:
         field_name="description",
         max_length=SERVICE_DESCRIPTION_MAX_LENGTH,
     )
+
+
+def normalize_endpoint_summary(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _normalize_bounded_text(
+        value,
+        field_name="summary",
+        max_length=SERVICE_SUMMARY_MAX_LENGTH,
+    )
+
+
+def validate_endpoint_timeout(value: int) -> int:
+    if value < 1 or value > ENDPOINT_TIMEOUT_MAX_SECONDS:
+        msg = f"timeout_seconds must be between 1 and {ENDPOINT_TIMEOUT_MAX_SECONDS}"
+        raise ValueError(msg)
+    return value
 
 
 def _normalize_bounded_text(value: str, *, field_name: str, max_length: int) -> str:
