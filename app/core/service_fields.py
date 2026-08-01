@@ -1,4 +1,4 @@
-"""Shared text normalization rules enforced by both request schemas and services.
+"""Field rules for the service catalog, enforced by both request schemas and services.
 
 Each function raises ``ValueError`` so Pydantic can use it directly as an
 ``AfterValidator`` while services catch and re-raise ``InvalidInputError``.
@@ -41,7 +41,29 @@ def normalize_tag(value: str) -> str:
     return normalized_value
 
 
-def normalize_required_text(value: str, *, field_name: str, max_length: int) -> str:
+def normalize_service_name(value: str) -> str:
+    return _normalize_bounded_text(value, field_name="name", max_length=SERVICE_NAME_MAX_LENGTH)
+
+
+def normalize_service_summary(value: str) -> str:
+    return _normalize_bounded_text(
+        value,
+        field_name="summary",
+        max_length=SERVICE_SUMMARY_MAX_LENGTH,
+    )
+
+
+def normalize_service_description(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return _normalize_bounded_text(
+        value,
+        field_name="description",
+        max_length=SERVICE_DESCRIPTION_MAX_LENGTH,
+    )
+
+
+def _normalize_bounded_text(value: str, *, field_name: str, max_length: int) -> str:
     normalized_value = value.strip()
     if not normalized_value:
         msg = f"{field_name} must not be blank"

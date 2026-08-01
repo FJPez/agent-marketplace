@@ -17,7 +17,7 @@ from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
-from app.core.text import SERVICE_TAGS_MAX_COUNT
+from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
 from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
 
 

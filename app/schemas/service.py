@@ -13,7 +13,7 @@ from pydantic import (
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
-from app.core.text import (
+from app.core.service_fields import (
     SERVICE_DESCRIPTION_MAX_LENGTH,
     SERVICE_NAME_MAX_LENGTH,
     SERVICE_SUMMARY_MAX_LENGTH,

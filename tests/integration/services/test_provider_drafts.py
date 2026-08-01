@@ -6,7 +6,7 @@ from tests.fixtures.domain import create_provider_account_record, create_service
 
 from app.core.enums import ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
-from app.core.text import SERVICE_TAGS_MAX_COUNT
+from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
 from app.db.models import Service, ServiceRevision, ServiceTag
 from app.services.provider_drafts import (
     create_service,

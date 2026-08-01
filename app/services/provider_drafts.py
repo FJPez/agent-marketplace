@@ -7,12 +7,11 @@ from sqlalchemy.orm import selectinload
 
 from app.core.enums import ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
-from app.core.text import (
-    SERVICE_DESCRIPTION_MAX_LENGTH,
-    SERVICE_NAME_MAX_LENGTH,
-    SERVICE_SUMMARY_MAX_LENGTH,
+from app.core.service_fields import (
     SERVICE_TAGS_MAX_COUNT,
-    normalize_required_text,
+    normalize_service_description,
+    normalize_service_name,
+    normalize_service_summary,
     normalize_slug,
     normalize_tag,
 )
@@ -35,9 +34,9 @@ async def create_service(
 ) -> Service:
     try:
         normalized_slug = normalize_slug(slug)
-        normalized_name = _normalize_name(name)
-        normalized_summary = _normalize_summary(summary)
-        normalized_description = _normalize_description(description)
+        normalized_name = normalize_service_name(name)
+        normalized_summary = normalize_service_summary(summary)
+        normalized_description = normalize_service_description(description)
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
@@ -110,14 +109,14 @@ async def update_service(
             name = updates["name"]
             if name is None:
                 raise InvalidInputError("name cannot be null")
-            update_fields["name"] = _normalize_name(name)
+            update_fields["name"] = normalize_service_name(name)
         if "summary" in updates:
             summary = updates["summary"]
             if summary is None:
                 raise InvalidInputError("summary cannot be null")
-            update_fields["summary"] = _normalize_summary(summary)
+            update_fields["summary"] = normalize_service_summary(summary)
         if "description" in updates:
-            update_fields["description"] = _normalize_description(updates["description"])
+            update_fields["description"] = normalize_service_description(updates["description"])
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
     impact = RevisionService.classify_service_update(update_fields)
@@ -240,25 +239,3 @@ def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) ->
 def _is_unique_violation(exc: IntegrityError) -> bool:
     sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
     return sqlstate == UNIQUE_VIOLATION_SQLSTATE
-
-
-def _normalize_name(name: str) -> str:
-    return normalize_required_text(name, field_name="name", max_length=SERVICE_NAME_MAX_LENGTH)
-
-
-def _normalize_summary(summary: str) -> str:
-    return normalize_required_text(
-        summary,
-        field_name="summary",
-        max_length=SERVICE_SUMMARY_MAX_LENGTH,
-    )
-
-
-def _normalize_description(description: str | None) -> str | None:
-    if description is None:
-        return None
-    return normalize_required_text(
-        description,
-        field_name="description",
-        max_length=SERVICE_DESCRIPTION_MAX_LENGTH,
-    )
