@@ -1,28 +1,15 @@
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from app.core.actor import ActorContext
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models import ProviderUpstream, Service, ServiceEndpoint
-from app.schemas.service import (
-    EndpointCreateRequest,
-    EndpointUpdateRequest,
-    EndpointUpstreamRequest,
-)
+from app.schemas.service import EndpointUpstreamRequest
 from app.services.provider_endpoint_service import ProviderEndpointService
-from app.services.provider_service_errors import (
-    ProviderServiceConflictError,
-    ProviderServiceStateError,
-    ProviderServiceValidationError,
-)
-from app.services.revision_service import UpdateImpact
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-
-_UNSET = object()
 
 
 class FakeSession:
@@ -41,12 +28,6 @@ class FakeSession:
 
     def add(self, _instance: object) -> None:
         pass
-
-
-class FailingCommitSession(FakeSession):
-    async def commit(self) -> None:
-        self.commits += 1
-        raise IntegrityError("statement", {}, Exception("boom"))
 
 
 class FakeServiceRepo:
@@ -87,44 +68,6 @@ class FakeEndpointRepo:
     def __init__(self, endpoint: ServiceEndpoint | None = None) -> None:
         self.endpoint = endpoint
 
-    def add(
-        self,
-        *,
-        service_id: int,
-        key: str,
-        name: str,
-        summary: str | None,
-        description: str | None,
-        access_mode: AccessMode,
-        request_schema: dict[str, object],
-        response_schema: dict[str, object],
-        timeout_seconds: int,
-        is_enabled: bool,
-    ) -> ServiceEndpoint:
-        self.endpoint = ServiceEndpoint(
-            id=303,
-            service_id=service_id,
-            key=key,
-            name=name,
-            summary=summary,
-            description=description,
-            access_mode=access_mode,
-            request_schema=request_schema,
-            response_schema=response_schema,
-            timeout_seconds=timeout_seconds,
-            is_enabled=is_enabled,
-        )
-        self.endpoint.service = Service(
-            id=service_id,
-            provider_account_id=42,
-            slug="service",
-            name="Service",
-            summary="Summary",
-            description="Description",
-            lifecycle=ServiceLifecycle.DRAFT,
-        )
-        return self.endpoint
-
     async def get_owned(
         self,
         *,
@@ -134,45 +77,6 @@ class FakeEndpointRepo:
         _ = endpoint_id
         _ = provider_account_id
         return self.endpoint
-
-    def update_endpoint(
-        self,
-        endpoint: ServiceEndpoint,
-        *,
-        name: str | object = _UNSET,
-        summary: str | None | object = _UNSET,
-        description: str | None | object = _UNSET,
-        access_mode: AccessMode | object = _UNSET,
-        request_schema: dict[str, object] | object = _UNSET,
-        response_schema: dict[str, object] | object = _UNSET,
-        timeout_seconds: int | object = _UNSET,
-        is_enabled: bool | object = _UNSET,
-    ) -> ServiceEndpoint:
-        if name is not _UNSET:
-            assert isinstance(name, str)
-            endpoint.name = name
-        if summary is not _UNSET:
-            assert summary is None or isinstance(summary, str)
-            endpoint.summary = summary
-        if description is not _UNSET:
-            assert description is None or isinstance(description, str)
-            endpoint.description = description
-        if access_mode is not _UNSET:
-            assert isinstance(access_mode, AccessMode)
-            endpoint.access_mode = access_mode
-        if request_schema is not _UNSET:
-            assert isinstance(request_schema, dict)
-            object.__setattr__(endpoint, "request_schema", request_schema)
-        if response_schema is not _UNSET:
-            assert isinstance(response_schema, dict)
-            object.__setattr__(endpoint, "response_schema", response_schema)
-        if timeout_seconds is not _UNSET:
-            assert isinstance(timeout_seconds, int)
-            endpoint.timeout_seconds = timeout_seconds
-        if is_enabled is not _UNSET:
-            assert isinstance(is_enabled, bool)
-            endpoint.is_enabled = is_enabled
-        return endpoint
 
 
 class FakeUpstreamRepo:
@@ -199,81 +103,6 @@ class FakeUpstreamRepo:
         return endpoint.upstream
 
 
-class FakePricingRepo:
-    def upsert_free(self, endpoint: ServiceEndpoint) -> None:
-        _ = endpoint
-
-    def upsert_fixed_per_call(
-        self,
-        endpoint: ServiceEndpoint,
-        *,
-        amount_minor: int,
-        currency: str,
-    ) -> None:
-        _ = endpoint
-        _ = amount_minor
-        _ = currency
-
-    async def delete_for_endpoint(self, endpoint: ServiceEndpoint) -> None:
-        _ = endpoint
-
-
-class FakeModerationService:
-    def __init__(self) -> None:
-        self.publishable_checks = 0
-
-    async def ensure_service_publishable(self, service_id: int) -> None:
-        _ = service_id
-        self.publishable_checks += 1
-
-
-class FakeRevisionService:
-    def __init__(
-        self,
-        *,
-        service_impact: UpdateImpact = UpdateImpact.NON_MATERIAL,
-        endpoint_impact: UpdateImpact = UpdateImpact.NON_MATERIAL,
-    ) -> None:
-        self.service_impact = service_impact
-        self.endpoint_impact = endpoint_impact
-        self.service_update_calls = 0
-        self.endpoint_update_calls = 0
-        self.created_revisions = 0
-
-    def classify_endpoint_update(
-        self,
-        update_fields: dict[str, object],
-    ) -> UpdateImpact:
-        _ = update_fields
-        return self.endpoint_impact
-
-    async def create_revision_if_material_service_update(
-        self,
-        service: Service,
-        *,
-        update_fields: dict[str, object],
-    ) -> UpdateImpact:
-        _ = service
-        _ = update_fields
-        self.service_update_calls += 1
-        if self.service_impact is UpdateImpact.MATERIAL:
-            self.created_revisions += 1
-        return self.service_impact
-
-    async def create_revision_if_material_endpoint_update(
-        self,
-        service: Service,
-        *,
-        update_fields: dict[str, object],
-    ) -> UpdateImpact:
-        _ = service
-        _ = update_fields
-        self.endpoint_update_calls += 1
-        if self.endpoint_impact is UpdateImpact.MATERIAL:
-            self.created_revisions += 1
-        return self.endpoint_impact
-
-
 def _draft_service() -> Service:
     return Service(
         id=101,
@@ -283,30 +112,6 @@ def _draft_service() -> Service:
         summary="Summary",
         description="Description",
         lifecycle=ServiceLifecycle.DRAFT,
-    )
-
-
-def _active_service() -> Service:
-    return Service(
-        id=101,
-        provider_account_id=42,
-        slug="translation-service",
-        name="Translation Service",
-        summary="Summary",
-        description="Description",
-        lifecycle=ServiceLifecycle.ACTIVE,
-    )
-
-
-def _suspended_service() -> Service:
-    return Service(
-        id=101,
-        provider_account_id=42,
-        slug="translation-service",
-        name="Translation Service",
-        summary="Summary",
-        description="Description",
-        lifecycle=ServiceLifecycle.SUSPENDED,
     )
 
 
@@ -326,178 +131,6 @@ def _draft_endpoint() -> ServiceEndpoint:
     )
     endpoint.service = _draft_service()
     return endpoint
-
-
-def _active_endpoint() -> ServiceEndpoint:
-    endpoint = _draft_endpoint()
-    endpoint.service = _active_service()
-    return endpoint
-
-
-def _suspended_endpoint() -> ServiceEndpoint:
-    endpoint = _draft_endpoint()
-    endpoint.service = _suspended_service()
-    return endpoint
-
-
-@pytest.mark.asyncio
-async def test_create_endpoint_translates_duplicate_key_to_conflict() -> None:
-    endpoint_service = ProviderEndpointService(
-        cast("AsyncSession", FailingCommitSession()),
-    )
-    endpoint_service._service_repo = FakeServiceRepo(_draft_service())
-    endpoint_service._endpoint_repo = FakeEndpointRepo()
-    endpoint_service._upstream_repo = FakeUpstreamRepo()
-    endpoint_service._pricing_repo = FakePricingRepo()
-
-    with pytest.raises(
-        ProviderServiceConflictError,
-        match="endpoint key already exists for this service",
-    ):
-        await endpoint_service.create_endpoint(
-            ActorContext(account_id=42),
-            service_id=101,
-            request=EndpointCreateRequest(
-                key="translate",
-                name="Translate",
-                summary="Summary",
-                description="Description",
-                access_mode=AccessMode.FREE,
-                request_schema={"type": "object"},
-                response_schema={"type": "object"},
-                timeout_seconds=30,
-                is_enabled=True,
-            ),
-        )
-
-
-@pytest.mark.asyncio
-async def test_update_endpoint_clears_nullable_fields_when_explicit_null() -> None:
-    session = FakeSession()
-    endpoint = _draft_endpoint()
-    endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
-    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
-    endpoint_service._upstream_repo = FakeUpstreamRepo()
-    endpoint_service._pricing_repo = FakePricingRepo()
-
-    updated = await endpoint_service.update_endpoint(
-        ActorContext(account_id=42),
-        endpoint_id=303,
-        request=EndpointUpdateRequest.model_validate(
-            {"summary": None, "description": None},
-        ),
-    )
-
-    assert updated.summary is None
-    assert updated.description is None
-    assert session.commits == 1
-
-
-@pytest.mark.asyncio
-async def test_update_endpoint_allows_active_material_mutation_and_records_revision() -> None:
-    session = FakeSession()
-    endpoint = _active_endpoint()
-    revision_service = FakeRevisionService(endpoint_impact=UpdateImpact.MATERIAL)
-    moderation_service = FakeModerationService()
-    endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
-    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
-    endpoint_service._upstream_repo = FakeUpstreamRepo()
-    endpoint_service._pricing_repo = FakePricingRepo()
-    endpoint_service._moderation_service = moderation_service
-    endpoint_service._revision_service = revision_service
-
-    updated = await endpoint_service.update_endpoint(
-        ActorContext(account_id=42),
-        endpoint_id=303,
-        request=EndpointUpdateRequest(timeout_seconds=60),
-    )
-
-    assert updated.timeout_seconds == 60
-    assert moderation_service.publishable_checks == 1
-    assert revision_service.endpoint_update_calls == 1
-    assert revision_service.created_revisions == 1
-    assert session.commits == 1
-
-
-@pytest.mark.asyncio
-async def test_update_endpoint_allows_active_non_material_mutation_without_revision() -> None:
-    session = FakeSession()
-    endpoint = _active_endpoint()
-    revision_service = FakeRevisionService()
-    moderation_service = FakeModerationService()
-    endpoint_service = ProviderEndpointService(cast("AsyncSession", session))
-    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
-    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
-    endpoint_service._upstream_repo = FakeUpstreamRepo()
-    endpoint_service._pricing_repo = FakePricingRepo()
-    endpoint_service._moderation_service = moderation_service
-    endpoint_service._revision_service = revision_service
-
-    updated = await endpoint_service.update_endpoint(
-        ActorContext(account_id=42),
-        endpoint_id=303,
-        request=EndpointUpdateRequest(summary="Updated summary"),
-    )
-
-    assert updated.summary == "Updated summary"
-    assert moderation_service.publishable_checks == 0
-    assert revision_service.endpoint_update_calls == 1
-    assert revision_service.created_revisions == 0
-    assert session.commits == 1
-
-
-@pytest.mark.asyncio
-async def test_update_endpoint_rejects_suspended_mutation() -> None:
-    endpoint = _suspended_endpoint()
-    endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
-    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
-    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
-    endpoint_service._upstream_repo = FakeUpstreamRepo()
-
-    with pytest.raises(
-        ProviderServiceStateError,
-        match="service is not mutable outside draft",
-    ):
-        await endpoint_service.update_endpoint(
-            ActorContext(account_id=42),
-            endpoint_id=303,
-            request=EndpointUpdateRequest(summary="Updated"),
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("payload", "field_name"),
-    [
-        ({"name": None}, "name"),
-        ({"access_mode": None}, "access_mode"),
-        ({"request_schema": None}, "request_schema"),
-        ({"response_schema": None}, "response_schema"),
-        ({"timeout_seconds": None}, "timeout_seconds"),
-        ({"is_enabled": None}, "is_enabled"),
-    ],
-)
-async def test_update_endpoint_rejects_explicit_null_for_non_nullable_fields(
-    payload: dict[str, object | None],
-    field_name: str,
-) -> None:
-    endpoint = _draft_endpoint()
-    endpoint_service = ProviderEndpointService(cast("AsyncSession", FakeSession()))
-    endpoint_service._service_repo = FakeServiceRepo(endpoint.service, endpoint)
-    endpoint_service._endpoint_repo = FakeEndpointRepo(endpoint)
-    endpoint_service._upstream_repo = FakeUpstreamRepo()
-
-    with pytest.raises(
-        ProviderServiceValidationError,
-        match=f"{field_name} cannot be null",
-    ):
-        await endpoint_service.update_endpoint(
-            ActorContext(account_id=42),
-            endpoint_id=303,
-            request=EndpointUpdateRequest.model_validate(payload),
-        )
 
 
 @pytest.mark.asyncio

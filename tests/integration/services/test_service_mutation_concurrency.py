@@ -17,7 +17,8 @@ from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import Service, ServiceRevision
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
-from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
+from app.schemas.service import EndpointUpstreamRequest
+from app.services import provider_endpoints
 from app.services.provider_endpoint_service import ProviderEndpointService
 from app.services.publish_service import PublishService
 
@@ -135,11 +136,11 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
 
     async def update_timeout(timeout_seconds: int) -> None:
         async with db_session_factory() as session:
-            service = ProviderEndpointService(session)
-            await service.update_endpoint(
-                ActorContext(account_id=provider_account_id),
+            await provider_endpoints.update_endpoint(
+                session=session,
+                account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                request=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
+                updates={"timeout_seconds": timeout_seconds},
             )
 
     first_update = asyncio.create_task(update_timeout(45))

@@ -16,7 +16,7 @@ from app.schemas.service import (
     ServiceTagsUpdateRequest,
     ServiceUpdateRequest,
 )
-from app.services import provider_drafts
+from app.services import provider_drafts, provider_endpoints
 from app.services.provider_endpoint_service import ProviderEndpointService
 from app.services.publish_service import PublishService
 
@@ -263,10 +263,23 @@ async def create_provider_endpoint(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> EndpointResponse:
-    service = ProviderEndpointService(session)
-    endpoint = await service.create_endpoint(actor, service_id=service_id, request=request)
+    endpoint = await provider_endpoints.create_endpoint(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+        key=request.key,
+        name=request.name,
+        summary=request.summary,
+        description=request.description,
+        access_mode=request.access_mode,
+        request_schema=request.request_schema,
+        response_schema=request.response_schema,
+        timeout_seconds=request.timeout_seconds,
+        is_enabled=request.is_enabled,
+        pricing=request.pricing.model_dump() if request.pricing is not None else None,
+    )
     return EndpointResponse.from_model(endpoint)
 
 
@@ -304,13 +317,13 @@ async def update_provider_endpoint(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> EndpointResponse:
-    service = ProviderEndpointService(session)
-    endpoint = await service.update_endpoint(
-        actor,
+    endpoint = await provider_endpoints.update_endpoint(
+        session=session,
+        account_id=actor.account_id,
         endpoint_id=endpoint_id,
-        request=request,
+        updates=request.model_dump(exclude_unset=True),
     )
     return EndpointResponse.from_model(endpoint)
 
