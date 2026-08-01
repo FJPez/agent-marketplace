@@ -21,6 +21,8 @@ from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
 from app.services.revision_service import RevisionService, UpdateImpact
 
+UNIQUE_VIOLATION_SQLSTATE = "23505"
+
 
 async def create_service(
     *,
@@ -51,6 +53,8 @@ async def create_service(
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
+        if not _is_unique_violation(exc):
+            raise
         raise ConflictError("service slug already exists") from exc
 
     return await _require_owned_service(
@@ -95,7 +99,7 @@ async def update_service(
         raise InvalidInputError(f"unknown update field: {unknown_field}")
 
     now = datetime.now(UTC)
-    service = await _require_owned_service(
+    service = await _require_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -231,6 +235,11 @@ def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) ->
     if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.NON_MATERIAL:
         return
     raise InvalidStateError("service is not mutable outside draft")
+
+
+def _is_unique_violation(exc: IntegrityError) -> bool:
+    sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
+    return sqlstate == UNIQUE_VIOLATION_SQLSTATE
 
 
 def _normalize_name(name: str) -> str:

@@ -1,5 +1,6 @@
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import create_provider_account_record, create_service_record
 
@@ -403,6 +404,21 @@ async def test_replace_tags_fully_replaces_existing_rows(
         )
 
     assert tags == ["billing"]
+
+
+async def test_create_service_raises_integrity_error_for_unknown_account(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with db_session_factory() as session:
+        with pytest.raises(IntegrityError):
+            await create_service(
+                session=session,
+                account_id=999_999,
+                slug="orphaned-service",
+                name="Orphaned",
+                summary="A summary",
+                description=None,
+            )
 
 
 @pytest.mark.parametrize("tag", ["x" * 65, "bad tag!"])
