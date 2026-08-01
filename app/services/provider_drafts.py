@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, delete, desc, select
+from sqlalchemy import Select, desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -134,11 +134,7 @@ async def update_service(
         )
 
     await session.commit()
-    return await _require_owned_service(
-        session=session,
-        account_id=account_id,
-        service_id=service_id,
-    )
+    return service
 
 
 async def replace_tags(
@@ -161,21 +157,19 @@ async def replace_tags(
         raise InvalidStateError("service is not mutable outside draft")
 
     try:
-        normalized_tags = sorted({normalize_tag(tag) for tag in tags})
+        normalized_tags = {normalize_tag(tag) for tag in tags}
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
-    await session.execute(delete(ServiceTag).where(ServiceTag.service_id == service.id))
-    session.add_all(
-        [ServiceTag(service_id=service.id, tag=tag) for tag in normalized_tags],
-    )
+    existing_tags = {service_tag.tag for service_tag in service.tags}
+    for service_tag in list(service.tags):
+        if service_tag.tag not in normalized_tags:
+            service.tags.remove(service_tag)
+    for tag in sorted(normalized_tags - existing_tags):
+        service.tags.append(ServiceTag(service_id=service.id, tag=tag))
     service.updated_at = now
     await session.commit()
-    return await _require_owned_service(
-        session=session,
-        account_id=account_id,
-        service_id=service_id,
-    )
+    return service
 
 
 def _service_with_relations() -> Select[tuple[Service]]:

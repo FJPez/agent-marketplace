@@ -406,6 +406,37 @@ async def test_replace_tags_fully_replaces_existing_rows(
     assert tags == ["billing"]
 
 
+async def test_replace_tags_keeps_overlapping_tags_and_returns_new_set(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+        tags=["demo", "translation"],
+    )
+
+    async with db_session_factory() as session:
+        service = await replace_tags(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            tags=["demo", "billing"],
+        )
+        returned_tags = sorted(service_tag.tag for service_tag in service.tags)
+
+    async with db_session_factory() as session:
+        persisted_tags = sorted(
+            await session.scalars(
+                select(ServiceTag.tag).where(ServiceTag.service_id == service_id),
+            ),
+        )
+
+    assert returned_tags == persisted_tags == ["billing", "demo"]
+
+
 async def test_create_service_raises_integrity_error_for_unknown_account(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
