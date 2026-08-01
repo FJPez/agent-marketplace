@@ -5,6 +5,7 @@ from tests.fixtures.domain import create_provider_account_record, create_service
 
 from app.core.enums import ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.text import SERVICE_TAGS_MAX_COUNT
 from app.db.models import Service, ServiceRevision, ServiceTag
 from app.services.provider_drafts import (
     create_service,
@@ -404,7 +405,30 @@ async def test_replace_tags_fully_replaces_existing_rows(
     assert tags == ["billing"]
 
 
-async def test_replace_tags_rejects_invalid_token(
+@pytest.mark.parametrize("tag", ["x" * 65, "bad tag!"])
+async def test_replace_tags_rejects_invalid_tag_values(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    tag: str,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await replace_tags(
+                session=session,
+                account_id=account_id,
+                service_id=service_id,
+                tags=[tag],
+            )
+
+
+async def test_replace_tags_rejects_more_than_max_tags(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -421,7 +445,7 @@ async def test_replace_tags_rejects_invalid_token(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                tags=["bad tag!"],
+                tags=[f"tag-{index}" for index in range(SERVICE_TAGS_MAX_COUNT + 1)],
             )
 
 

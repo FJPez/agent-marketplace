@@ -17,6 +17,7 @@ from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
+from app.core.text import SERVICE_TAGS_MAX_COUNT
 from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
 
 
@@ -495,6 +496,33 @@ async def test_replace_service_tags_rejects_non_slug_token_values(
         error
         for error in body["detail"]
         if "tags" in error["loc"] and "tags must be lowercase slug tokens" in error["msg"]
+    ]
+    assert matching_errors
+
+
+@pytest.mark.asyncio
+async def test_replace_service_tags_rejects_more_than_max_tags(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/tags",
+        headers=_auth_headers(account_id),
+        json={"tags": [f"tag-{index}" for index in range(SERVICE_TAGS_MAX_COUNT + 1)]},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert isinstance(body["detail"], list)
+    matching_errors = [
+        error for error in body["detail"] if "tags" in error["loc"] and "at most" in error["msg"]
     ]
     assert matching_errors
 

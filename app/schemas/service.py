@@ -1,4 +1,3 @@
-import re
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
@@ -14,27 +13,20 @@ from pydantic import (
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
+from app.core.text import (
+    SERVICE_DESCRIPTION_MAX_LENGTH,
+    SERVICE_NAME_MAX_LENGTH,
+    SERVICE_SUMMARY_MAX_LENGTH,
+    SERVICE_TAGS_MAX_COUNT,
+    SLUG_MAX_LENGTH,
+    TAG_MAX_LENGTH,
+    normalize_slug,
+    normalize_tag,
+)
 from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
-
-TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-
-
-def _reject_numeric_only_slug(value: str) -> str:
-    if value.isdigit():
-        msg = "value must include at least one lowercase letter"
-        raise ValueError(msg)
-    return value
-
-
-def _normalize_tag(value: str) -> str:
-    normalized_value = value.lower()
-    if TAG_TOKEN_PATTERN.fullmatch(normalized_value) is None:
-        msg = "tags must be lowercase slug tokens"
-        raise ValueError(msg)
-    return normalized_value
 
 
 def _validate_upstream_path(value: str) -> str:
@@ -53,27 +45,31 @@ Slug = Annotated[
     StringConstraints(
         strip_whitespace=True,
         min_length=1,
-        max_length=255,
+        max_length=SLUG_MAX_LENGTH,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
     ),
-    AfterValidator(_reject_numeric_only_slug),
+    AfterValidator(normalize_slug),
 ]
 ServiceName = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=SERVICE_NAME_MAX_LENGTH),
 ]
 Summary = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=SERVICE_SUMMARY_MAX_LENGTH),
 ]
 Description = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=5000),
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=SERVICE_DESCRIPTION_MAX_LENGTH,
+    ),
 ]
 Tag = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
-    AfterValidator(_normalize_tag),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=TAG_MAX_LENGTH),
+    AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
 HttpMethod = Annotated[
@@ -137,7 +133,7 @@ class ServiceUpdateRequest(BaseModel):
 class ServiceTagsUpdateRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]})
 
-    tags: list[Tag]
+    tags: Annotated[list[Tag], Field(max_length=SERVICE_TAGS_MAX_COUNT)]
 
 
 class EndpointCreateRequest(BaseModel):

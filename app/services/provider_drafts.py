@@ -1,4 +1,3 @@
-import re
 from datetime import UTC, datetime
 
 from sqlalchemy import Select, delete, desc, select
@@ -8,12 +7,19 @@ from sqlalchemy.orm import selectinload
 
 from app.core.enums import ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.text import (
+    SERVICE_DESCRIPTION_MAX_LENGTH,
+    SERVICE_NAME_MAX_LENGTH,
+    SERVICE_SUMMARY_MAX_LENGTH,
+    SERVICE_TAGS_MAX_COUNT,
+    normalize_required_text,
+    normalize_slug,
+    normalize_tag,
+)
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
 from app.services.revision_service import RevisionService, UpdateImpact
-
-TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 async def create_service(
@@ -25,10 +31,13 @@ async def create_service(
     summary: str,
     description: str | None,
 ) -> Service:
-    normalized_slug = _normalize_slug(slug)
-    normalized_name = _normalize_service_name(name)
-    normalized_summary = _normalize_summary(summary)
-    normalized_description = _normalize_description(description)
+    try:
+        normalized_slug = normalize_slug(slug)
+        normalized_name = _normalize_name(name)
+        normalized_summary = _normalize_summary(summary)
+        normalized_description = _normalize_description(description)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
 
     service = Service(
         provider_account_id=account_id,
@@ -92,18 +101,21 @@ async def update_service(
         service_id=service_id,
     )
     update_fields: dict[str, str | None] = {}
-    if "name" in updates:
-        name = updates["name"]
-        if name is None:
-            raise InvalidInputError("name cannot be null")
-        update_fields["name"] = _normalize_service_name(name)
-    if "summary" in updates:
-        summary = updates["summary"]
-        if summary is None:
-            raise InvalidInputError("summary cannot be null")
-        update_fields["summary"] = _normalize_summary(summary)
-    if "description" in updates:
-        update_fields["description"] = _normalize_description(updates["description"])
+    try:
+        if "name" in updates:
+            name = updates["name"]
+            if name is None:
+                raise InvalidInputError("name cannot be null")
+            update_fields["name"] = _normalize_name(name)
+        if "summary" in updates:
+            summary = updates["summary"]
+            if summary is None:
+                raise InvalidInputError("summary cannot be null")
+            update_fields["summary"] = _normalize_summary(summary)
+        if "description" in updates:
+            update_fields["description"] = _normalize_description(updates["description"])
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
     impact = RevisionService.classify_service_update(update_fields)
     _ensure_service_update_allowed(service, impact=impact)
 
@@ -132,18 +144,11 @@ async def replace_tags(
     service_id: int,
     tags: list[str],
 ) -> Service:
+    if len(tags) > SERVICE_TAGS_MAX_COUNT:
+        raise InvalidInputError(f"at most {SERVICE_TAGS_MAX_COUNT} tags are allowed")
+
     now = datetime.now(UTC)
-    locked_service_id = await session.scalar(
-        select(Service.id)
-        .where(
-            Service.id == service_id,
-            Service.provider_account_id == account_id,
-        )
-        .with_for_update(),
-    )
-    if locked_service_id is None:
-        raise NotFoundError("service not found")
-    service = await _require_owned_service(
+    service = await _require_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -151,7 +156,10 @@ async def replace_tags(
     if service.lifecycle is not ServiceLifecycle.DRAFT:
         raise InvalidStateError("service is not mutable outside draft")
 
-    normalized_tags = sorted({_normalize_tag(tag) for tag in tags})
+    try:
+        normalized_tags = sorted({normalize_tag(tag) for tag in tags})
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
 
     await session.execute(delete(ServiceTag).where(ServiceTag.service_id == service.id))
     session.add_all(
@@ -194,6 +202,29 @@ async def _require_owned_service(
     return service
 
 
+async def _require_owned_service_for_update(
+    *,
+    session: AsyncSession,
+    account_id: int,
+    service_id: int,
+) -> Service:
+    locked_service_id = await session.scalar(
+        select(Service.id)
+        .where(
+            Service.id == service_id,
+            Service.provider_account_id == account_id,
+        )
+        .with_for_update(),
+    )
+    if locked_service_id is None:
+        raise NotFoundError("service not found")
+    return await _require_owned_service(
+        session=session,
+        account_id=account_id,
+        service_id=service_id,
+    )
+
+
 def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) -> None:
     if service.lifecycle is ServiceLifecycle.DRAFT:
         return
@@ -202,48 +233,23 @@ def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) ->
     raise InvalidStateError("service is not mutable outside draft")
 
 
-def _normalize_slug(slug: str) -> str:
-    normalized_slug = slug.strip()
-    if TAG_TOKEN_PATTERN.fullmatch(normalized_slug) is None:
-        raise InvalidInputError("slug must be a lowercase slug token")
-    if normalized_slug.isdigit():
-        raise InvalidInputError("slug must include at least one lowercase letter")
-    if len(normalized_slug) > 255:
-        raise InvalidInputError("slug must be at most 255 characters")
-    return normalized_slug
-
-
-def _normalize_service_name(name: str) -> str:
-    normalized_name = name.strip()
-    if not normalized_name:
-        raise InvalidInputError("name must not be blank")
-    if len(normalized_name) > 255:
-        raise InvalidInputError("name must be at most 255 characters")
-    return normalized_name
+def _normalize_name(name: str) -> str:
+    return normalize_required_text(name, field_name="name", max_length=SERVICE_NAME_MAX_LENGTH)
 
 
 def _normalize_summary(summary: str) -> str:
-    normalized_summary = summary.strip()
-    if not normalized_summary:
-        raise InvalidInputError("summary must not be blank")
-    if len(normalized_summary) > 500:
-        raise InvalidInputError("summary must be at most 500 characters")
-    return normalized_summary
+    return normalize_required_text(
+        summary,
+        field_name="summary",
+        max_length=SERVICE_SUMMARY_MAX_LENGTH,
+    )
 
 
 def _normalize_description(description: str | None) -> str | None:
     if description is None:
         return None
-    normalized_description = description.strip()
-    if not normalized_description:
-        raise InvalidInputError("description must not be blank")
-    if len(normalized_description) > 5000:
-        raise InvalidInputError("description must be at most 5000 characters")
-    return normalized_description
-
-
-def _normalize_tag(tag: str) -> str:
-    normalized_tag = tag.strip().lower()
-    if TAG_TOKEN_PATTERN.fullmatch(normalized_tag) is None:
-        raise InvalidInputError("tags must be lowercase slug tokens")
-    return normalized_tag
+    return normalize_required_text(
+        description,
+        field_name="description",
+        max_length=SERVICE_DESCRIPTION_MAX_LENGTH,
+    )
