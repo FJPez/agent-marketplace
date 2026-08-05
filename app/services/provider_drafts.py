@@ -1,12 +1,12 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.enums import ServiceLifecycle
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
 from app.core.service_fields import (
     SERVICE_TAGS_MAX_COUNT,
     normalize_service_description,
@@ -19,6 +19,7 @@ from app.db.errors import is_unique_violation
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
+from app.services import service_access
 from app.services.revision_service import RevisionService, UpdateImpact
 
 SERVICE_UPDATE_FIELDS = frozenset({"name", "summary", "description"})
@@ -64,7 +65,13 @@ async def create_service(
 
 async def list_services(*, session: AsyncSession, account_id: int) -> list[Service]:
     statement = (
-        _service_with_relations()
+        select(Service)
+        .options(
+            selectinload(Service.tags),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
+        )
+        .execution_options(populate_existing=True)
         .where(Service.provider_account_id == account_id)
         .order_by(desc(Service.created_at), desc(Service.id))
     )
@@ -73,7 +80,7 @@ async def list_services(*, session: AsyncSession, account_id: int) -> list[Servi
 
 
 async def get_service(*, session: AsyncSession, account_id: int, service_id: int) -> Service:
-    return await _require_owned_service(
+    return await service_access.load_owned_service(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -96,7 +103,7 @@ async def update_service(
         raise InvalidInputError(f"unknown update field: {unknown_field}")
 
     now = datetime.now(UTC)
-    service = await _require_owned_service_for_update(
+    service = await service_access.load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -145,7 +152,7 @@ async def replace_tags(
         raise InvalidInputError(f"at most {SERVICE_TAGS_MAX_COUNT} tags are allowed")
 
     now = datetime.now(UTC)
-    service = await _require_owned_service_for_update(
+    service = await service_access.load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -167,57 +174,6 @@ async def replace_tags(
     service.updated_at = now
     await session.commit()
     return service
-
-
-def _service_with_relations() -> Select[tuple[Service]]:
-    return (
-        select(Service)
-        .options(
-            selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
-        )
-        .execution_options(populate_existing=True)
-    )
-
-
-async def _require_owned_service(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    service_id: int,
-) -> Service:
-    statement = _service_with_relations().where(
-        Service.id == service_id,
-        Service.provider_account_id == account_id,
-    )
-    service = await session.scalar(statement)
-    if service is None:
-        raise NotFoundError("service not found")
-    return service
-
-
-async def _require_owned_service_for_update(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    service_id: int,
-) -> Service:
-    locked_service_id = await session.scalar(
-        select(Service.id)
-        .where(
-            Service.id == service_id,
-            Service.provider_account_id == account_id,
-        )
-        .with_for_update(),
-    )
-    if locked_service_id is None:
-        raise NotFoundError("service not found")
-    return await _require_owned_service(
-        session=session,
-        account_id=account_id,
-        service_id=service_id,
-    )
 
 
 def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) -> None:

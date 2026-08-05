@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
@@ -20,6 +20,7 @@ from app.db.errors import is_unique_violation
 from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.services import service_access
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.revision_service import RevisionService, UpdateImpact
 
@@ -73,7 +74,7 @@ async def create_endpoint(
     parsed_pricing = _parse_pricing(pricing)
     pricing_plan = _plan_pricing(access_mode=access_mode, parsed=parsed_pricing)
 
-    service = await _require_owned_service_for_update(
+    service = await service_access.load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -123,7 +124,7 @@ async def get_endpoint(
     account_id: int,
     endpoint_id: int,
 ) -> ServiceEndpoint:
-    return await _require_owned_endpoint(
+    return await _load_owned_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
@@ -147,18 +148,12 @@ async def update_endpoint(
 
     now = datetime.now(UTC)
 
-    locked_service_id = await session.scalar(
-        select(Service.id)
-        .join(Service.endpoints)
-        .where(
-            ServiceEndpoint.id == endpoint_id,
-            Service.provider_account_id == account_id,
-        )
-        .with_for_update(),
+    locked_service_id = await service_access.lock_owned_service_by_endpoint(
+        session=session,
+        account_id=account_id,
+        endpoint_id=endpoint_id,
     )
-    if locked_service_id is None:
-        raise NotFoundError("endpoint not found")
-    service = await _require_owned_service(
+    service = await service_access.load_owned_service(
         session=session,
         account_id=account_id,
         service_id=locked_service_id,
@@ -260,58 +255,7 @@ async def update_endpoint(
     return endpoint
 
 
-def _service_with_relations() -> Select[tuple[Service]]:
-    return (
-        select(Service)
-        .options(
-            selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
-        )
-        .execution_options(populate_existing=True)
-    )
-
-
-async def _require_owned_service(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    service_id: int,
-) -> Service:
-    statement = _service_with_relations().where(
-        Service.id == service_id,
-        Service.provider_account_id == account_id,
-    )
-    service = await session.scalar(statement)
-    if service is None:
-        raise NotFoundError("service not found")
-    return service
-
-
-async def _require_owned_service_for_update(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    service_id: int,
-) -> Service:
-    locked_service_id = await session.scalar(
-        select(Service.id)
-        .where(
-            Service.id == service_id,
-            Service.provider_account_id == account_id,
-        )
-        .with_for_update(),
-    )
-    if locked_service_id is None:
-        raise NotFoundError("service not found")
-    return await _require_owned_service(
-        session=session,
-        account_id=account_id,
-        service_id=service_id,
-    )
-
-
-async def _require_owned_endpoint(
+async def _load_owned_endpoint(
     *,
     session: AsyncSession,
     account_id: int,
