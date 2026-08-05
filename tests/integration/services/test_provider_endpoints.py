@@ -145,6 +145,34 @@ async def test_create_endpoint_paid_without_pricing_creates_no_pricing_row(
     assert persisted_pricing is None
 
 
+async def test_create_endpoint_returns_endpoint_with_loaded_relations(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
+
+    async with db_session_factory() as session:
+        created = await create_endpoint(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            key="loaded-relations",
+            name="Loaded Relations",
+            summary=None,
+            description=None,
+            access_mode=AccessMode.PAID,
+            request_schema=REQUEST_SCHEMA,
+            response_schema=RESPONSE_SCHEMA,
+            timeout_seconds=30,
+            is_enabled=True,
+            pricing=None,
+        )
+
+    assert created.key == "loaded-relations"
+    assert created.pricing is None
+    assert created.upstream is None
+
+
 async def test_create_endpoint_rejects_duplicate_key_same_service(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

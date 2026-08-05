@@ -47,6 +47,8 @@ async def create_service(
         name=normalized_name,
         summary=normalized_summary,
         description=normalized_description,
+        tags=[],
+        endpoints=[],
     )
     session.add(service)
     try:
@@ -57,11 +59,7 @@ async def create_service(
             raise
         raise ConflictError("service slug already exists") from exc
 
-    return await _require_owned_service(
-        session=session,
-        account_id=account_id,
-        service_id=service.id,
-    )
+    return service
 
 
 async def list_services(*, session: AsyncSession, account_id: int) -> list[Service]:

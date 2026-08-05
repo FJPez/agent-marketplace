@@ -49,6 +49,26 @@ async def test_create_service_persists_draft_service_with_stripped_fields(
     assert persisted.lifecycle is ServiceLifecycle.DRAFT
 
 
+async def test_create_service_returns_service_with_loaded_relations(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+
+    async with db_session_factory() as session:
+        created = await create_service(
+            session=session,
+            account_id=account_id,
+            slug="loaded-relations-service",
+            name="Loaded Relations",
+            summary="A summary",
+            description=None,
+        )
+
+    assert created.slug == "loaded-relations-service"
+    assert created.tags == []
+    assert created.endpoints == []
+
+
 async def test_create_service_rejects_duplicate_slug(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

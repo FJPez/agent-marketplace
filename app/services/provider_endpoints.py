@@ -92,6 +92,8 @@ async def create_endpoint(
         response_schema=response_schema,
         timeout_seconds=normalized_timeout,
         is_enabled=is_enabled,
+        pricing=None,
+        upstream=None,
     )
     session.add(endpoint)
     try:
@@ -112,11 +114,7 @@ async def create_endpoint(
             raise
         raise ConflictError("endpoint key already exists for this service") from exc
 
-    return await _require_owned_endpoint(
-        session=session,
-        account_id=account_id,
-        endpoint_id=endpoint.id,
-    )
+    return endpoint
 
 
 async def get_endpoint(
