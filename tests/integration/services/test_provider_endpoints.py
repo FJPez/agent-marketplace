@@ -764,6 +764,49 @@ async def test_update_endpoint_active_paid_endpoint_without_pricing_rejects_mate
             )
 
 
+async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutating_state(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded_endpoint is not None
+        seeded_updated_at = seeded_endpoint.updated_at
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await update_endpoint(
+                session=session,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                updates={"timeout_seconds": 60},
+            )
+        await session.commit()
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(PricingModel, endpoint_id)
+
+    assert persisted_endpoint is not None
+    assert persisted_endpoint.timeout_seconds == 30
+    assert persisted_endpoint.updated_at == seeded_updated_at
+    assert persisted_pricing is None
+
+
 async def test_update_endpoint_suspended_service_blocks_material_update(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

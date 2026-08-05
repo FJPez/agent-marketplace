@@ -247,6 +247,13 @@ async def update_endpoint(
         revision_fields=revision_fields,
     )
 
+    if service.lifecycle is ServiceLifecycle.ACTIVE:
+        _ensure_active_endpoint_pricing_valid(
+            access_mode=target_access_mode,
+            plan=pricing_plan,
+            current_pricing=endpoint.pricing,
+        )
+
     for attribute_name, value in update_fields.items():
         setattr(endpoint, attribute_name, value)
     endpoint.updated_at = now
@@ -254,7 +261,6 @@ async def update_endpoint(
     await _apply_pricing_plan(endpoint, plan=pricing_plan, session=session, now=now)
 
     if service.lifecycle is ServiceLifecycle.ACTIVE:
-        _ensure_active_endpoint_pricing_valid(endpoint)
         await RevisionService(session).create_revision_if_material_endpoint_update(
             service,
             update_fields=revision_fields,
@@ -360,15 +366,25 @@ async def _ensure_endpoint_update_allowed(
     raise InvalidStateError("service is not mutable outside draft")
 
 
-def _ensure_active_endpoint_pricing_valid(endpoint: ServiceEndpoint) -> None:
-    if endpoint.access_mode is not AccessMode.PAID:
+def _ensure_active_endpoint_pricing_valid(
+    *,
+    access_mode: AccessMode,
+    plan: _ParsedPricing | None,
+    current_pricing: PricingModel | None,
+) -> None:
+    if access_mode is not AccessMode.PAID:
         return
-    pricing = endpoint.pricing
+    target: _ParsedPricing | PricingModel | None = plan
+    if target is None and (
+        current_pricing is not None
+        and current_pricing.pricing_type is PricingModelType.FIXED_PER_CALL
+    ):
+        target = current_pricing
     if (
-        pricing is None
-        or pricing.pricing_type is not PricingModelType.FIXED_PER_CALL
-        or pricing.amount_minor is None
-        or pricing.currency is None
+        target is None
+        or target.pricing_type is not PricingModelType.FIXED_PER_CALL
+        or target.amount_minor is None
+        or target.currency is None
     ):
         raise InvalidInputError(
             "active paid endpoints must define fixed_per_call pricing",
