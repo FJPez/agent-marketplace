@@ -277,6 +277,20 @@ async def test_create_endpoint_allows_same_key_different_service(
             AccessMode.FREE,
             {"pricing_type": PricingModelType.FREE, "unexpected": "value"},
         ),
+        (
+            "valid-key",
+            "Name",
+            30,
+            AccessMode.FREE,
+            {"pricing_type": PricingModelType.FREE, "amount_minor": 250, "currency": None},
+        ),
+        (
+            "valid-key",
+            "Name",
+            30,
+            AccessMode.FREE,
+            {"pricing_type": PricingModelType.FREE, "amount_minor": None, "currency": "USD"},
+        ),
     ],
 )
 async def test_create_endpoint_rejects_invalid_input(
