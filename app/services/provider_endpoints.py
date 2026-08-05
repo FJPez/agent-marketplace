@@ -157,15 +157,21 @@ async def update_endpoint(
 
     now = datetime.now(UTC)
 
-    endpoint = await _require_owned_endpoint(
-        session=session,
-        account_id=account_id,
-        endpoint_id=endpoint_id,
+    locked_service_id = await session.scalar(
+        select(Service.id)
+        .join(Service.endpoints)
+        .where(
+            ServiceEndpoint.id == endpoint_id,
+            Service.provider_account_id == account_id,
+        )
+        .with_for_update(),
     )
-    service = await _require_owned_service_for_update(
+    if locked_service_id is None:
+        raise NotFoundError("endpoint not found")
+    service = await _require_owned_service(
         session=session,
         account_id=account_id,
-        service_id=endpoint.service_id,
+        service_id=locked_service_id,
     )
     endpoint = next(
         (candidate for candidate in service.endpoints if candidate.id == endpoint_id),
