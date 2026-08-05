@@ -40,7 +40,7 @@ PRICING_FIELDS = frozenset({"pricing_type", "amount_minor", "currency"})
 
 
 @dataclass(frozen=True)
-class _ParsedPricing:
+class ParsedPricing:
     pricing_type: PricingModelType
     amount_minor: int | None
     currency: str | None
@@ -96,23 +96,15 @@ async def create_endpoint(
     session.add(endpoint)
     try:
         await session.flush()
-    except IntegrityError as exc:
-        await session.rollback()
-        if not is_unique_violation(exc):
-            raise
-        raise ConflictError("endpoint key already exists for this service") from exc
-
-    if pricing_plan is not None:
-        pricing_row = PricingModel(
-            endpoint_id=endpoint.id,
-            pricing_type=pricing_plan.pricing_type,
-            amount_minor=pricing_plan.amount_minor,
-            currency=pricing_plan.currency,
-        )
-        session.add(pricing_row)
-        endpoint.pricing = pricing_row
-
-    try:
+        if pricing_plan is not None:
+            pricing_row = PricingModel(
+                endpoint_id=endpoint.id,
+                pricing_type=pricing_plan.pricing_type,
+                amount_minor=pricing_plan.amount_minor,
+                currency=pricing_plan.currency,
+            )
+            session.add(pricing_row)
+            endpoint.pricing = pricing_row
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -369,12 +361,12 @@ async def _ensure_endpoint_update_allowed(
 def _ensure_active_endpoint_pricing_valid(
     *,
     access_mode: AccessMode,
-    plan: _ParsedPricing | None,
+    plan: ParsedPricing | None,
     current_pricing: PricingModel | None,
 ) -> None:
     if access_mode is not AccessMode.PAID:
         return
-    target: _ParsedPricing | PricingModel | None = plan
+    target: ParsedPricing | PricingModel | None = plan
     if target is None and (
         current_pricing is not None
         and current_pricing.pricing_type is PricingModelType.FIXED_PER_CALL
@@ -394,7 +386,7 @@ def _ensure_active_endpoint_pricing_valid(
 async def _apply_pricing_plan(
     endpoint: ServiceEndpoint,
     *,
-    plan: _ParsedPricing | None,
+    plan: ParsedPricing | None,
     session: AsyncSession,
     now: datetime,
 ) -> None:
@@ -426,12 +418,12 @@ async def _apply_pricing_plan(
 def _plan_pricing(
     *,
     access_mode: AccessMode,
-    parsed: _ParsedPricing | None,
-) -> _ParsedPricing | None:
+    parsed: ParsedPricing | None,
+) -> ParsedPricing | None:
     if access_mode is AccessMode.FREE:
         if parsed is not None and parsed.pricing_type is not PricingModelType.FREE:
             raise InvalidInputError("free endpoints must use free pricing")
-        return _ParsedPricing(
+        return ParsedPricing(
             pricing_type=PricingModelType.FREE,
             amount_minor=None,
             currency=None,
@@ -444,7 +436,7 @@ def _plan_pricing(
     return parsed
 
 
-def _parse_pricing(pricing: object) -> _ParsedPricing | None:
+def _parse_pricing(pricing: object) -> ParsedPricing | None:
     if pricing is None:
         return None
     if not isinstance(pricing, dict):
@@ -493,7 +485,7 @@ def _parse_pricing(pricing: object) -> _ParsedPricing | None:
     elif amount_minor is None or currency is None:
         raise InvalidInputError("fixed_per_call pricing requires amount_minor and currency")
 
-    return _ParsedPricing(
+    return ParsedPricing(
         pricing_type=pricing_type,
         amount_minor=amount_minor,
         currency=currency,

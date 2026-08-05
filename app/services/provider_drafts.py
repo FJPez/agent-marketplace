@@ -21,6 +21,8 @@ from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
 from app.services.revision_service import RevisionService, UpdateImpact
 
+SERVICE_UPDATE_FIELDS = frozenset({"name", "summary", "description"})
+
 
 async def create_service(
     *,
@@ -90,8 +92,7 @@ async def update_service(
     if not updates:
         raise InvalidInputError("at least one field must be provided")
 
-    allowed_fields = {"name", "summary", "description"}
-    unknown_fields = set(updates) - allowed_fields
+    unknown_fields = set(updates) - SERVICE_UPDATE_FIELDS
     if unknown_fields:
         unknown_field = sorted(unknown_fields)[0]
         raise InvalidInputError(f"unknown update field: {unknown_field}")
