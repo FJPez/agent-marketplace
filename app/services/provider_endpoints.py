@@ -176,51 +176,63 @@ async def update_endpoint(
     try:
         if "name" in updates:
             name = updates["name"]
-            if not isinstance(name, str):
+            if name is None:
                 raise InvalidInputError("name cannot be null")
+            if not isinstance(name, str):
+                raise InvalidInputError("name must be a string")
             update_fields["name"] = normalize_service_name(name)
             revision_fields["name"] = name
         if "summary" in updates:
             summary = updates["summary"]
             if summary is not None and not isinstance(summary, str):
-                raise InvalidInputError("summary cannot be null")
+                raise InvalidInputError("summary must be a string")
             update_fields["summary"] = normalize_endpoint_summary(summary)
             revision_fields["summary"] = summary
         if "description" in updates:
             description = updates["description"]
             if description is not None and not isinstance(description, str):
-                raise InvalidInputError("description cannot be null")
+                raise InvalidInputError("description must be a string")
             update_fields["description"] = normalize_service_description(description)
             revision_fields["description"] = description
         if "access_mode" in updates:
             access_mode = updates["access_mode"]
-            if not isinstance(access_mode, AccessMode):
+            if access_mode is None:
                 raise InvalidInputError("access_mode cannot be null")
+            if not isinstance(access_mode, AccessMode):
+                raise InvalidInputError("access_mode must be a valid access mode")
             update_fields["access_mode"] = access_mode
             revision_fields["access_mode"] = access_mode
             target_access_mode = access_mode
         if "request_schema" in updates:
             request_schema = to_json_value(updates["request_schema"])
-            if not isinstance(request_schema, dict):
+            if request_schema is None:
                 raise InvalidInputError("request_schema cannot be null")
+            if not isinstance(request_schema, dict):
+                raise InvalidInputError("request_schema must be an object")
             update_fields["request_schema"] = request_schema
             revision_fields["request_schema"] = request_schema
         if "response_schema" in updates:
             response_schema = to_json_value(updates["response_schema"])
-            if not isinstance(response_schema, dict):
+            if response_schema is None:
                 raise InvalidInputError("response_schema cannot be null")
+            if not isinstance(response_schema, dict):
+                raise InvalidInputError("response_schema must be an object")
             update_fields["response_schema"] = response_schema
             revision_fields["response_schema"] = response_schema
         if "timeout_seconds" in updates:
             timeout_seconds = updates["timeout_seconds"]
-            if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
+            if timeout_seconds is None:
                 raise InvalidInputError("timeout_seconds cannot be null")
+            if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
+                raise InvalidInputError("timeout_seconds must be an integer")
             update_fields["timeout_seconds"] = validate_endpoint_timeout(timeout_seconds)
             revision_fields["timeout_seconds"] = timeout_seconds
         if "is_enabled" in updates:
             is_enabled = updates["is_enabled"]
-            if not isinstance(is_enabled, bool):
+            if is_enabled is None:
                 raise InvalidInputError("is_enabled cannot be null")
+            if not isinstance(is_enabled, bool):
+                raise InvalidInputError("is_enabled must be a boolean")
             update_fields["is_enabled"] = is_enabled
             revision_fields["is_enabled"] = is_enabled
         if "pricing" in updates:
@@ -393,6 +405,27 @@ def _ensure_active_endpoint_pricing_valid(
         )
 
 
+def _plan_pricing(
+    *,
+    access_mode: AccessMode,
+    parsed: ParsedPricing | None,
+) -> ParsedPricing | None:
+    if access_mode is AccessMode.FREE:
+        if parsed is not None and parsed.pricing_type is not PricingModelType.FREE:
+            raise InvalidInputError("free endpoints must use free pricing")
+        return ParsedPricing(
+            pricing_type=PricingModelType.FREE,
+            amount_minor=None,
+            currency=None,
+        )
+
+    if parsed is None:
+        return None
+    if parsed.pricing_type is not PricingModelType.FIXED_PER_CALL:
+        raise InvalidInputError("paid endpoints must use fixed_per_call pricing")
+    return parsed
+
+
 async def _apply_pricing_plan(
     endpoint: ServiceEndpoint,
     *,
@@ -425,27 +458,6 @@ async def _apply_pricing_plan(
     endpoint.pricing = new_pricing
 
 
-def _plan_pricing(
-    *,
-    access_mode: AccessMode,
-    parsed: ParsedPricing | None,
-) -> ParsedPricing | None:
-    if access_mode is AccessMode.FREE:
-        if parsed is not None and parsed.pricing_type is not PricingModelType.FREE:
-            raise InvalidInputError("free endpoints must use free pricing")
-        return ParsedPricing(
-            pricing_type=PricingModelType.FREE,
-            amount_minor=None,
-            currency=None,
-        )
-
-    if parsed is None:
-        return None
-    if parsed.pricing_type is not PricingModelType.FIXED_PER_CALL:
-        raise InvalidInputError("paid endpoints must use fixed_per_call pricing")
-    return parsed
-
-
 def _parse_pricing(pricing: object) -> ParsedPricing | None:
     if pricing is None:
         return None
@@ -463,31 +475,9 @@ def _parse_pricing(pricing: object) -> ParsedPricing | None:
         unknown_field = sorted(unknown_fields)[0]
         raise InvalidInputError(f"unknown pricing field: {unknown_field}")
 
-    raw_pricing_type = fields.get("pricing_type")
-    pricing_type: PricingModelType | None
-    if isinstance(raw_pricing_type, PricingModelType):
-        pricing_type = raw_pricing_type
-    elif isinstance(raw_pricing_type, str):
-        try:
-            pricing_type = PricingModelType(raw_pricing_type)
-        except ValueError:
-            pricing_type = None
-    else:
-        pricing_type = None
-    if pricing_type is None:
-        raise InvalidInputError("pricing_type must be one of: free, fixed_per_call")
-
-    amount_minor = fields.get("amount_minor")
-    if amount_minor is not None and (
-        isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor <= 0
-    ):
-        raise InvalidInputError("amount_minor must be a positive integer")
-
-    currency = fields.get("currency")
-    if currency is not None and (
-        not isinstance(currency, str) or len(currency) != 3 or currency != currency.upper()
-    ):
-        raise InvalidInputError("currency must be a 3-letter uppercase currency code")
+    pricing_type = _parse_pricing_type(fields)
+    amount_minor = _parse_amount_minor(fields)
+    currency = _parse_currency(fields)
 
     if pricing_type is PricingModelType.FREE:
         if amount_minor is not None or currency is not None:
@@ -500,3 +490,35 @@ def _parse_pricing(pricing: object) -> ParsedPricing | None:
         amount_minor=amount_minor,
         currency=currency,
     )
+
+
+def _parse_pricing_type(fields: dict[str, object]) -> PricingModelType:
+    raw_pricing_type = fields.get("pricing_type")
+    if isinstance(raw_pricing_type, PricingModelType):
+        return raw_pricing_type
+    if isinstance(raw_pricing_type, str):
+        try:
+            return PricingModelType(raw_pricing_type)
+        except ValueError as exc:
+            raise InvalidInputError(
+                "pricing_type must be one of: free, fixed_per_call",
+            ) from exc
+    raise InvalidInputError("pricing_type must be one of: free, fixed_per_call")
+
+
+def _parse_amount_minor(fields: dict[str, object]) -> int | None:
+    amount_minor = fields.get("amount_minor")
+    if amount_minor is None:
+        return None
+    if isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor <= 0:
+        raise InvalidInputError("amount_minor must be a positive integer")
+    return amount_minor
+
+
+def _parse_currency(fields: dict[str, object]) -> str | None:
+    currency = fields.get("currency")
+    if currency is None:
+        return None
+    if not isinstance(currency, str) or len(currency) != 3 or currency != currency.upper():
+        raise InvalidInputError("currency must be a 3-letter uppercase currency code")
+    return currency

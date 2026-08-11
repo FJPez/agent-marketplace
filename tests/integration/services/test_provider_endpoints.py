@@ -521,6 +521,44 @@ async def test_update_endpoint_rejects_null_required_field(
             )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("name", 42, "name must be a string"),
+        ("summary", 42, "summary must be a string"),
+        ("description", 42, "description must be a string"),
+        ("access_mode", "free", "access_mode must be a valid access mode"),
+        ("request_schema", "schema", "request_schema must be an object"),
+        ("response_schema", "schema", "response_schema must be an object"),
+        ("timeout_seconds", True, "timeout_seconds must be an integer"),
+        ("is_enabled", "yes", "is_enabled must be a boolean"),
+    ],
+)
+async def test_update_endpoint_rejects_wrong_typed_field(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError, match=message):
+            await update_endpoint(
+                session=session,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                updates={field: value},
+            )
+
+
 async def test_update_endpoint_clears_summary_and_description(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
