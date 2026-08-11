@@ -9,11 +9,17 @@ from tests.fixtures.domain import (
     create_service_record,
 )
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.config import Settings
+from app.core.enums import AccessMode, AppEnv, PricingModelType, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
-from app.db.models import PricingModel, Service, ServiceEndpoint, ServiceRevision
-from app.services.provider_endpoints import create_endpoint, get_endpoint, update_endpoint
+from app.db.models import PricingModel, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
+from app.services.provider_endpoints import (
+    create_endpoint,
+    get_endpoint,
+    update_endpoint,
+    upsert_upstream,
+)
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -22,6 +28,13 @@ pytestmark = [
 
 REQUEST_SCHEMA: JsonObject = {"type": "object", "properties": {"text": {"type": "string"}}}
 RESPONSE_SCHEMA: JsonObject = {"type": "object", "properties": {"result": {"type": "string"}}}
+
+
+UPSTREAM_CONFIG: JsonObject = {"headers": {"x-api-key": "secret"}, "retries": 2}
+
+
+def _upstream_settings() -> Settings:
+    return Settings(env=AppEnv.TEST, jwt_secret_key="test-secret-key-with-32-bytes-123")
 
 
 async def _create_draft_service(
@@ -917,3 +930,240 @@ async def test_update_endpoint_rejects_other_accounts_endpoint(
                 endpoint_id=endpoint_id,
                 updates={"name": "New Name"},
             )
+
+
+async def test_upsert_upstream_creates_row_for_draft_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            base_url="http://127.0.0.1:9000",
+            path="  /translate  ",
+            http_method="POST",
+            config=UPSTREAM_CONFIG,
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.base_url == "http://127.0.0.1:9000"
+    assert persisted.path == "/translate"
+    assert persisted.http_method == "POST"
+    assert persisted.config == UPSTREAM_CONFIG
+
+
+async def test_upsert_upstream_replaces_existing_row_in_place(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            base_url="http://127.0.0.1:9000",
+            path="/translate",
+            http_method="POST",
+            config=UPSTREAM_CONFIG,
+        )
+
+    async with db_session_factory() as session:
+        first = await session.get(ProviderUpstream, endpoint_id)
+        assert first is not None
+        first_updated_at = first.updated_at
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            base_url="http://127.0.0.1:9100",
+            path="/summarize",
+            http_method="PUT",
+            config={"headers": {}},
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+        upstream_count = await session.scalar(
+            select(func.count())
+            .select_from(ProviderUpstream)
+            .where(ProviderUpstream.endpoint_id == endpoint_id),
+        )
+
+    assert upstream_count == 1
+    assert persisted is not None
+    assert persisted.base_url == "http://127.0.0.1:9100"
+    assert persisted.path == "/summarize"
+    assert persisted.http_method == "PUT"
+    assert persisted.config == {"headers": {}}
+    assert persisted.updated_at > first_updated_at
+
+
+async def test_upsert_upstream_rejects_active_service(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidStateError):
+            await upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                base_url="http://127.0.0.1:9000",
+                path="/translate",
+                http_method="POST",
+                config={},
+            )
+
+
+async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(NotFoundError):
+            await upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=account_id,
+                endpoint_id=999_999,
+                base_url="http://127.0.0.1:9000",
+                path="/translate",
+                http_method="POST",
+                config={},
+            )
+
+
+async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    other_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=other_account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(NotFoundError):
+            await upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                base_url="http://127.0.0.1:9000",
+                path="/translate",
+                http_method="POST",
+                config={},
+            )
+
+
+async def test_upsert_upstream_rejects_unsafe_target(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError, match="upstream target is not allowed"):
+            await upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                base_url="https://127.0.0.1:9000",
+                path="/translate",
+                http_method="POST",
+                config={},
+            )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+
+    assert persisted is None
+
+
+@pytest.mark.parametrize(
+    ("path", "http_method"),
+    [("translate", "POST"), ("/translate", "post")],
+)
+async def test_upsert_upstream_rejects_invalid_path_or_method(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    path: str,
+    http_method: str,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                base_url="http://127.0.0.1:9000",
+                path=path,
+                http_method=http_method,
+                config={},
+            )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+
+    assert persisted is None

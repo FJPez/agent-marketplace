@@ -6,18 +6,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.core.config import Settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject, to_json_value
 from app.core.service_fields import (
     normalize_endpoint_summary,
+    normalize_http_method,
     normalize_service_description,
     normalize_service_name,
     normalize_slug,
+    normalize_upstream_path,
     validate_endpoint_timeout,
 )
+from app.core.upstream_targets import UnsafeUpstreamTargetError, validate_upstream_base_url
 from app.db.errors import is_unique_violation
 from app.db.models.pricing_model import PricingModel
+from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.services import service_access
@@ -253,6 +258,69 @@ async def update_endpoint(
 
     await session.commit()
     return endpoint
+
+
+async def upsert_upstream(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    account_id: int,
+    endpoint_id: int,
+    base_url: str,
+    path: str,
+    http_method: str,
+    config: JsonObject,
+) -> None:
+    locked_service_id = await service_access.lock_owned_service_by_endpoint(
+        session=session,
+        account_id=account_id,
+        endpoint_id=endpoint_id,
+    )
+    service = await service_access.load_owned_service(
+        session=session,
+        account_id=account_id,
+        service_id=locked_service_id,
+    )
+    endpoint = next(
+        (candidate for candidate in service.endpoints if candidate.id == endpoint_id),
+        None,
+    )
+    if endpoint is None:
+        raise NotFoundError("endpoint not found")
+
+    if service.lifecycle is not ServiceLifecycle.DRAFT:
+        raise InvalidStateError("service is not mutable outside draft")
+
+    try:
+        normalized_path = normalize_upstream_path(path)
+        normalized_http_method = normalize_http_method(http_method)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
+    try:
+        validated_base_url = validate_upstream_base_url(base_url, settings=settings)
+    except UnsafeUpstreamTargetError as exc:
+        raise InvalidInputError(str(exc)) from exc
+
+    now = datetime.now(UTC)
+    upstream = endpoint.upstream
+    if upstream is None:
+        upstream = ProviderUpstream(
+            endpoint_id=endpoint.id,
+            base_url=validated_base_url,
+            path=normalized_path,
+            http_method=normalized_http_method,
+            config=config,
+        )
+        session.add(upstream)
+        endpoint.upstream = upstream
+    else:
+        upstream.base_url = validated_base_url
+        upstream.path = normalized_path
+        upstream.http_method = normalized_http_method
+        upstream.config = config
+        upstream.updated_at = now
+
+    await session.commit()
 
 
 async def _load_owned_endpoint(
