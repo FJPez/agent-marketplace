@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
+from app.api.deps.settings import SettingsDep
 from app.db.session import get_db_session
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -17,7 +18,6 @@ from app.schemas.service import (
     ServiceUpdateRequest,
 )
 from app.services import provider_drafts, provider_endpoints
-from app.services.provider_endpoint_service import ProviderEndpointService
 from app.services.publish_service import PublishService
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
@@ -368,8 +368,17 @@ async def put_provider_endpoint_upstream(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> Response:
-    service = ProviderEndpointService(session)
-    await service.upsert_upstream(actor, endpoint_id=endpoint_id, request=request)
+    await provider_endpoints.upsert_upstream(
+        session=session,
+        settings=settings,
+        account_id=actor.account_id,
+        endpoint_id=endpoint_id,
+        base_url=str(request.base_url),
+        path=request.path,
+        http_method=request.http_method,
+        config=request.config,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
