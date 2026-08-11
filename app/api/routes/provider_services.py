@@ -334,7 +334,11 @@ async def update_provider_endpoint(
     summary="Upsert provider upstream configuration",
     description=(
         "Creates or replaces the hidden upstream configuration for an owned endpoint. "
-        "Upstream details are stored privately and are never exposed on public discovery routes."
+        "Upstream details are stored privately and are never exposed on public discovery routes. "
+        "The marketplace invokes upstreams by forwarding the invocation payload as a JSON "
+        "request body and requires a JSON response, so the upstream must accept a "
+        "body-bearing method (POST, PUT, or PATCH); GET-style APIs that read inputs from "
+        "the query string require an adapter."
     ),
     responses={
         204: {"description": "Endpoint upstream configuration stored successfully."},
