@@ -283,6 +283,18 @@ async def upsert_upstream(
     http_method: str,
     config: JsonObject,
 ) -> None:
+    try:
+        normalized_path = normalize_upstream_path(path)
+        normalized_http_method = normalize_http_method(http_method)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
+    # Resolves DNS - must run before the first query so no transaction or row
+    # lock is held across the network I/O.
+    try:
+        validated_base_url = validate_upstream_base_url(base_url, settings=settings)
+    except UnsafeUpstreamTargetError as exc:
+        raise InvalidInputError(str(exc)) from exc
+
     locked_service_id = await service_access.lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
@@ -302,16 +314,6 @@ async def upsert_upstream(
 
     if service.lifecycle is not ServiceLifecycle.DRAFT:
         raise InvalidStateError("service is not mutable outside draft")
-
-    try:
-        normalized_path = normalize_upstream_path(path)
-        normalized_http_method = normalize_http_method(http_method)
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-    try:
-        validated_base_url = validate_upstream_base_url(base_url, settings=settings)
-    except UnsafeUpstreamTargetError as exc:
-        raise InvalidInputError(str(exc)) from exc
 
     now = datetime.now(UTC)
     upstream = endpoint.upstream

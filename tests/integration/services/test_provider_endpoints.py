@@ -1170,6 +1170,25 @@ async def test_upsert_upstream_rejects_unsafe_target(
     assert persisted is None
 
 
+async def test_upsert_upstream_validates_input_before_resolving_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=account_id,
+                endpoint_id=999_999,
+                base_url="https://127.0.0.1:9000",
+                path="/translate",
+                http_method="POST",
+                config={},
+            )
+
+
 @pytest.mark.parametrize(
     ("path", "http_method"),
     [
