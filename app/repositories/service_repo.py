@@ -21,10 +21,6 @@ def _service_with_relations() -> Select[tuple[Service]]:
     )
 
 
-def _service_with_relations_for_update() -> Select[tuple[Service]]:
-    return _service_with_relations().with_for_update()
-
-
 class ServiceRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
