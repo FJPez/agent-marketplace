@@ -1172,7 +1172,14 @@ async def test_upsert_upstream_rejects_unsafe_target(
 
 @pytest.mark.parametrize(
     ("path", "http_method"),
-    [("translate", "POST"), ("/translate", "post")],
+    [
+        ("translate", "POST"),
+        ("/translate", "post"),
+        ("/translate", "GET"),
+        ("/translate", "DELETE"),
+        ("/translate", "HEAD"),
+        ("/translate", "FETCH"),
+    ],
 )
 async def test_upsert_upstream_rejects_invalid_path_or_method(
     db_session_factory: async_sessionmaker[AsyncSession],

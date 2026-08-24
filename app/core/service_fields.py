@@ -19,7 +19,7 @@ ENDPOINT_TIMEOUT_MAX_SECONDS = 3600
 UPSTREAM_PATH_MAX_LENGTH = 2000
 HTTP_METHOD_MIN_LENGTH = 3
 HTTP_METHOD_MAX_LENGTH = 16
-HTTP_METHOD_PATTERN = re.compile(r"^[A-Z]+$")
+UPSTREAM_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
 def normalize_slug(value: str) -> str:
@@ -99,14 +99,8 @@ def normalize_upstream_path(value: str) -> str:
 
 def normalize_http_method(value: str) -> str:
     normalized_value = value.strip()
-    if len(normalized_value) < HTTP_METHOD_MIN_LENGTH:
-        msg = f"http_method must be at least {HTTP_METHOD_MIN_LENGTH} characters"
-        raise ValueError(msg)
-    if len(normalized_value) > HTTP_METHOD_MAX_LENGTH:
-        msg = f"http_method must be at most {HTTP_METHOD_MAX_LENGTH} characters"
-        raise ValueError(msg)
-    if HTTP_METHOD_PATTERN.fullmatch(normalized_value) is None:
-        msg = "http_method must be an uppercase HTTP method name"
+    if normalized_value not in UPSTREAM_HTTP_METHODS:
+        msg = "http_method must be one of: PATCH, POST, PUT"
         raise ValueError(msg)
     return normalized_value
 

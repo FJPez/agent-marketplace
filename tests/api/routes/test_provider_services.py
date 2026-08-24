@@ -749,6 +749,39 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
 
 
 @pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_disallowed_http_method(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": "http://127.0.0.1:9000",
+            "path": "/translate",
+            "http_method": "GET",
+            "config": {"auth": {"type": "bearer"}},
+        },
+    )
+
+    assert response.status_code == 422
+    error = response.json()["detail"][0]
+    assert error["loc"] == ["body", "http_method"]
+    assert "must be one of: PATCH, POST, PUT" in error["msg"]
+
+
+@pytest.mark.asyncio
 async def test_provider_service_routes_hide_cross_owner_service_access(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
