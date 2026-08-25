@@ -139,52 +139,55 @@ async def update_endpoint(
     if endpoint is None:
         raise NotFoundError("endpoint not found")
 
-    set_fields = changes.model_fields_set
-    if "access_mode" in set_fields:
-        if changes.access_mode is None:
-            # Unreachable: the request schema rejects an explicit null here.
-            raise InvalidInputError("access_mode cannot be null")
-        target_access_mode = changes.access_mode
-    else:
-        target_access_mode = endpoint.access_mode
-    price_specified = "pricing" in set_fields
+    # access_mode is non-clearable (the schema rejects an explicit null), so
+    # None can only mean the field was omitted.
+    target_access_mode = (
+        changes.access_mode if changes.access_mode is not None else endpoint.access_mode
+    )
+    price_specified = "pricing" in changes.model_fields_set
 
     if target_access_mode is AccessMode.FREE and price_specified and changes.pricing is not None:
         raise InvalidInputError("free endpoints cannot have a price")
 
-    # Effective changes: supplied fields whose target differs from the stored
-    # value. They drive no-op detection, the mutability gate, and revision
-    # classification, so resending current values is not a change at all.
-    effective_changes: dict[str, object] = {}
-    for attribute_name in set_fields - {"pricing"}:
-        target = getattr(changes, attribute_name)
-        if target != getattr(endpoint, attribute_name):
-            effective_changes[attribute_name] = target
-
-    pricing_change = _resolve_pricing_change(
-        current=endpoint.price,
-        requested=changes.pricing,
-        price_specified=price_specified,
-        target_access_mode=target_access_mode,
-    )
-    effective_changes.update(pricing_change)
-
-    # Pricing lives in its own table and is never assigned by setattr.
+    # Effective changes: supplied values that differ from the stored ones. They
+    # drive no-op detection, the mutability gate, and revision classification,
+    # so resending current values is not a change at all. Pricing lives in its
+    # own table and is never assigned by setattr, so it is tracked separately.
+    supplied = changes.model_dump(exclude_unset=True, exclude={"pricing"})
     column_changes = {
-        attribute_name: value
-        for attribute_name, value in effective_changes.items()
-        if attribute_name != "pricing"
+        name: value for name, value in supplied.items() if value != getattr(endpoint, name)
     }
+
+    current_price = endpoint.price
+    resulting_price: FixedPrice | None = None
+    pricing_changed = False
+    if price_specified:
+        resulting_price = changes.pricing
+        pricing_changed = True
+    elif target_access_mode is AccessMode.FREE and current_price is not None:
+        # Switching to FREE drops the row even though pricing was omitted.
+        pricing_changed = True
+    if pricing_changed and current_price is not None and resulting_price is not None:
+        pricing_changed = (current_price.amount_minor, current_price.currency) != (
+            resulting_price.amount_minor,
+            resulting_price.currency,
+        )
+    elif pricing_changed:
+        pricing_changed = (current_price is None) != (resulting_price is None)
+
+    effective_changes: dict[str, object] = dict(column_changes)
+    if pricing_changed:
+        effective_changes["pricing"] = resulting_price
 
     if not effective_changes:
         return endpoint
 
     if target_access_mode is AccessMode.FREE:
         has_resulting_price = False
-    elif pricing_change:
-        has_resulting_price = pricing_change["pricing"] is not None
+    elif pricing_changed:
+        has_resulting_price = resulting_price is not None
     else:
-        has_resulting_price = endpoint.price is not None
+        has_resulting_price = current_price is not None
 
     await _ensure_endpoint_update_allowed(
         session=session,
@@ -206,8 +209,7 @@ async def update_endpoint(
         setattr(endpoint, attribute_name, value)
     endpoint.updated_at = now
 
-    if pricing_change:
-        resulting_price = pricing_change["pricing"]
+    if pricing_changed:
         existing_price = endpoint.price
         if resulting_price is None:
             if existing_price is not None:
@@ -296,35 +298,6 @@ async def upsert_upstream(
         upstream.updated_at = now
 
     await session.commit()
-
-
-def _resolve_pricing_change(
-    *,
-    current: EndpointPrice | None,
-    requested: FixedPrice | None,
-    price_specified: bool,
-    target_access_mode: AccessMode,
-) -> dict[str, FixedPrice | None]:
-    """Resolve the resulting pricing state when it differs from the stored row.
-
-    Returns a single-entry ``{"pricing": resulting}`` mapping when the pricing
-    row must change, and an empty mapping when it must be left alone.
-    """
-    if price_specified:
-        resulting = requested
-    elif target_access_mode is AccessMode.FREE and current is not None:
-        # Switching to FREE drops the row even though pricing was omitted.
-        resulting = None
-    else:
-        return {}
-
-    if (current is None) != (resulting is None):
-        return {"pricing": resulting}
-    if current is None or resulting is None:
-        return {}
-    if (current.amount_minor, current.currency) != (resulting.amount_minor, resulting.currency):
-        return {"pricing": resulting}
-    return {}
 
 
 async def _load_owned_endpoint(
