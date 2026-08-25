@@ -12,8 +12,8 @@ from pydantic import SecretStr
 from sqlalchemy import func, select
 from tests.fixtures.domain import (
     create_consumer_account_record,
+    create_endpoint_price_record,
     create_endpoint_record,
-    create_pricing_record,
     create_provider_account_record,
     create_quote_record,
     create_service_record,
@@ -122,10 +122,9 @@ async def _seed_paid_endpoint(
         db_session_factory,
         endpoint_id=endpoint_id,
     )
-    await create_pricing_record(
+    await create_endpoint_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency=currency,
     )

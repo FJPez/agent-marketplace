@@ -1,19 +1,21 @@
 import asyncio
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 DOMAIN_TABLES = {
     "accounts",
     "api_keys",
+    "endpoint_prices",
     "invocations",
     "ledger_entries",
     "moderation_actions",
     "payment_attempts",
     "payouts",
-    "pricing_models",
     "provider_upstreams",
     "quotes",
     "service_endpoints",
@@ -208,3 +210,167 @@ def test_head_migration_downgrades_cleanly_with_service_rows(
         command.downgrade(alembic_config, "base")
     finally:
         command.upgrade(alembic_config, "head")
+
+
+async def _seed_legacy_pricing_state(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as connection:
+        account_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO accounts (display_name, wallet_address)
+                    VALUES ('Pricing Provider', '0x0000000000000000000000000000000000000017')
+                    RETURNING id
+                    """
+                )
+            )
+        ).scalar_one()
+        service_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO services (provider_account_id, slug, name, summary, lifecycle)
+                    VALUES (
+                        :provider_account_id,
+                        'pricing-check',
+                        'Pricing Check',
+                        'Pricing summary',
+                        'draft'
+                    )
+                    RETURNING id
+                    """
+                ),
+                {"provider_account_id": account_id},
+            )
+        ).scalar_one()
+        for key, access_mode in (("free-endpoint", "free"), ("paid-endpoint", "paid")):
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO service_endpoints (
+                        service_id,
+                        key,
+                        name,
+                        access_mode,
+                        request_schema,
+                        response_schema,
+                        timeout_seconds
+                    )
+                    VALUES (
+                        :service_id,
+                        :key,
+                        :key,
+                        :access_mode,
+                        CAST('{}' AS jsonb),
+                        CAST('{}' AS jsonb),
+                        30
+                    )
+                    """
+                ),
+                {"service_id": service_id, "key": key, "access_mode": access_mode},
+            )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO pricing_models (endpoint_id, pricing_type, amount_minor, currency)
+                SELECT id, 'free', NULL, NULL
+                FROM service_endpoints
+                WHERE key = 'free-endpoint'
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                INSERT INTO pricing_models (endpoint_id, pricing_type, amount_minor, currency)
+                SELECT id, 'fixed_per_call', 500, 'USD'
+                FROM service_endpoints
+                WHERE key = 'paid-endpoint'
+                """
+            )
+        )
+
+
+async def _read_endpoint_prices(db_engine: AsyncEngine) -> list[tuple[str, int, str]]:
+    async with db_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT se.key, ep.amount_minor, ep.currency
+                FROM endpoint_prices ep
+                JOIN service_endpoints se ON se.id = ep.endpoint_id
+                ORDER BY se.key
+                """
+            )
+        )
+        return [(row[0], row[1], row[2]) for row in result]
+
+
+async def _read_legacy_pricing_models(db_engine: AsyncEngine) -> list[tuple[str, str]]:
+    async with db_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT se.key, pm.pricing_type
+                FROM pricing_models pm
+                JOIN service_endpoints se ON se.id = pm.endpoint_id
+                ORDER BY se.key
+                """
+            )
+        )
+        return [(row[0], row[1]) for row in result]
+
+
+async def _insert_endpoint_price_without_currency(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO endpoint_prices (endpoint_id, amount_minor, currency)
+                SELECT id, 500, NULL
+                FROM service_endpoints
+                WHERE key = 'free-endpoint'
+                """
+            )
+        )
+
+
+def test_endpoint_prices_migration_round_trips_legacy_pricing_rows(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    command.downgrade(alembic_config, "base")
+    try:
+        command.upgrade(alembic_config, "auth_wallet_binding_0016")
+        asyncio.run(_seed_legacy_pricing_state(db_engine))
+
+        command.upgrade(alembic_config, "head")
+
+        table_names = asyncio.run(get_table_names(db_engine))
+        assert "endpoint_prices" in table_names
+        assert "pricing_models" not in table_names
+
+        columns = asyncio.run(get_column_specs(db_engine, "endpoint_prices"))
+        assert "pricing_type" not in columns
+        assert columns["amount_minor"]["nullable"] is False
+        assert columns["currency"]["nullable"] is False
+
+        assert asyncio.run(_read_endpoint_prices(db_engine)) == [("paid-endpoint", 500, "USD")]
+
+        with pytest.raises(IntegrityError):
+            asyncio.run(_insert_endpoint_price_without_currency(db_engine))
+
+        command.downgrade(alembic_config, "-1")
+
+        table_names = asyncio.run(get_table_names(db_engine))
+        assert "pricing_models" in table_names
+        assert "endpoint_prices" not in table_names
+        assert asyncio.run(_read_legacy_pricing_models(db_engine)) == [
+            ("free-endpoint", "free"),
+            ("paid-endpoint", "fixed_per_call"),
+        ]
+
+        command.upgrade(alembic_config, "head")
+        assert asyncio.run(_read_endpoint_prices(db_engine)) == [("paid-endpoint", 500, "USD")]
+    finally:
+        command.downgrade(alembic_config, "base")

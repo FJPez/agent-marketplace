@@ -29,7 +29,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.core.json_types import JsonObject
-    from app.db.models.pricing_model import PricingModel
+    from app.db.models.endpoint_price import EndpointPrice
     from app.db.models.provider_upstream import ProviderUpstream
     from app.db.models.service import Service
 else:
@@ -79,7 +79,7 @@ class ServiceEndpoint(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    pricing: Mapped[PricingModel | None] = relationship(
+    pricing: Mapped[EndpointPrice | None] = relationship(
         back_populates="endpoint",
         cascade="all, delete-orphan",
         uselist=False,

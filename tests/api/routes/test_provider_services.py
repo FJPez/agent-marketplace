@@ -5,17 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_admin_account_record,
     create_consumer_account_record,
+    create_endpoint_price_record,
     create_endpoint_record,
     create_health_check_record,
     create_moderation_action_record,
-    create_pricing_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
 )
 from tests.helpers.auth import auth_headers_for_account_id
 
-from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
 from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
@@ -108,14 +108,12 @@ async def _seed_pricing(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     endpoint_id: int,
-    pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
-    amount_minor: int | None = 1500,
-    currency: str | None = "USD",
+    amount_minor: int = 1500,
+    currency: str = "USD",
 ) -> None:
-    await create_pricing_record(
+    await create_endpoint_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        pricing_type=pricing_type,
         amount_minor=amount_minor,
         currency=currency,
     )
@@ -1081,7 +1079,7 @@ async def test_patch_active_provider_endpoint_rejects_paid_transition_without_pr
 
     assert response.status_code == 422
     assert response.json() == {
-        "detail": "active paid endpoints must define fixed_per_call pricing",
+        "detail": "active paid endpoints must define a price",
     }
 
 

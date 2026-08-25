@@ -14,9 +14,9 @@ from app.core.enums import (
 )
 from app.db.models import (
     Account,
+    EndpointPrice,
     Invocation,
     PaymentAttempt,
-    PricingModel,
     Quote,
     Service,
     ServiceEndpoint,
@@ -87,9 +87,8 @@ async def test_ledger_entry_repository_persists_lists_and_summarizes_provider_en
         )
         session.add(quote)
         session.add(
-            PricingModel(
+            EndpointPrice(
                 endpoint_id=endpoint.id,
-                pricing_type=PricingModelType.FIXED_PER_CALL,
                 amount_minor=500,
                 currency="USD",
             )

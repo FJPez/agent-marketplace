@@ -4,8 +4,8 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
+    create_endpoint_price_record,
     create_endpoint_record,
-    create_pricing_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
@@ -13,7 +13,7 @@ from tests.fixtures.domain import (
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
-from app.core.enums import AccessMode, AppEnv, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.db.models import Service, ServiceRevision
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
@@ -71,10 +71,9 @@ async def _seed_fixed_price(
     amount_minor: int = 1500,
     currency: str = "USD",
 ) -> None:
-    await create_pricing_record(
+    await create_endpoint_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=amount_minor,
         currency=currency,
     )

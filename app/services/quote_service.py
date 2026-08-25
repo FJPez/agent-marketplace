@@ -82,7 +82,7 @@ class QuoteService:
             endpoint_id=endpoint.id,
             endpoint_key=endpoint.key,
             request_hash=request_hash,
-            pricing_type=endpoint.pricing.pricing_type,
+            pricing_type=PricingModelType.FIXED_PER_CALL,
             amount_minor=endpoint.pricing.amount_minor,
             currency=endpoint.pricing.currency,
             service_revision_id=service.current_revision_id,
@@ -170,13 +170,7 @@ class QuoteService:
             raise QuoteUnavailableError("service contract is not quoteable")
 
     def _ensure_endpoint_is_quoteable(self, endpoint: ServiceEndpoint) -> None:
-        pricing = endpoint.pricing
         if endpoint.access_mode is not AccessMode.PAID:
             raise QuoteUnavailableError("endpoint is not quoteable")
-        if (
-            pricing is None
-            or pricing.pricing_type is not PricingModelType.FIXED_PER_CALL
-            or pricing.amount_minor is None
-            or pricing.currency is None
-        ):
+        if endpoint.pricing is None:
             raise QuoteUnavailableError("endpoint is not quoteable")

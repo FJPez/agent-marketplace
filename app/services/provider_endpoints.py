@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.config import Settings
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject, to_json_value
 from app.core.service_fields import (
@@ -23,7 +23,7 @@ from app.core.service_fields import (
 )
 from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation
-from app.db.models.pricing_model import PricingModel
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -106,9 +106,8 @@ async def create_endpoint(
     try:
         await session.flush()
         if validated_price is not None:
-            pricing_row = PricingModel(
+            pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                pricing_type=PricingModelType.FIXED_PER_CALL,
                 amount_minor=validated_price.amount_minor,
                 currency=validated_price.currency,
             )
@@ -280,9 +279,8 @@ async def update_endpoint(
     elif validated_price is not None:
         existing_pricing = endpoint.pricing
         if existing_pricing is None:
-            pricing_row = PricingModel(
+            pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                pricing_type=PricingModelType.FIXED_PER_CALL,
                 amount_minor=validated_price.amount_minor,
                 currency=validated_price.currency,
             )
@@ -421,7 +419,7 @@ def _ensure_active_paid_endpoint_priced(
     if access_mode is not AccessMode.PAID:
         return
     if not has_price:
-        raise InvalidInputError("active paid endpoints must define fixed_per_call pricing")
+        raise InvalidInputError("active paid endpoints must define a price")
 
 
 def _validate_price(price: FixedPrice) -> FixedPrice:

@@ -28,7 +28,7 @@ from app.core.service_fields import (
     normalize_tag,
     normalize_upstream_path,
 )
-from app.db.models.pricing_model import PricingModel
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
@@ -242,9 +242,9 @@ class EndpointPricingResponse(BaseModel):
     currency: str | None
 
     @classmethod
-    def from_model(cls, pricing: PricingModel) -> Self:
+    def from_model(cls, pricing: EndpointPrice) -> Self:
         return cls(
-            pricing_type=pricing.pricing_type,
+            pricing_type=PricingModelType.FIXED_PER_CALL,
             amount_minor=pricing.amount_minor,
             currency=pricing.currency,
         )

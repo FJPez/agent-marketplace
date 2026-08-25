@@ -5,9 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     ConsumerAccountFactory,
     EndpointFactory,
+    EndpointPriceFactory,
     InvocationFactory,
     PaymentAttemptFactory,
-    PricingFactory,
     ProviderAccountFactory,
     QuoteFactory,
     ServiceFactory,
@@ -18,7 +18,6 @@ from app.core.enums import (
     InvocationStatus,
     PaymentAttemptStatus,
     PayoutStatus,
-    PricingModelType,
 )
 from app.repositories.payout_repo import PayoutExecutionRepository, PayoutReportingRepository
 
@@ -29,7 +28,7 @@ async def _seed_payout_dependencies(
     consumer_account_factory: ConsumerAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     quote_factory: QuoteFactory,
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
@@ -49,9 +48,8 @@ async def _seed_payout_dependencies(
         key="translate",
         access_mode=AccessMode.PAID,
     )
-    await pricing_factory(
+    await endpoint_price_factory(
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency="USD",
     )
@@ -130,7 +128,7 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
     consumer_account_factory: ConsumerAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     quote_factory: QuoteFactory,
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
@@ -148,7 +146,7 @@ async def test_payout_repository_persists_lists_and_summarizes_provider_payouts(
         consumer_account_factory=consumer_account_factory,
         service_factory=service_factory,
         endpoint_factory=endpoint_factory,
-        pricing_factory=pricing_factory,
+        endpoint_price_factory=endpoint_price_factory,
         quote_factory=quote_factory,
         invocation_factory=invocation_factory,
         payment_attempt_factory=payment_attempt_factory,
@@ -224,7 +222,7 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
     consumer_account_factory: ConsumerAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     quote_factory: QuoteFactory,
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
@@ -242,7 +240,7 @@ async def test_summarize_for_provider_does_not_crash_with_multiple_currencies(
         consumer_account_factory=consumer_account_factory,
         service_factory=service_factory,
         endpoint_factory=endpoint_factory,
-        pricing_factory=pricing_factory,
+        endpoint_price_factory=endpoint_price_factory,
         quote_factory=quote_factory,
         invocation_factory=invocation_factory,
         payment_attempt_factory=payment_attempt_factory,

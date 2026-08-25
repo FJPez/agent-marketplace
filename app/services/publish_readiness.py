@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus
+from app.core.enums import AccessMode, ServiceHealthStatus
 from app.db.models.service import Service
 from app.integrations.provider_gateway.signing import get_hmac_auth_config
 from app.repositories.service_repo import ServiceRepository
@@ -31,10 +31,7 @@ def validate_service_for_publish(service: Service) -> None:
             raise ProviderServiceValidationError(
                 f"enabled endpoint '{endpoint.key}' must define hmac auth config before publish",
             )
-        if endpoint.access_mode is AccessMode.PAID and (
-            endpoint.pricing is None
-            or endpoint.pricing.pricing_type is not PricingModelType.FIXED_PER_CALL
-        ):
+        if endpoint.access_mode is AccessMode.PAID and endpoint.pricing is None:
             raise ProviderServiceValidationError(
                 f"paid endpoint '{endpoint.key}' must define fixed_per_call pricing before publish",
             )

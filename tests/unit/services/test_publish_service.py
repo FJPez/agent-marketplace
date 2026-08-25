@@ -2,8 +2,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
-from app.db.models.pricing_model import PricingModel
+from app.core.enums import AccessMode, ServiceLifecycle
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -38,7 +38,7 @@ def _build_endpoint(
     access_mode: AccessMode = AccessMode.FREE,
     is_enabled: bool = True,
     with_upstream: bool = True,
-    pricing: PricingModel | None = None,
+    pricing: EndpointPrice | None = None,
 ) -> ServiceEndpoint:
     endpoint = ServiceEndpoint(
         service_id=1,
@@ -70,10 +70,9 @@ def _build_endpoint(
     return endpoint
 
 
-def _build_fixed_price() -> PricingModel:
-    return PricingModel(
+def _build_fixed_price() -> EndpointPrice:
+    return EndpointPrice(
         endpoint_id=1,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency="USD",
     )
