@@ -71,7 +71,7 @@ class QuoteService:
             payload=payload,
             request_schema=endpoint.request_schema,
         )
-        assert endpoint.pricing is not None
+        assert endpoint.price is not None
 
         request_hash = hash_request_body(payload)
         ttl = timedelta(seconds=get_settings().quote_ttl_seconds)
@@ -83,8 +83,8 @@ class QuoteService:
             endpoint_key=endpoint.key,
             request_hash=request_hash,
             pricing_type=PricingModelType.FIXED_PER_CALL,
-            amount_minor=endpoint.pricing.amount_minor,
-            currency=endpoint.pricing.currency,
+            amount_minor=endpoint.price.amount_minor,
+            currency=endpoint.price.currency,
             service_revision_id=service.current_revision_id,
             service_change_token=service.current_change_token,
             expires_at=expires_at,
@@ -172,5 +172,5 @@ class QuoteService:
     def _ensure_endpoint_is_quoteable(self, endpoint: ServiceEndpoint) -> None:
         if endpoint.access_mode is not AccessMode.PAID:
             raise QuoteUnavailableError("endpoint is not quoteable")
-        if endpoint.pricing is None:
+        if endpoint.price is None:
             raise QuoteUnavailableError("endpoint is not quoteable")

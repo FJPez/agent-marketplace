@@ -45,7 +45,7 @@ def _service() -> Service:
         timeout_seconds=15,
         is_enabled=False,
     )
-    second_endpoint.pricing = EndpointPrice(
+    second_endpoint.price = EndpointPrice(
         endpoint_id=second_endpoint.id,
         amount_minor=2500,
         currency="USD",

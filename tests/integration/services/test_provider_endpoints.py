@@ -175,7 +175,7 @@ async def test_create_endpoint_returns_endpoint_with_loaded_relations(
         )
 
     assert created.key == "loaded-relations"
-    assert created.pricing is None
+    assert created.price is None
     assert created.upstream is None
 
 

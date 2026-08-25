@@ -58,14 +58,14 @@ class PublicEndpointPricing(BaseModel):
                 amount_minor=None,
                 currency=None,
             )
-        pricing = endpoint.pricing
-        if pricing is not None:
+        price = endpoint.price
+        if price is not None:
             return cls(
                 key=endpoint.key,
                 access_mode=endpoint.access_mode,
                 pricing_type=PricingModelType.FIXED_PER_CALL.value,
-                amount_minor=pricing.amount_minor,
-                currency=pricing.currency,
+                amount_minor=price.amount_minor,
+                currency=price.currency,
             )
         return cls(
             key=endpoint.key,

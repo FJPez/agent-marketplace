@@ -77,7 +77,7 @@ class ServiceEndpoint(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    pricing: Mapped[EndpointPrice | None] = relationship(
+    price: Mapped[EndpointPrice | None] = relationship(
         back_populates="endpoint",
         cascade="all, delete-orphan",
         uselist=False,

@@ -122,7 +122,7 @@ def _service(
         is_enabled=endpoint_enabled,
     )
     if with_price:
-        endpoint.pricing = EndpointPrice(
+        endpoint.price = EndpointPrice(
             endpoint_id=endpoint.id,
             amount_minor=500,
             currency="USD",

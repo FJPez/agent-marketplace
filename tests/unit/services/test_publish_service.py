@@ -38,7 +38,7 @@ def _build_endpoint(
     access_mode: AccessMode = AccessMode.FREE,
     is_enabled: bool = True,
     with_upstream: bool = True,
-    pricing: EndpointPrice | None = None,
+    price: EndpointPrice | None = None,
 ) -> ServiceEndpoint:
     endpoint = ServiceEndpoint(
         service_id=1,
@@ -66,7 +66,7 @@ def _build_endpoint(
                 },
             },
         )
-    endpoint.pricing = pricing
+    endpoint.price = price
     return endpoint
 
 
@@ -113,7 +113,7 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_p
         endpoints=[
             _build_endpoint(
                 access_mode=AccessMode.PAID,
-                pricing=_build_fixed_price(),
+                price=_build_fixed_price(),
             ),
         ],
     )
@@ -175,7 +175,7 @@ async def test_publish_readiness_checker_returns_fail_summary_for_invalid_servic
 async def test_publish_readiness_checker_returns_pass_for_ready_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = _build_service(endpoints=[_build_endpoint(pricing=_build_fixed_price())])
+    service = _build_service(endpoints=[_build_endpoint(price=_build_fixed_price())])
 
     async def fake_get_by_id(
         self: ServiceRepository,

@@ -31,7 +31,7 @@ def validate_service_for_publish(service: Service) -> None:
             raise ProviderServiceValidationError(
                 f"enabled endpoint '{endpoint.key}' must define hmac auth config before publish",
             )
-        if endpoint.access_mode is AccessMode.PAID and endpoint.pricing is None:
+        if endpoint.access_mode is AccessMode.PAID and endpoint.price is None:
             raise ProviderServiceValidationError(
                 f"paid endpoint '{endpoint.key}' must define fixed_per_call pricing before publish",
             )

@@ -55,7 +55,7 @@ async def test_service_revision_repository_persists_snapshot_and_updates_current
         )
         session.add(endpoint)
         await session.flush()
-        set_committed_value(endpoint, "pricing", None)
+        set_committed_value(endpoint, "price", None)
         set_committed_value(service, "endpoints", [endpoint])
 
         revision_service = RevisionService(session)

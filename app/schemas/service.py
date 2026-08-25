@@ -259,8 +259,8 @@ class EndpointPricingResponse(BaseModel):
                 amount_minor=None,
                 currency=None,
             )
-        if endpoint.pricing is not None:
-            return cls.from_model(endpoint.pricing)
+        if endpoint.price is not None:
+            return cls.from_model(endpoint.price)
         return None
 
 

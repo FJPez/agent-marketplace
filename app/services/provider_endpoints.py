@@ -99,7 +99,7 @@ async def create_endpoint(
         response_schema=response_schema,
         timeout_seconds=normalized_timeout,
         is_enabled=is_enabled,
-        pricing=None,
+        price=None,
         upstream=None,
     )
     session.add(endpoint)
@@ -112,7 +112,7 @@ async def create_endpoint(
                 currency=validated_price.currency,
             )
             session.add(pricing_row)
-            endpoint.pricing = pricing_row
+            endpoint.price = pricing_row
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
@@ -253,7 +253,7 @@ async def update_endpoint(
     elif price_specified:
         has_resulting_price = validated_price is not None
     else:
-        has_resulting_price = endpoint.pricing is not None
+        has_resulting_price = endpoint.price is not None
 
     await _ensure_endpoint_update_allowed(
         session=session,
@@ -272,24 +272,24 @@ async def update_endpoint(
     endpoint.updated_at = now
 
     if target_access_mode is AccessMode.FREE or (price_specified and validated_price is None):
-        existing_pricing = endpoint.pricing
-        if existing_pricing is not None:
-            endpoint.pricing = None
-            await session.delete(existing_pricing)
+        existing_price = endpoint.price
+        if existing_price is not None:
+            endpoint.price = None
+            await session.delete(existing_price)
     elif validated_price is not None:
-        existing_pricing = endpoint.pricing
-        if existing_pricing is None:
+        existing_price = endpoint.price
+        if existing_price is None:
             pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
                 amount_minor=validated_price.amount_minor,
                 currency=validated_price.currency,
             )
             session.add(pricing_row)
-            endpoint.pricing = pricing_row
+            endpoint.price = pricing_row
         else:
-            existing_pricing.amount_minor = validated_price.amount_minor
-            existing_pricing.currency = validated_price.currency
-            existing_pricing.updated_at = now
+            existing_price.amount_minor = validated_price.amount_minor
+            existing_price.currency = validated_price.currency
+            existing_price.updated_at = now
 
     if service.lifecycle is ServiceLifecycle.ACTIVE:
         await RevisionService(session).create_revision_if_material_endpoint_update(
@@ -374,7 +374,7 @@ async def _load_owned_endpoint(
         .join(Service)
         .options(
             joinedload(ServiceEndpoint.service),
-            selectinload(ServiceEndpoint.pricing),
+            selectinload(ServiceEndpoint.price),
             selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)

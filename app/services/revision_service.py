@@ -66,12 +66,12 @@ def _build_pricing_snapshot(endpoint: ServiceEndpoint) -> dict[str, object | Non
             "amount_minor": None,
             "currency": None,
         }
-    pricing = endpoint.pricing
-    if pricing is not None:
+    price = endpoint.price
+    if price is not None:
         return {
             "pricing_type": PricingModelType.FIXED_PER_CALL.value,
-            "amount_minor": pricing.amount_minor,
-            "currency": pricing.currency,
+            "amount_minor": price.amount_minor,
+            "currency": price.currency,
         }
     return {
         "pricing_type": None,

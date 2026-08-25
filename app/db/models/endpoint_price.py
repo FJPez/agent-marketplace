@@ -38,4 +38,4 @@ class EndpointPrice(Base):
         onupdate=datetime.now,
     )
 
-    endpoint: Mapped[ServiceEndpoint] = relationship(back_populates="pricing")
+    endpoint: Mapped[ServiceEndpoint] = relationship(back_populates="price")

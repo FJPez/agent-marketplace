@@ -14,7 +14,7 @@ def _service_with_relations() -> Select[tuple[Service]]:
         select(Service)
         .options(
             selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)
