@@ -23,7 +23,6 @@ from app.schemas.service import (
 )
 from app.services.provider_endpoints import (
     create_endpoint,
-    get_endpoint,
     update_endpoint,
     upsert_upstream,
 )
@@ -330,33 +329,6 @@ async def test_create_endpoint_rejects_other_accounts_service(
                     is_enabled=True,
                 ),
             )
-
-
-async def test_get_endpoint_raises_not_found_for_missing_id(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-
-    async with db_session_factory() as session:
-        with pytest.raises(NotFoundError):
-            await get_endpoint(session=session, account_id=account_id, endpoint_id=999_999)
-
-
-async def test_get_endpoint_raises_not_found_for_other_accounts_endpoint(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    other_account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=other_account_id,
-        slug="service",
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(NotFoundError):
-            await get_endpoint(session=session, account_id=account_id, endpoint_id=endpoint_id)
 
 
 async def test_update_endpoint_clears_summary_and_description(

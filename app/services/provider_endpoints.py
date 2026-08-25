@@ -1,10 +1,8 @@
 from collections.abc import Collection
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
@@ -74,19 +72,6 @@ async def create_endpoint(
         raise ConflictError("endpoint key already exists for this service") from exc
 
     return endpoint
-
-
-async def get_endpoint(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    endpoint_id: int,
-) -> ServiceEndpoint:
-    return await _load_owned_endpoint(
-        session=session,
-        account_id=account_id,
-        endpoint_id=endpoint_id,
-    )
 
 
 async def update_endpoint(
@@ -267,32 +252,6 @@ async def upsert_upstream(
         upstream.updated_at = now
 
     await session.commit()
-
-
-async def _load_owned_endpoint(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    endpoint_id: int,
-) -> ServiceEndpoint:
-    statement = (
-        select(ServiceEndpoint)
-        .join(Service)
-        .options(
-            joinedload(ServiceEndpoint.service),
-            selectinload(ServiceEndpoint.price),
-            selectinload(ServiceEndpoint.upstream),
-        )
-        .execution_options(populate_existing=True)
-        .where(
-            ServiceEndpoint.id == endpoint_id,
-            Service.provider_account_id == account_id,
-        )
-    )
-    endpoint = await session.scalar(statement)
-    if endpoint is None:
-        raise NotFoundError("endpoint not found")
-    return endpoint
 
 
 async def _ensure_endpoint_update_allowed(
