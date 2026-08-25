@@ -476,6 +476,62 @@ async def test_create_service_raises_integrity_error_for_unknown_account(
             )
 
 
+async def test_replace_tags_ignores_identical_set_without_touching_updated_at(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+        tags=["demo", "translation"],
+    )
+
+    async with db_session_factory() as session:
+        before = await session.get(Service, service_id)
+        assert before is not None
+        before_updated_at = before.updated_at
+
+    async with db_session_factory() as session:
+        await replace_tags(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            request=ServiceTagsUpdateRequest(tags=["translation", " demo ", "demo"]),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(Service, service_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == before_updated_at
+
+
+async def test_replace_tags_identical_set_on_active_service_returns_normally(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        tags=["demo"],
+    )
+
+    async with db_session_factory() as session:
+        service = await replace_tags(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            request=ServiceTagsUpdateRequest(tags=["demo"]),
+        )
+        returned_tags = [service_tag.tag for service_tag in service.tags]
+
+    assert returned_tags == ["demo"]
+
+
 async def test_replace_tags_rejects_active_lifecycle(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

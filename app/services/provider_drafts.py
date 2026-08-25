@@ -113,17 +113,21 @@ async def replace_tags(
     service_id: int,
     request: ServiceTagsUpdateRequest,
 ) -> Service:
-    now = datetime.now(UTC)
     service = await service_access.load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
     )
-    if service.lifecycle is not ServiceLifecycle.DRAFT:
-        raise InvalidStateError("service is not mutable outside draft")
 
     normalized_tags = set(request.tags)
     existing_tags = {service_tag.tag for service_tag in service.tags}
+    if normalized_tags == existing_tags:
+        return service
+
+    if service.lifecycle is not ServiceLifecycle.DRAFT:
+        raise InvalidStateError("service is not mutable outside draft")
+
+    now = datetime.now(UTC)
     for service_tag in list(service.tags):
         if service_tag.tag not in normalized_tags:
             service.tags.remove(service_tag)

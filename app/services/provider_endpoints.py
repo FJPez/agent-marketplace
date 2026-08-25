@@ -229,11 +229,20 @@ async def upsert_upstream(
     if endpoint is None:
         raise NotFoundError("endpoint not found")
 
+    upstream = endpoint.upstream
+    if (
+        upstream is not None
+        and upstream.base_url == validated_base_url
+        and upstream.path == request.path
+        and upstream.http_method == request.http_method
+        and upstream.config == request.config
+    ):
+        return
+
     if service.lifecycle is not ServiceLifecycle.DRAFT:
         raise InvalidStateError("service is not mutable outside draft")
 
     now = datetime.now(UTC)
-    upstream = endpoint.upstream
     if upstream is None:
         upstream = ProviderUpstream(
             endpoint_id=endpoint.id,

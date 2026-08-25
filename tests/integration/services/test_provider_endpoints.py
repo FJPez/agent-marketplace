@@ -8,6 +8,7 @@ from tests.fixtures.domain import (
     create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
+    create_upstream_record,
 )
 
 from app.core.config import Settings
@@ -1558,6 +1559,88 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
     assert persisted.http_method == "PUT"
     assert persisted.config == {"headers": {}}
     assert persisted.updated_at > first_updated_at
+
+
+async def test_upsert_upstream_ignores_identical_state_without_touching_updated_at(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        base_url="http://127.0.0.1:9000/",
+        path="/translate",
+        http_method="POST",
+        config=dict(UPSTREAM_CONFIG),
+    )
+
+    async with db_session_factory() as session:
+        before = await session.get(ProviderUpstream, endpoint_id)
+        assert before is not None
+        before_updated_at = before.updated_at
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9000"),
+                path=" /translate ",
+                http_method="POST",
+                config=UPSTREAM_CONFIG,
+            ),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == before_updated_at
+
+
+async def test_upsert_upstream_identical_state_on_active_service_returns_normally(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        base_url="http://127.0.0.1:9000/",
+        path="/translate",
+        http_method="POST",
+        config=dict(UPSTREAM_CONFIG),
+    )
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9000"),
+                path="/translate",
+                http_method="POST",
+                config=UPSTREAM_CONFIG,
+            ),
+        )
 
 
 async def test_upsert_upstream_rejects_active_service(
