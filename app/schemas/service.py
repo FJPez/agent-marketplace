@@ -23,6 +23,7 @@ from app.core.service_fields import (
     SLUG_MAX_LENGTH,
     TAG_MAX_LENGTH,
     UPSTREAM_PATH_MAX_LENGTH,
+    normalize_currency_code,
     normalize_http_method,
     normalize_slug,
     normalize_tag,
@@ -83,6 +84,7 @@ CurrencyCode = Annotated[
         max_length=3,
         pattern=r"^[A-Z]{3}$",
     ),
+    AfterValidator(normalize_currency_code),
 ]
 
 

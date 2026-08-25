@@ -20,6 +20,7 @@ UPSTREAM_PATH_MAX_LENGTH = 2000
 HTTP_METHOD_MIN_LENGTH = 3
 HTTP_METHOD_MAX_LENGTH = 16
 UPSTREAM_HTTP_METHODS = frozenset({"POST", "PUT", "PATCH"})
+CURRENCY_CODE_PATTERN = re.compile(r"^[A-Z]{3}$")
 
 
 def normalize_slug(value: str) -> str:
@@ -110,6 +111,21 @@ def validate_endpoint_timeout(value: int) -> int:
         msg = f"timeout_seconds must be between 1 and {ENDPOINT_TIMEOUT_MAX_SECONDS}"
         raise ValueError(msg)
     return value
+
+
+def validate_amount_minor(value: int) -> int:
+    if isinstance(value, bool) or value <= 0:
+        msg = "amount_minor must be a positive integer"
+        raise ValueError(msg)
+    return value
+
+
+def normalize_currency_code(value: str) -> str:
+    normalized_value = value.strip()
+    if CURRENCY_CODE_PATTERN.fullmatch(normalized_value) is None:
+        msg = "currency must be a 3-letter uppercase currency code"
+        raise ValueError(msg)
+    return normalized_value
 
 
 def _normalize_bounded_text(value: str, *, field_name: str, max_length: int) -> str:
