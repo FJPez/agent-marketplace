@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -11,14 +10,12 @@ from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject, to_json_value
 from app.core.service_fields import (
-    normalize_currency_code,
     normalize_endpoint_summary,
     normalize_http_method,
     normalize_service_description,
     normalize_service_name,
     normalize_slug,
     normalize_upstream_path,
-    validate_amount_minor,
     validate_endpoint_timeout,
 )
 from app.core.upstream_targets import validate_upstream_base_url
@@ -27,6 +24,7 @@ from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.schemas.pricing import FixedPrice
 from app.services import service_access
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.revision_service import RevisionService, UpdateImpact
@@ -44,12 +42,6 @@ ENDPOINT_UPDATE_FIELDS = frozenset(
         "pricing",
     },
 )
-
-
-@dataclass(frozen=True)
-class FixedPrice:
-    amount_minor: int
-    currency: str
 
 
 async def create_endpoint(
@@ -78,7 +70,6 @@ async def create_endpoint(
         raise InvalidInputError(str(exc)) from exc
     if access_mode is AccessMode.FREE and price is not None:
         raise InvalidInputError("free endpoints cannot have a price")
-    validated_price = _validate_price(price) if price is not None else None
 
     service = await service_access.load_owned_service_for_update(
         session=session,
@@ -105,11 +96,11 @@ async def create_endpoint(
     session.add(endpoint)
     try:
         await session.flush()
-        if validated_price is not None:
+        if price is not None:
             pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                amount_minor=validated_price.amount_minor,
-                currency=validated_price.currency,
+                amount_minor=price.amount_minor,
+                currency=price.currency,
             )
             session.add(pricing_row)
             endpoint.price = pricing_row
@@ -173,7 +164,7 @@ async def update_endpoint(
     revision_fields: dict[str, object] = {}
     target_access_mode = endpoint.access_mode
     price_specified = "pricing" in updates
-    validated_price: FixedPrice | None = None
+    price_update: FixedPrice | None = None
     try:
         if "name" in updates:
             name = updates["name"]
@@ -238,20 +229,20 @@ async def update_endpoint(
             revision_fields["is_enabled"] = is_enabled
         if price_specified:
             revision_fields["pricing"] = updates["pricing"]
-            price_update = updates["pricing"]
-            if price_update is not None and not isinstance(price_update, FixedPrice):
+            pricing_value = updates["pricing"]
+            if pricing_value is not None and not isinstance(pricing_value, FixedPrice):
                 raise InvalidInputError("pricing must be a fixed price or null")
-            validated_price = _validate_price(price_update) if price_update is not None else None
+            price_update = pricing_value
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
-    if target_access_mode is AccessMode.FREE and validated_price is not None:
+    if target_access_mode is AccessMode.FREE and price_update is not None:
         raise InvalidInputError("free endpoints cannot have a price")
 
     if target_access_mode is AccessMode.FREE:
         has_resulting_price = False
     elif price_specified:
-        has_resulting_price = validated_price is not None
+        has_resulting_price = price_update is not None
     else:
         has_resulting_price = endpoint.price is not None
 
@@ -271,24 +262,24 @@ async def update_endpoint(
         setattr(endpoint, attribute_name, value)
     endpoint.updated_at = now
 
-    if target_access_mode is AccessMode.FREE or (price_specified and validated_price is None):
+    if target_access_mode is AccessMode.FREE or (price_specified and price_update is None):
         existing_price = endpoint.price
         if existing_price is not None:
             endpoint.price = None
             await session.delete(existing_price)
-    elif validated_price is not None:
+    elif price_update is not None:
         existing_price = endpoint.price
         if existing_price is None:
             pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                amount_minor=validated_price.amount_minor,
-                currency=validated_price.currency,
+                amount_minor=price_update.amount_minor,
+                currency=price_update.currency,
             )
             session.add(pricing_row)
             endpoint.price = pricing_row
         else:
-            existing_price.amount_minor = validated_price.amount_minor
-            existing_price.currency = validated_price.currency
+            existing_price.amount_minor = price_update.amount_minor
+            existing_price.currency = price_update.currency
             existing_price.updated_at = now
 
     if service.lifecycle is ServiceLifecycle.ACTIVE:
@@ -420,13 +411,3 @@ def _ensure_active_paid_endpoint_priced(
         return
     if not has_price:
         raise InvalidInputError("active paid endpoints must define a price")
-
-
-def _validate_price(price: FixedPrice) -> FixedPrice:
-    try:
-        return FixedPrice(
-            amount_minor=validate_amount_minor(price.amount_minor),
-            currency=normalize_currency_code(price.currency),
-        )
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc

@@ -5,7 +5,8 @@ from pydantic import BaseModel, ConfigDict
 from app.core.enums import PricingModelType
 from app.db.models import Quote
 from app.schemas.common import Id, JsonValue, RequestHash, Timestamp
-from app.schemas.service import CurrencyCode, Slug
+from app.schemas.pricing import CurrencyCode
+from app.schemas.service import Slug
 
 
 class QuoteCreateRequest(BaseModel):

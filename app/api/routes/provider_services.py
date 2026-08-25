@@ -18,7 +18,6 @@ from app.schemas.service import (
     ServiceUpdateRequest,
 )
 from app.services import provider_drafts, provider_endpoints
-from app.services.provider_endpoints import FixedPrice
 from app.services.publish_service import PublishService
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
@@ -278,14 +277,7 @@ async def create_provider_endpoint(
         response_schema=request.response_schema,
         timeout_seconds=request.timeout_seconds,
         is_enabled=request.is_enabled,
-        price=(
-            FixedPrice(
-                amount_minor=request.pricing.amount_minor,
-                currency=request.pricing.currency,
-            )
-            if request.pricing is not None
-            else None
-        ),
+        price=request.pricing,
     )
     return EndpointResponse.from_model(endpoint)
 
@@ -324,11 +316,7 @@ async def update_provider_endpoint(
 ) -> EndpointResponse:
     updates = request.model_dump(exclude_unset=True, exclude={"pricing"})
     if "pricing" in request.model_fields_set:
-        updates["pricing"] = (
-            FixedPrice(amount_minor=request.pricing.amount_minor, currency=request.pricing.currency)
-            if request.pricing is not None
-            else None
-        )
+        updates["pricing"] = request.pricing
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
         account_id=actor.account_id,

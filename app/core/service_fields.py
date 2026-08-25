@@ -113,13 +113,6 @@ def validate_endpoint_timeout(value: int) -> int:
     return value
 
 
-def validate_amount_minor(value: int) -> int:
-    if isinstance(value, bool) or value <= 0:
-        msg = "amount_minor must be a positive integer"
-        raise ValueError(msg)
-    return value
-
-
 def normalize_currency_code(value: str) -> str:
     normalized_value = value.strip()
     if CURRENCY_CODE_PATTERN.fullmatch(normalized_value) is None:

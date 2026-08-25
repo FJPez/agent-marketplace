@@ -14,8 +14,8 @@ from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.db.models import EndpointPrice, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
+from app.schemas.pricing import FixedPrice
 from app.services.provider_endpoints import (
-    FixedPrice,
     create_endpoint,
     get_endpoint,
     update_endpoint,
@@ -282,10 +282,6 @@ async def test_create_endpoint_allows_same_key_different_service(
         ("valid-key", "Name", 0, AccessMode.FREE, None),
         ("valid-key", "Name", 3601, AccessMode.FREE, None),
         ("valid-key", "Name", 30, AccessMode.FREE, FixedPrice(amount_minor=100, currency="USD")),
-        ("valid-key", "Name", 30, AccessMode.PAID, FixedPrice(amount_minor=0, currency="USD")),
-        ("valid-key", "Name", 30, AccessMode.PAID, FixedPrice(amount_minor=True, currency="USD")),
-        ("valid-key", "Name", 30, AccessMode.PAID, FixedPrice(amount_minor=100, currency="usd")),
-        ("valid-key", "Name", 30, AccessMode.PAID, FixedPrice(amount_minor=100, currency="US")),
     ],
 )
 async def test_create_endpoint_rejects_invalid_input(

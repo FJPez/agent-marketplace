@@ -6,7 +6,6 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
-    StrictInt,
     StringConstraints,
 )
 
@@ -23,7 +22,6 @@ from app.core.service_fields import (
     SLUG_MAX_LENGTH,
     TAG_MAX_LENGTH,
     UPSTREAM_PATH_MAX_LENGTH,
-    normalize_currency_code,
     normalize_http_method,
     normalize_slug,
     normalize_tag,
@@ -33,6 +31,7 @@ from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
+from app.schemas.pricing import FixedPrice
 
 Slug = Annotated[
     str,
@@ -75,16 +74,6 @@ HttpMethod = Annotated[
         pattern=r"^[A-Z]+$",
     ),
     AfterValidator(normalize_http_method),
-]
-CurrencyCode = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=3,
-        max_length=3,
-        pattern=r"^[A-Z]{3}$",
-    ),
-    AfterValidator(normalize_currency_code),
 ]
 
 
@@ -170,7 +159,7 @@ class EndpointCreateRequest(BaseModel):
     response_schema: SchemaObject
     timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
     is_enabled: bool = True
-    pricing: "EndpointPricingRequest | None" = None
+    pricing: FixedPrice | None = None
 
 
 class EndpointUpdateRequest(BaseModel):
@@ -195,7 +184,7 @@ class EndpointUpdateRequest(BaseModel):
     response_schema: SchemaObject | None = None
     timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | None = None
     is_enabled: bool | None = None
-    pricing: "EndpointPricingRequest | None" = None
+    pricing: FixedPrice | None = None
 
 
 class EndpointUpstreamRequest(BaseModel):
@@ -226,16 +215,6 @@ class EndpointUpstreamRequest(BaseModel):
     ]
     http_method: HttpMethod
     config: SchemaObject = Field(default_factory=dict)
-
-
-class EndpointPricingRequest(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        json_schema_extra={"examples": [{"amount_minor": 250, "currency": "USD"}]},
-    )
-
-    amount_minor: Annotated[StrictInt, Field(gt=0)]
-    currency: CurrencyCode
 
 
 class EndpointPricingResponse(BaseModel):
