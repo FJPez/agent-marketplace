@@ -122,8 +122,6 @@ async def update_endpoint(
     endpoint_id: int,
     changes: EndpointUpdateRequest,
 ) -> ServiceEndpoint:
-    now = datetime.now(UTC)
-
     locked_service_id = await service_access.lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
@@ -154,17 +152,44 @@ async def update_endpoint(
     if target_access_mode is AccessMode.FREE and price_specified and changes.pricing is not None:
         raise InvalidInputError("free endpoints cannot have a price")
 
+    # Effective changes: supplied fields whose target differs from the stored
+    # value. They drive no-op detection, the mutability gate, and revision
+    # classification, so resending current values is not a change at all.
+    effective_changes: dict[str, object] = {}
+    for attribute_name in set_fields - {"pricing"}:
+        target = getattr(changes, attribute_name)
+        if target != getattr(endpoint, attribute_name):
+            effective_changes[attribute_name] = target
+
+    pricing_change = _resolve_pricing_change(
+        current=endpoint.price,
+        requested=changes.pricing,
+        price_specified=price_specified,
+        target_access_mode=target_access_mode,
+    )
+    effective_changes.update(pricing_change)
+
+    # Pricing lives in its own table and is never assigned by setattr.
+    column_changes = {
+        attribute_name: value
+        for attribute_name, value in effective_changes.items()
+        if attribute_name != "pricing"
+    }
+
+    if not effective_changes:
+        return endpoint
+
     if target_access_mode is AccessMode.FREE:
         has_resulting_price = False
-    elif price_specified:
-        has_resulting_price = changes.pricing is not None
+    elif pricing_change:
+        has_resulting_price = pricing_change["pricing"] is not None
     else:
         has_resulting_price = endpoint.price is not None
 
     await _ensure_endpoint_update_allowed(
         session=session,
         service=service,
-        changed_fields=set_fields,
+        changed_fields=effective_changes,
     )
 
     _ensure_active_paid_endpoint_priced(
@@ -173,35 +198,38 @@ async def update_endpoint(
         has_price=has_resulting_price,
     )
 
-    column_changes = changes.model_dump(exclude_unset=True, exclude={"pricing"})
+    # Stamped after the lock wait so the timestamp reflects when the row was
+    # actually mutated.
+    now = datetime.now(UTC)
+
     for attribute_name, value in column_changes.items():
         setattr(endpoint, attribute_name, value)
     endpoint.updated_at = now
 
-    if target_access_mode is AccessMode.FREE or (price_specified and changes.pricing is None):
+    if pricing_change:
+        resulting_price = pricing_change["pricing"]
         existing_price = endpoint.price
-        if existing_price is not None:
-            endpoint.price = None
-            await session.delete(existing_price)
-    elif changes.pricing is not None:
-        existing_price = endpoint.price
-        if existing_price is None:
+        if resulting_price is None:
+            if existing_price is not None:
+                endpoint.price = None
+                await session.delete(existing_price)
+        elif existing_price is None:
             pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                amount_minor=changes.pricing.amount_minor,
-                currency=changes.pricing.currency,
+                amount_minor=resulting_price.amount_minor,
+                currency=resulting_price.currency,
             )
             session.add(pricing_row)
             endpoint.price = pricing_row
         else:
-            existing_price.amount_minor = changes.pricing.amount_minor
-            existing_price.currency = changes.pricing.currency
+            existing_price.amount_minor = resulting_price.amount_minor
+            existing_price.currency = resulting_price.currency
             existing_price.updated_at = now
 
     if service.lifecycle is ServiceLifecycle.ACTIVE:
         await RevisionService(session).create_revision_if_material_endpoint_update(
             service,
-            update_fields=set_fields,
+            update_fields=effective_changes,
         )
 
     await session.commit()
@@ -268,6 +296,35 @@ async def upsert_upstream(
         upstream.updated_at = now
 
     await session.commit()
+
+
+def _resolve_pricing_change(
+    *,
+    current: EndpointPrice | None,
+    requested: FixedPrice | None,
+    price_specified: bool,
+    target_access_mode: AccessMode,
+) -> dict[str, FixedPrice | None]:
+    """Resolve the resulting pricing state when it differs from the stored row.
+
+    Returns a single-entry ``{"pricing": resulting}`` mapping when the pricing
+    row must change, and an empty mapping when it must be left alone.
+    """
+    if price_specified:
+        resulting = requested
+    elif target_access_mode is AccessMode.FREE and current is not None:
+        # Switching to FREE drops the row even though pricing was omitted.
+        resulting = None
+    else:
+        return {}
+
+    if (current is None) != (resulting is None):
+        return {"pricing": resulting}
+    if current is None or resulting is None:
+        return {}
+    if (current.amount_minor, current.currency) != (resulting.amount_minor, resulting.currency):
+        return {"pricing": resulting}
+    return {}
 
 
 async def _load_owned_endpoint(

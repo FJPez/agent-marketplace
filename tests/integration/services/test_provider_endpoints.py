@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1159,6 +1161,403 @@ async def test_update_endpoint_rejects_other_accounts_endpoint(
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(name="New Name"),
             )
+
+
+async def test_update_endpoint_draft_identical_values_leave_updated_at_unchanged(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        name="Translate",
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(name="Translate", timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_active_identical_material_value_is_a_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        seeded_service = await session.get(Service, service_id)
+        assert seeded_endpoint is not None
+        assert seeded_service is not None
+        seeded_updated_at = seeded_endpoint.updated_at
+        seeded_token = seeded_service.current_change_token
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_service = await session.get(Service, service_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted_endpoint is not None
+    assert persisted_service is not None
+    assert persisted_endpoint.updated_at == seeded_updated_at
+    assert persisted_service.current_change_token == seeded_token
+    assert revision_count == 1
+
+
+async def test_update_endpoint_normalized_value_matching_stored_value_is_a_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        name="Same",
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(name="  Same  "),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.name == "Same"
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_active_unchanged_material_field_creates_no_revision(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        name="Original Name",
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded_service = await session.get(Service, service_id)
+        assert seeded_service is not None
+        seeded_token = seeded_service.current_change_token
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(name="Renamed Endpoint", timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_service = await session.get(Service, service_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted_endpoint is not None
+    assert persisted_service is not None
+    assert persisted_endpoint.name == "Renamed Endpoint"
+    assert revision_count == 1
+    assert persisted_service.current_change_token == seeded_token
+
+
+async def test_update_endpoint_identical_pricing_leaves_price_row_untouched(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        amount_minor=500,
+        currency="USD",
+    )
+
+    async with db_session_factory() as session:
+        seeded_pricing = await session.get(EndpointPrice, endpoint_id)
+        seeded_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded_pricing is not None
+        assert seeded_endpoint is not None
+        seeded_pricing_updated_at = seeded_pricing.updated_at
+        seeded_endpoint_updated_at = seeded_endpoint.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=500, currency="USD")),
+        )
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted_pricing is not None
+    assert persisted_endpoint is not None
+    assert persisted_pricing.updated_at == seeded_pricing_updated_at
+    assert persisted_endpoint.updated_at == seeded_endpoint_updated_at
+
+
+async def test_update_endpoint_null_pricing_on_unpriced_paid_endpoint_is_a_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(pricing=None),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted is not None
+    assert persisted_pricing is None
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_active_paid_to_free_without_price_row_creates_no_revision(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted is not None
+    assert persisted.access_mode is AccessMode.FREE
+    assert persisted_pricing is None
+    # access_mode is itself material, so the revision comes from the mode change
+    # alone: no pricing change was recorded because there was no price row.
+    assert revision_count == 2
+
+
+async def test_update_endpoint_active_paid_to_free_deletes_price_when_pricing_omitted(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.access_mode is AccessMode.FREE
+    assert persisted_pricing is None
+
+
+async def test_update_endpoint_suspended_service_allows_no_op_update(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        timeout_seconds=30,
+    )
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_stamps_updated_at_after_acquiring_the_lock(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        timeout_seconds=30,
+    )
+
+    before_call = datetime.now(UTC)
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=60),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at >= before_call
 
 
 async def test_upsert_upstream_creates_row_for_draft_endpoint(
