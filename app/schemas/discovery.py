@@ -50,22 +50,22 @@ class PublicEndpointPricing(BaseModel):
 
     @classmethod
     def from_model(cls, endpoint: ServiceEndpoint) -> Self:
-        pricing = getattr(endpoint, "pricing", None)
+        if endpoint.access_mode is AccessMode.FREE:
+            return cls(
+                key=endpoint.key,
+                access_mode=endpoint.access_mode,
+                pricing_type=PricingModelType.FREE.value,
+                amount_minor=None,
+                currency=None,
+            )
+        pricing = endpoint.pricing
         if pricing is not None:
             return cls(
                 key=endpoint.key,
                 access_mode=endpoint.access_mode,
                 pricing_type=PricingModelType.FIXED_PER_CALL.value,
-                amount_minor=getattr(pricing, "amount_minor", None),
-                currency=getattr(pricing, "currency", None),
-            )
-        if endpoint.access_mode is AccessMode.FREE:
-            return cls(
-                key=endpoint.key,
-                access_mode=endpoint.access_mode,
-                pricing_type="free",
-                amount_minor=None,
-                currency=None,
+                amount_minor=pricing.amount_minor,
+                currency=pricing.currency,
             )
         return cls(
             key=endpoint.key,

@@ -7,14 +7,12 @@ from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.json_types import JsonObject
 from app.core.service_fields import HTTP_METHOD_MAX_LENGTH
 from app.db.base import Base
 
 if TYPE_CHECKING:
-    from app.core.json_types import JsonObject
     from app.db.models.service_endpoint import ServiceEndpoint
-else:
-    JsonObject = dict[str, object]
 
 
 class ProviderUpstream(Base):

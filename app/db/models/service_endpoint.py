@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import AccessMode
+from app.core.json_types import JsonObject
 from app.core.service_fields import (
     SERVICE_NAME_MAX_LENGTH,
     SERVICE_SUMMARY_MAX_LENGTH,
@@ -28,12 +29,9 @@ from app.core.service_fields import (
 from app.db.base import Base
 
 if TYPE_CHECKING:
-    from app.core.json_types import JsonObject
     from app.db.models.endpoint_price import EndpointPrice
     from app.db.models.provider_upstream import ProviderUpstream
     from app.db.models.service import Service
-else:
-    JsonObject = dict[str, object]
 
 
 class ServiceEndpoint(Base):

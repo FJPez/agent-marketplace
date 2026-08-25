@@ -1340,3 +1340,42 @@ async def test_publish_service_rejects_suspended_service(
     assert response.json() == {
         "detail": "service is suspended",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pricing", "rejected_field"),
+    [
+        (
+            {"pricing_type": "fixed_per_call", "amount_minor": 250, "currency": "USD"},
+            "pricing_type",
+        ),
+        ({"amount_minor": True, "currency": "USD"}, "amount_minor"),
+    ],
+)
+async def test_patch_provider_endpoint_rejects_invalid_pricing_payload(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    pricing: dict[str, object],
+    rejected_field: str,
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"pricing": pricing},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == rejected_field

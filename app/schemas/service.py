@@ -6,6 +6,7 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    StrictInt,
     StringConstraints,
 )
 
@@ -229,10 +230,11 @@ class EndpointUpstreamRequest(BaseModel):
 
 class EndpointPricingRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={"examples": [{"amount_minor": 250, "currency": "USD"}]}
+        extra="forbid",
+        json_schema_extra={"examples": [{"amount_minor": 250, "currency": "USD"}]},
     )
 
-    amount_minor: Annotated[int, Field(gt=0)]
+    amount_minor: Annotated[StrictInt, Field(gt=0)]
     currency: CurrencyCode
 
 
@@ -251,14 +253,14 @@ class EndpointPricingResponse(BaseModel):
 
     @classmethod
     def from_endpoint(cls, endpoint: ServiceEndpoint) -> Self | None:
-        if endpoint.pricing is not None:
-            return cls.from_model(endpoint.pricing)
         if endpoint.access_mode is AccessMode.FREE:
             return cls(
                 pricing_type=PricingModelType.FREE,
                 amount_minor=None,
                 currency=None,
             )
+        if endpoint.pricing is not None:
+            return cls.from_model(endpoint.pricing)
         return None
 
 
