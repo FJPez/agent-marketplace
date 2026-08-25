@@ -7,7 +7,6 @@ from pydantic import (
     Field,
     HttpUrl,
     StringConstraints,
-    model_validator,
 )
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
@@ -156,7 +155,6 @@ class EndpointCreateRequest(BaseModel):
                     },
                     "timeout_seconds": 30,
                     "is_enabled": True,
-                    "pricing": {"pricing_type": "free"},
                 }
             ]
         }
@@ -179,10 +177,10 @@ class EndpointUpdateRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "summary": "Updated free endpoint summary.",
+                    "summary": "Updated paid endpoint summary.",
                     "timeout_seconds": 45,
                     "is_enabled": True,
-                    "pricing": {"pricing_type": "free"},
+                    "pricing": {"amount_minor": 250, "currency": "USD"},
                 }
             ]
         }
@@ -231,30 +229,11 @@ class EndpointUpstreamRequest(BaseModel):
 
 class EndpointPricingRequest(BaseModel):
     model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {"pricing_type": "free"},
-                {"pricing_type": "fixed_per_call", "amount_minor": 250, "currency": "USD"},
-            ]
-        }
+        json_schema_extra={"examples": [{"amount_minor": 250, "currency": "USD"}]}
     )
 
-    pricing_type: PricingModelType
-    amount_minor: Annotated[int, Field(gt=0)] | None = None
-    currency: CurrencyCode | None = None
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> Self:
-        if self.pricing_type is PricingModelType.FREE:
-            if self.amount_minor is not None or self.currency is not None:
-                msg = "free pricing cannot include amount_minor or currency"
-                raise ValueError(msg)
-            return self
-
-        if self.amount_minor is None or self.currency is None:
-            msg = "fixed_per_call pricing requires amount_minor and currency"
-            raise ValueError(msg)
-        return self
+    amount_minor: Annotated[int, Field(gt=0)]
+    currency: CurrencyCode
 
 
 class EndpointPricingResponse(BaseModel):

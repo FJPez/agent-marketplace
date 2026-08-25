@@ -11,12 +11,14 @@ from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject, to_json_value
 from app.core.service_fields import (
+    normalize_currency_code,
     normalize_endpoint_summary,
     normalize_http_method,
     normalize_service_description,
     normalize_service_name,
     normalize_slug,
     normalize_upstream_path,
+    validate_amount_minor,
     validate_endpoint_timeout,
 )
 from app.core.upstream_targets import validate_upstream_base_url
@@ -42,14 +44,12 @@ ENDPOINT_UPDATE_FIELDS = frozenset(
         "pricing",
     },
 )
-PRICING_FIELDS = frozenset({"pricing_type", "amount_minor", "currency"})
 
 
 @dataclass(frozen=True)
-class ParsedPricing:
-    pricing_type: PricingModelType
-    amount_minor: int | None
-    currency: str | None
+class FixedPrice:
+    amount_minor: int
+    currency: str
 
 
 async def create_endpoint(
@@ -66,7 +66,7 @@ async def create_endpoint(
     response_schema: JsonObject,
     timeout_seconds: int,
     is_enabled: bool,
-    pricing: dict[str, object] | None,
+    price: FixedPrice | None,
 ) -> ServiceEndpoint:
     try:
         normalized_key = normalize_slug(key)
@@ -76,8 +76,9 @@ async def create_endpoint(
         normalized_timeout = validate_endpoint_timeout(timeout_seconds)
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
-    parsed_pricing = _parse_pricing(pricing)
-    pricing_plan = _plan_pricing(access_mode=access_mode, parsed=parsed_pricing)
+    if access_mode is AccessMode.FREE and price is not None:
+        raise InvalidInputError("free endpoints cannot have a price")
+    validated_price = _validate_price(price) if price is not None else None
 
     service = await service_access.load_owned_service_for_update(
         session=session,
@@ -104,12 +105,12 @@ async def create_endpoint(
     session.add(endpoint)
     try:
         await session.flush()
-        if pricing_plan is not None:
+        if validated_price is not None:
             pricing_row = PricingModel(
                 endpoint_id=endpoint.id,
-                pricing_type=pricing_plan.pricing_type,
-                amount_minor=pricing_plan.amount_minor,
-                currency=pricing_plan.currency,
+                pricing_type=PricingModelType.FIXED_PER_CALL,
+                amount_minor=validated_price.amount_minor,
+                currency=validated_price.currency,
             )
             session.add(pricing_row)
             endpoint.pricing = pricing_row
@@ -172,6 +173,8 @@ async def update_endpoint(
     update_fields: dict[str, object] = {}
     revision_fields: dict[str, object] = {}
     target_access_mode = endpoint.access_mode
+    price_specified = "pricing" in updates
+    validated_price: FixedPrice | None = None
     try:
         if "name" in updates:
             name = updates["name"]
@@ -234,13 +237,24 @@ async def update_endpoint(
                 raise InvalidInputError("is_enabled must be a boolean")
             update_fields["is_enabled"] = is_enabled
             revision_fields["is_enabled"] = is_enabled
-        if "pricing" in updates:
+        if price_specified:
             revision_fields["pricing"] = updates["pricing"]
+            price_update = updates["pricing"]
+            if price_update is not None and not isinstance(price_update, FixedPrice):
+                raise InvalidInputError("pricing must be a fixed price or null")
+            validated_price = _validate_price(price_update) if price_update is not None else None
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
-    parsed_pricing = _parse_pricing(updates.get("pricing"))
-    pricing_plan = _plan_pricing(access_mode=target_access_mode, parsed=parsed_pricing)
+    if target_access_mode is AccessMode.FREE and validated_price is not None:
+        raise InvalidInputError("free endpoints cannot have a price")
+
+    if target_access_mode is AccessMode.FREE:
+        has_resulting_price = False
+    elif price_specified:
+        has_resulting_price = validated_price is not None
+    else:
+        has_resulting_price = endpoint.pricing is not None
 
     await _ensure_endpoint_update_allowed(
         session=session,
@@ -248,18 +262,36 @@ async def update_endpoint(
         revision_fields=revision_fields,
     )
 
-    if service.lifecycle is ServiceLifecycle.ACTIVE:
-        _ensure_active_endpoint_pricing_valid(
-            access_mode=target_access_mode,
-            plan=pricing_plan,
-            current_pricing=endpoint.pricing,
-        )
+    _ensure_active_paid_endpoint_priced(
+        lifecycle=service.lifecycle,
+        access_mode=target_access_mode,
+        has_price=has_resulting_price,
+    )
 
     for attribute_name, value in update_fields.items():
         setattr(endpoint, attribute_name, value)
     endpoint.updated_at = now
 
-    await _apply_pricing_plan(endpoint, plan=pricing_plan, session=session, now=now)
+    if target_access_mode is AccessMode.FREE or (price_specified and validated_price is None):
+        existing_pricing = endpoint.pricing
+        if existing_pricing is not None:
+            endpoint.pricing = None
+            await session.delete(existing_pricing)
+    elif validated_price is not None:
+        existing_pricing = endpoint.pricing
+        if existing_pricing is None:
+            pricing_row = PricingModel(
+                endpoint_id=endpoint.id,
+                pricing_type=PricingModelType.FIXED_PER_CALL,
+                amount_minor=validated_price.amount_minor,
+                currency=validated_price.currency,
+            )
+            session.add(pricing_row)
+            endpoint.pricing = pricing_row
+        else:
+            existing_pricing.amount_minor = validated_price.amount_minor
+            existing_pricing.currency = validated_price.currency
+            existing_pricing.updated_at = now
 
     if service.lifecycle is ServiceLifecycle.ACTIVE:
         await RevisionService(session).create_revision_if_material_endpoint_update(
@@ -378,134 +410,25 @@ async def _ensure_endpoint_update_allowed(
     raise InvalidStateError("service is not mutable outside draft")
 
 
-def _ensure_active_endpoint_pricing_valid(
+def _ensure_active_paid_endpoint_priced(
     *,
+    lifecycle: ServiceLifecycle,
     access_mode: AccessMode,
-    plan: ParsedPricing | None,
-    current_pricing: PricingModel | None,
+    has_price: bool,
 ) -> None:
+    if lifecycle is not ServiceLifecycle.ACTIVE:
+        return
     if access_mode is not AccessMode.PAID:
         return
-    target: ParsedPricing | PricingModel | None = plan if plan is not None else current_pricing
-    if target is None or target.pricing_type is not PricingModelType.FIXED_PER_CALL:
-        raise InvalidInputError(
-            "active paid endpoints must define fixed_per_call pricing",
+    if not has_price:
+        raise InvalidInputError("active paid endpoints must define fixed_per_call pricing")
+
+
+def _validate_price(price: FixedPrice) -> FixedPrice:
+    try:
+        return FixedPrice(
+            amount_minor=validate_amount_minor(price.amount_minor),
+            currency=normalize_currency_code(price.currency),
         )
-
-
-def _plan_pricing(
-    *,
-    access_mode: AccessMode,
-    parsed: ParsedPricing | None,
-) -> ParsedPricing | None:
-    if access_mode is AccessMode.FREE:
-        if parsed is not None and parsed.pricing_type is not PricingModelType.FREE:
-            raise InvalidInputError("free endpoints must use free pricing")
-        return ParsedPricing(
-            pricing_type=PricingModelType.FREE,
-            amount_minor=None,
-            currency=None,
-        )
-
-    if parsed is None:
-        return None
-    if parsed.pricing_type is not PricingModelType.FIXED_PER_CALL:
-        raise InvalidInputError("paid endpoints must use fixed_per_call pricing")
-    return parsed
-
-
-async def _apply_pricing_plan(
-    endpoint: ServiceEndpoint,
-    *,
-    plan: ParsedPricing | None,
-    session: AsyncSession,
-    now: datetime,
-) -> None:
-    current_pricing = endpoint.pricing
-
-    if plan is None:
-        if current_pricing is not None and current_pricing.pricing_type is PricingModelType.FREE:
-            endpoint.pricing = None
-            await session.delete(current_pricing)
-        return
-
-    if current_pricing is not None:
-        current_pricing.pricing_type = plan.pricing_type
-        current_pricing.amount_minor = plan.amount_minor
-        current_pricing.currency = plan.currency
-        current_pricing.updated_at = now
-        return
-
-    new_pricing = PricingModel(
-        endpoint_id=endpoint.id,
-        pricing_type=plan.pricing_type,
-        amount_minor=plan.amount_minor,
-        currency=plan.currency,
-    )
-    session.add(new_pricing)
-    endpoint.pricing = new_pricing
-
-
-def _parse_pricing(pricing: object) -> ParsedPricing | None:
-    if pricing is None:
-        return None
-    if not isinstance(pricing, dict):
-        raise InvalidInputError("pricing must be an object or null")
-
-    fields: dict[str, object] = {}
-    for field_name, field_value in pricing.items():
-        if not isinstance(field_name, str):
-            raise InvalidInputError("pricing field names must be strings")
-        fields[field_name] = field_value
-
-    unknown_fields = set(fields) - PRICING_FIELDS
-    if unknown_fields:
-        raise InvalidInputError(f"unknown pricing fields: {', '.join(sorted(unknown_fields))}")
-
-    pricing_type = _parse_pricing_type(fields)
-    amount_minor = _parse_amount_minor(fields)
-    currency = _parse_currency(fields)
-
-    if pricing_type is PricingModelType.FREE:
-        if amount_minor is not None or currency is not None:
-            raise InvalidInputError("free pricing cannot include amount_minor or currency")
-    elif amount_minor is None or currency is None:
-        raise InvalidInputError("fixed_per_call pricing requires amount_minor and currency")
-
-    return ParsedPricing(
-        pricing_type=pricing_type,
-        amount_minor=amount_minor,
-        currency=currency,
-    )
-
-
-def _parse_pricing_type(fields: dict[str, object]) -> PricingModelType:
-    raw_pricing_type = fields.get("pricing_type")
-    if isinstance(raw_pricing_type, PricingModelType):
-        return raw_pricing_type
-    if isinstance(raw_pricing_type, str):
-        try:
-            return PricingModelType(raw_pricing_type)
-        except ValueError as exc:
-            raise InvalidInputError(
-                "pricing_type must be one of: free, fixed_per_call",
-            ) from exc
-    raise InvalidInputError("pricing_type must be one of: free, fixed_per_call")
-
-
-def _parse_amount_minor(fields: dict[str, object]) -> int | None:
-    amount_minor = fields.get("amount_minor")
-    if amount_minor is None:
-        return None
-    if isinstance(amount_minor, bool) or not isinstance(amount_minor, int) or amount_minor <= 0:
-        raise InvalidInputError("amount_minor must be a positive integer")
-    return amount_minor
-
-
-def _parse_currency(fields: dict[str, object]) -> str | None:
-    currency = fields.get("currency")
-    if currency is None:
-        return None
-    if not isinstance(currency, str) or len(currency) != 3 or currency != currency.upper():
-        raise InvalidInputError("currency must be a 3-letter uppercase currency code")
-    return currency
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc

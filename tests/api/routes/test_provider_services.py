@@ -192,11 +192,7 @@ async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
             "response_schema": {"type": "object"},
             "timeout_seconds": 45,
             "is_enabled": True,
-            "pricing": {
-                "pricing_type": "fixed_per_call",
-                "amount_minor": 1500,
-                "currency": "USD",
-            },
+            "pricing": {"amount_minor": 1500, "currency": "USD"},
         },
     )
 
@@ -889,11 +885,7 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
         json={
-            "pricing": {
-                "pricing_type": "fixed_per_call",
-                "amount_minor": 2500,
-                "currency": "GBP",
-            },
+            "pricing": {"amount_minor": 2500, "currency": "GBP"},
         },
     )
 
@@ -1038,11 +1030,7 @@ async def test_patch_active_provider_endpoint_pricing_change_creates_revision_an
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
         json={
-            "pricing": {
-                "pricing_type": "fixed_per_call",
-                "amount_minor": 2500,
-                "currency": "GBP",
-            },
+            "pricing": {"amount_minor": 2500, "currency": "GBP"},
         },
     )
 

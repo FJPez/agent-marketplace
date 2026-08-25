@@ -65,7 +65,7 @@ def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
 
 def test_classify_endpoint_update_marks_pricing_as_material() -> None:
     impact = RevisionService.classify_endpoint_update(
-        {"pricing": {"pricing_type": "fixed_per_call", "amount_minor": 100}},
+        {"pricing": {"amount_minor": 100, "currency": "USD"}},
     )
 
     assert impact is UpdateImpact.MATERIAL
