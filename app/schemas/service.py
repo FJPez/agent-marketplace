@@ -1,5 +1,4 @@
 from typing import Annotated, Self
-from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -13,65 +12,68 @@ from pydantic import (
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
+from app.core.service_fields import (
+    ENDPOINT_TIMEOUT_MAX_SECONDS,
+    HTTP_METHOD_MAX_LENGTH,
+    HTTP_METHOD_MIN_LENGTH,
+    SERVICE_DESCRIPTION_MAX_LENGTH,
+    SERVICE_NAME_MAX_LENGTH,
+    SERVICE_SUMMARY_MAX_LENGTH,
+    SERVICE_TAGS_MAX_COUNT,
+    SLUG_MAX_LENGTH,
+    TAG_MAX_LENGTH,
+    UPSTREAM_PATH_MAX_LENGTH,
+    normalize_http_method,
+    normalize_slug,
+    normalize_tag,
+    normalize_upstream_path,
+)
 from app.db.models.pricing_model import PricingModel
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
-
-
-def _reject_numeric_only_slug(value: str) -> str:
-    if value.isdigit():
-        msg = "value must include at least one lowercase letter"
-        raise ValueError(msg)
-    return value
-
-
-def _validate_upstream_path(value: str) -> str:
-    if not value.startswith("/"):
-        msg = "path must start with /"
-        raise ValueError(msg)
-    parsed = urlsplit(value)
-    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
-        msg = "path must be path-only and must not include scheme, host, query, or fragment"
-        raise ValueError(msg)
-    return value
-
 
 Slug = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
         min_length=1,
-        max_length=255,
+        max_length=SLUG_MAX_LENGTH,
         pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
     ),
-    AfterValidator(_reject_numeric_only_slug),
+    AfterValidator(normalize_slug),
 ]
 ServiceName = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=SERVICE_NAME_MAX_LENGTH),
 ]
 Summary = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=500),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=SERVICE_SUMMARY_MAX_LENGTH),
 ]
 Description = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=5000),
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        max_length=SERVICE_DESCRIPTION_MAX_LENGTH,
+    ),
 ]
 Tag = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=TAG_MAX_LENGTH),
+    AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
 HttpMethod = Annotated[
     str,
     StringConstraints(
         strip_whitespace=True,
-        min_length=3,
-        max_length=16,
+        min_length=HTTP_METHOD_MIN_LENGTH,
+        max_length=HTTP_METHOD_MAX_LENGTH,
         pattern=r"^[A-Z]+$",
     ),
+    AfterValidator(normalize_http_method),
 ]
 CurrencyCode = Annotated[
     str,
@@ -125,7 +127,7 @@ class ServiceUpdateRequest(BaseModel):
 class ServiceTagsUpdateRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]})
 
-    tags: list[Tag]
+    tags: Annotated[list[Tag], Field(max_length=SERVICE_TAGS_MAX_COUNT)]
 
 
 class EndpointCreateRequest(BaseModel):
@@ -165,7 +167,7 @@ class EndpointCreateRequest(BaseModel):
     access_mode: AccessMode
     request_schema: SchemaObject
     response_schema: SchemaObject
-    timeout_seconds: Annotated[int, Field(gt=0, le=3600)]
+    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
     is_enabled: bool = True
     pricing: "EndpointPricingRequest | None" = None
 
@@ -190,7 +192,7 @@ class EndpointUpdateRequest(BaseModel):
     access_mode: AccessMode | None = None
     request_schema: SchemaObject | None = None
     response_schema: SchemaObject | None = None
-    timeout_seconds: Annotated[int, Field(gt=0, le=3600)] | None = None
+    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | None = None
     is_enabled: bool | None = None
     pricing: "EndpointPricingRequest | None" = None
 
@@ -218,8 +220,8 @@ class EndpointUpstreamRequest(BaseModel):
     base_url: HttpUrl
     path: Annotated[
         str,
-        StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
-        AfterValidator(_validate_upstream_path),
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=UPSTREAM_PATH_MAX_LENGTH),
+        AfterValidator(normalize_upstream_path),
     ]
     http_method: HttpMethod
     config: SchemaObject = Field(default_factory=dict)

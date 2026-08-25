@@ -8,6 +8,11 @@ from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import ServiceLifecycle
+from app.core.service_fields import (
+    SERVICE_NAME_MAX_LENGTH,
+    SERVICE_SUMMARY_MAX_LENGTH,
+    SLUG_MAX_LENGTH,
+)
 from app.db.base import Base
 
 if TYPE_CHECKING:
@@ -25,9 +30,9 @@ class Service(Base):
         ForeignKey("accounts.id", ondelete="CASCADE"),
         index=True,
     )
-    slug: Mapped[str] = mapped_column(String(255), unique=True)
-    name: Mapped[str] = mapped_column(String(255))
-    summary: Mapped[str] = mapped_column(String(500))
+    slug: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH), unique=True)
+    name: Mapped[str] = mapped_column(String(SERVICE_NAME_MAX_LENGTH))
+    summary: Mapped[str] = mapped_column(String(SERVICE_SUMMARY_MAX_LENGTH))
     description: Mapped[str | None] = mapped_column(Text)
     lifecycle: Mapped[ServiceLifecycle] = mapped_column(
         SqlEnum(

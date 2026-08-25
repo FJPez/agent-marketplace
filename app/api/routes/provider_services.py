@@ -4,6 +4,8 @@ from fastapi import APIRouter, Body, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
+from app.api.deps.database import SessionDep
+from app.api.deps.settings import SettingsDep
 from app.db.session import get_db_session
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -15,8 +17,7 @@ from app.schemas.service import (
     ServiceTagsUpdateRequest,
     ServiceUpdateRequest,
 )
-from app.services.provider_draft_service import ProviderDraftService
-from app.services.provider_endpoint_service import ProviderEndpointService
+from app.services import provider_drafts, provider_endpoints
 from app.services.publish_service import PublishService
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
@@ -57,10 +58,16 @@ async def create_provider_service(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    created = await service.create_service(actor, request)
+    created = await provider_drafts.create_service(
+        session=session,
+        account_id=actor.account_id,
+        slug=request.slug,
+        name=request.name,
+        summary=request.summary,
+        description=request.description,
+    )
     return ServiceResponse.from_model(created)
 
 
@@ -73,10 +80,9 @@ async def create_provider_service(
 )
 async def list_provider_services(
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> list[ServiceResponse]:
-    service = ProviderDraftService(session)
-    services = await service.list_services(actor)
+    services = await provider_drafts.list_services(session=session, account_id=actor.account_id)
     return [ServiceResponse.from_model(item) for item in services]
 
 
@@ -93,10 +99,13 @@ async def list_provider_services(
 async def get_provider_service(
     service_id: int,
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    found = await service.get_service(actor, service_id=service_id)
+    found = await provider_drafts.get_service(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+    )
     return ServiceResponse.from_model(found)
 
 
@@ -133,10 +142,14 @@ async def update_provider_service(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    updated = await service.update_service(actor, service_id=service_id, request=request)
+    updated = await provider_drafts.update_service(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+        updates=request.model_dump(exclude_unset=True),
+    )
     return ServiceResponse.from_model(updated)
 
 
@@ -166,10 +179,14 @@ async def replace_provider_service_tags(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = ProviderDraftService(session)
-    updated = await service.replace_tags(actor, service_id=service_id, request=request)
+    updated = await provider_drafts.replace_tags(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+        tags=request.tags,
+    )
     return ServiceResponse.from_model(updated)
 
 
@@ -246,10 +263,23 @@ async def create_provider_endpoint(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> EndpointResponse:
-    service = ProviderEndpointService(session)
-    endpoint = await service.create_endpoint(actor, service_id=service_id, request=request)
+    endpoint = await provider_endpoints.create_endpoint(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+        key=request.key,
+        name=request.name,
+        summary=request.summary,
+        description=request.description,
+        access_mode=request.access_mode,
+        request_schema=request.request_schema,
+        response_schema=request.response_schema,
+        timeout_seconds=request.timeout_seconds,
+        is_enabled=request.is_enabled,
+        pricing=request.pricing.model_dump() if request.pricing is not None else None,
+    )
     return EndpointResponse.from_model(endpoint)
 
 
@@ -287,13 +317,13 @@ async def update_provider_endpoint(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> EndpointResponse:
-    service = ProviderEndpointService(session)
-    endpoint = await service.update_endpoint(
-        actor,
+    endpoint = await provider_endpoints.update_endpoint(
+        session=session,
+        account_id=actor.account_id,
         endpoint_id=endpoint_id,
-        request=request,
+        updates=request.model_dump(exclude_unset=True),
     )
     return EndpointResponse.from_model(endpoint)
 
@@ -304,7 +334,11 @@ async def update_provider_endpoint(
     summary="Upsert provider upstream configuration",
     description=(
         "Creates or replaces the hidden upstream configuration for an owned endpoint. "
-        "Upstream details are stored privately and are never exposed on public discovery routes."
+        "Upstream details are stored privately and are never exposed on public discovery routes. "
+        "The marketplace invokes upstreams by forwarding the invocation payload as a JSON "
+        "request body and requires a JSON response, so the upstream must accept a "
+        "body-bearing method (POST, PUT, or PATCH); GET-style APIs that read inputs from "
+        "the query string require an adapter."
     ),
     responses={
         204: {"description": "Endpoint upstream configuration stored successfully."},
@@ -338,8 +372,17 @@ async def put_provider_endpoint_upstream(
         ),
     ],
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> Response:
-    service = ProviderEndpointService(session)
-    await service.upsert_upstream(actor, endpoint_id=endpoint_id, request=request)
+    await provider_endpoints.upsert_upstream(
+        session=session,
+        settings=settings,
+        account_id=actor.account_id,
+        endpoint_id=endpoint_id,
+        base_url=str(request.base_url),
+        path=request.path,
+        http_method=request.http_method,
+        config=request.config,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

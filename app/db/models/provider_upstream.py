@@ -7,6 +7,7 @@ from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.service_fields import HTTP_METHOD_MAX_LENGTH
 from app.db.base import Base
 
 if TYPE_CHECKING:
@@ -26,7 +27,7 @@ class ProviderUpstream(Base):
     )
     base_url: Mapped[str] = mapped_column(Text)
     path: Mapped[str] = mapped_column(Text)
-    http_method: Mapped[str] = mapped_column(String(16))
+    http_method: Mapped[str] = mapped_column(String(HTTP_METHOD_MAX_LENGTH))
     config: Mapped[JsonObject] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

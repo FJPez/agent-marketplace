@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.service_fields import TAG_MAX_LENGTH
 from app.db.base import Base
 
 if TYPE_CHECKING:
@@ -19,6 +20,6 @@ class ServiceTag(Base):
         ForeignKey("services.id", ondelete="CASCADE"),
         primary_key=True,
     )
-    tag: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tag: Mapped[str] = mapped_column(String(TAG_MAX_LENGTH), primary_key=True)
 
     service: Mapped[Service] = relationship(back_populates="tags")

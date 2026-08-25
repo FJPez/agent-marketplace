@@ -20,6 +20,11 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.enums import AccessMode
+from app.core.service_fields import (
+    SERVICE_NAME_MAX_LENGTH,
+    SERVICE_SUMMARY_MAX_LENGTH,
+    SLUG_MAX_LENGTH,
+)
 from app.db.base import Base
 
 if TYPE_CHECKING:
@@ -41,9 +46,9 @@ class ServiceEndpoint(Base):
         ForeignKey("services.id", ondelete="CASCADE"),
         index=True,
     )
-    key: Mapped[str] = mapped_column(String(255))
-    name: Mapped[str] = mapped_column(String(255))
-    summary: Mapped[str | None] = mapped_column(String(500))
+    key: Mapped[str] = mapped_column(String(SLUG_MAX_LENGTH))
+    name: Mapped[str] = mapped_column(String(SERVICE_NAME_MAX_LENGTH))
+    summary: Mapped[str | None] = mapped_column(String(SERVICE_SUMMARY_MAX_LENGTH))
     description: Mapped[str | None] = mapped_column(Text)
     access_mode: Mapped[AccessMode] = mapped_column(
         SqlEnum(

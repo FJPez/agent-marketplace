@@ -1,7 +1,6 @@
 import asyncio
 
 import pytest
-from pydantic import HttpUrl, TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
@@ -13,13 +12,17 @@ from tests.fixtures.domain import (
 )
 
 from app.core.actor import ActorContext
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.config import Settings
+from app.core.enums import AccessMode, AppEnv, PricingModelType, ServiceLifecycle
 from app.db.models import Service, ServiceRevision
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
-from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
-from app.services.provider_endpoint_service import ProviderEndpointService
+from app.services import provider_endpoints, service_access
 from app.services.publish_service import PublishService
+
+
+def _upstream_settings() -> Settings:
+    return Settings(env=AppEnv.TEST, jwt_secret_key="test-secret-key-with-32-bytes-123")
 
 
 async def _create_provider_account(
@@ -135,11 +138,11 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
 
     async def update_timeout(timeout_seconds: int) -> None:
         async with db_session_factory() as session:
-            service = ProviderEndpointService(session)
-            await service.update_endpoint(
-                ActorContext(account_id=provider_account_id),
+            await provider_endpoints.update_endpoint(
+                session=session,
+                account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                request=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
+                updates={"timeout_seconds": timeout_seconds},
             )
 
     first_update = asyncio.create_task(update_timeout(45))
@@ -187,7 +190,7 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
     mutation_lookup_started = asyncio.Event()
     release_publish = asyncio.Event()
     original_get_owned_for_update = ServiceRepository.get_owned_for_update
-    owned_lookup_calls = 0
+    original_lock_owned_service_by_endpoint = service_access.lock_owned_service_by_endpoint
 
     async def delayed_get_owned_for_update(
         self: ServiceRepository,
@@ -195,24 +198,38 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
         service_id: int,
         provider_account_id: int,
     ) -> Service | None:
-        nonlocal owned_lookup_calls
-        owned_lookup_calls += 1
-        if owned_lookup_calls == 2:
-            mutation_lookup_started.set()
         service = await original_get_owned_for_update(
             self,
             service_id=service_id,
             provider_account_id=provider_account_id,
         )
-        if owned_lookup_calls == 1 and service is not None and service.id == service_id:
+        if service is not None and service.id == service_id:
             publish_has_lock.set()
             await release_publish.wait()
         return service
+
+    async def signalling_lock_owned_service_by_endpoint(
+        *,
+        session: AsyncSession,
+        account_id: int,
+        endpoint_id: int,
+    ) -> int:
+        mutation_lookup_started.set()
+        return await original_lock_owned_service_by_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+        )
 
     monkeypatch.setattr(
         ServiceRepository,
         "get_owned_for_update",
         delayed_get_owned_for_update,
+    )
+    monkeypatch.setattr(
+        service_access,
+        "lock_owned_service_by_endpoint",
+        signalling_lock_owned_service_by_endpoint,
     )
 
     async def publish_service() -> None:
@@ -226,18 +243,15 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
     async def mutate_upstream() -> None:
         await publish_has_lock.wait()
         async with db_session_factory() as session:
-            service = ProviderEndpointService(session)
-            await service.upsert_upstream(
-                ActorContext(account_id=provider_account_id),
+            await provider_endpoints.upsert_upstream(
+                session=session,
+                settings=_upstream_settings(),
+                account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                request=EndpointUpstreamRequest(
-                    base_url=TypeAdapter(HttpUrl).validate_python(
-                        "http://127.0.0.1:9000",
-                    ),
-                    path="/mutated",
-                    http_method="POST",
-                    config={},
-                ),
+                base_url="http://127.0.0.1:9000",
+                path="/mutated",
+                http_method="POST",
+                config={},
             )
 
     publish_task = asyncio.create_task(publish_service())
