@@ -7,7 +7,6 @@ from pydantic import (
     Field,
     HttpUrl,
     StringConstraints,
-    model_validator,
 )
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
@@ -28,10 +27,11 @@ from app.core.service_fields import (
     normalize_tag,
     normalize_upstream_path,
 )
-from app.db.models.pricing_model import PricingModel
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
+from app.schemas.pricing import FixedPrice
 
 Slug = Annotated[
     str,
@@ -74,15 +74,6 @@ HttpMethod = Annotated[
         pattern=r"^[A-Z]+$",
     ),
     AfterValidator(normalize_http_method),
-]
-CurrencyCode = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=3,
-        max_length=3,
-        pattern=r"^[A-Z]{3}$",
-    ),
 ]
 
 
@@ -154,7 +145,6 @@ class EndpointCreateRequest(BaseModel):
                     },
                     "timeout_seconds": 30,
                     "is_enabled": True,
-                    "pricing": {"pricing_type": "free"},
                 }
             ]
         }
@@ -169,7 +159,7 @@ class EndpointCreateRequest(BaseModel):
     response_schema: SchemaObject
     timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
     is_enabled: bool = True
-    pricing: "EndpointPricingRequest | None" = None
+    pricing: FixedPrice | None = None
 
 
 class EndpointUpdateRequest(BaseModel):
@@ -177,10 +167,10 @@ class EndpointUpdateRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "summary": "Updated free endpoint summary.",
+                    "summary": "Updated paid endpoint summary.",
                     "timeout_seconds": 45,
                     "is_enabled": True,
-                    "pricing": {"pricing_type": "free"},
+                    "pricing": {"amount_minor": 250, "currency": "USD"},
                 }
             ]
         }
@@ -194,7 +184,7 @@ class EndpointUpdateRequest(BaseModel):
     response_schema: SchemaObject | None = None
     timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | None = None
     is_enabled: bool | None = None
-    pricing: "EndpointPricingRequest | None" = None
+    pricing: FixedPrice | None = None
 
 
 class EndpointUpstreamRequest(BaseModel):
@@ -227,57 +217,29 @@ class EndpointUpstreamRequest(BaseModel):
     config: SchemaObject = Field(default_factory=dict)
 
 
-class EndpointPricingRequest(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {"pricing_type": "free"},
-                {"pricing_type": "fixed_per_call", "amount_minor": 250, "currency": "USD"},
-            ]
-        }
-    )
-
-    pricing_type: PricingModelType
-    amount_minor: Annotated[int, Field(gt=0)] | None = None
-    currency: CurrencyCode | None = None
-
-    @model_validator(mode="after")
-    def validate_shape(self) -> Self:
-        if self.pricing_type is PricingModelType.FREE:
-            if self.amount_minor is not None or self.currency is not None:
-                msg = "free pricing cannot include amount_minor or currency"
-                raise ValueError(msg)
-            return self
-
-        if self.amount_minor is None or self.currency is None:
-            msg = "fixed_per_call pricing requires amount_minor and currency"
-            raise ValueError(msg)
-        return self
-
-
 class EndpointPricingResponse(BaseModel):
     pricing_type: PricingModelType
     amount_minor: int | None
     currency: str | None
 
     @classmethod
-    def from_model(cls, pricing: PricingModel) -> Self:
+    def from_model(cls, pricing: EndpointPrice) -> Self:
         return cls(
-            pricing_type=pricing.pricing_type,
+            pricing_type=PricingModelType.FIXED_PER_CALL,
             amount_minor=pricing.amount_minor,
             currency=pricing.currency,
         )
 
     @classmethod
     def from_endpoint(cls, endpoint: ServiceEndpoint) -> Self | None:
-        if endpoint.pricing is not None:
-            return cls.from_model(endpoint.pricing)
         if endpoint.access_mode is AccessMode.FREE:
             return cls(
                 pricing_type=PricingModelType.FREE,
                 amount_minor=None,
                 currency=None,
             )
+        if endpoint.price is not None:
+            return cls.from_model(endpoint.price)
         return None
 
 

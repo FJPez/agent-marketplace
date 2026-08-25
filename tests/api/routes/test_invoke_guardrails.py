@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.config import get_settings
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.lifespan import get_app_state
 from app.main import create_app
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from tests.fixtures.domain import (
         ConsumerAccountFactory,
         EndpointFactory,
-        PricingFactory,
+        EndpointPriceFactory,
         ProviderAccountFactory,
         ServiceFactory,
         UpstreamFactory,
@@ -70,7 +70,7 @@ async def _seed_service(
 async def _seed_endpoint(
     endpoint_factory: EndpointFactory,
     upstream_factory: UpstreamFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     *,
     service_id: int,
     access_mode: AccessMode = AccessMode.FREE,
@@ -85,9 +85,8 @@ async def _seed_endpoint(
     )
     await upstream_factory(endpoint_id=endpoint_id)
     if access_mode is AccessMode.PAID:
-        await pricing_factory(
+        await endpoint_price_factory(
             endpoint_id=endpoint_id,
-            pricing_type=PricingModelType.FIXED_PER_CALL,
             amount_minor=500,
             currency="USD",
         )
@@ -179,12 +178,14 @@ async def test_invoke_rejects_oversized_payload(
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
     upstream_factory: UpstreamFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     consumer_account_id = await _create_consumer_account(consumer_account_factory)
     service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
-    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
+    await _seed_endpoint(
+        endpoint_factory, upstream_factory, endpoint_price_factory, service_id=service_id
+    )
 
     oversized_payload = {"text": "x" * 5000}
 
@@ -244,12 +245,14 @@ async def test_invoke_rate_limits_repeated_requests(
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
     upstream_factory: UpstreamFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     consumer_account_id = await _create_consumer_account(consumer_account_factory)
     service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
-    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
+    await _seed_endpoint(
+        endpoint_factory, upstream_factory, endpoint_price_factory, service_id=service_id
+    )
 
     app = _get_test_app(guarded_client)
     state = get_app_state(app)
@@ -286,12 +289,14 @@ async def test_invoke_rejects_duplicate_request_while_first_is_in_flight(
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
     upstream_factory: UpstreamFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     consumer_account_id = await _create_consumer_account(consumer_account_factory)
     service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
-    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
+    await _seed_endpoint(
+        endpoint_factory, upstream_factory, endpoint_price_factory, service_id=service_id
+    )
 
     app = _get_test_app(guarded_client)
     state = get_app_state(app)
@@ -333,12 +338,14 @@ async def test_invoke_rejects_reused_idempotency_key_for_different_in_flight_req
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
     upstream_factory: UpstreamFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     consumer_account_id = await _create_consumer_account(consumer_account_factory)
     service_id = await _seed_service(service_factory, provider_account_id=provider_account_id)
-    await _seed_endpoint(endpoint_factory, upstream_factory, pricing_factory, service_id=service_id)
+    await _seed_endpoint(
+        endpoint_factory, upstream_factory, endpoint_price_factory, service_id=service_id
+    )
 
     app = _get_test_app(guarded_client)
     state = get_app_state(app)

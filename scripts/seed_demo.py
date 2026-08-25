@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.db.models import (
     Account,
-    PricingModel,
+    EndpointPrice,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -233,15 +233,13 @@ async def _upsert_pricing(
     session: AsyncSession,
     *,
     endpoint_id: int,
-    pricing_type: PricingModelType,
-    amount_minor: int | None,
-    currency: str | None,
+    amount_minor: int,
+    currency: str,
 ) -> None:
-    pricing = await session.get(PricingModel, endpoint_id)
+    pricing = await session.get(EndpointPrice, endpoint_id)
     if pricing is None:
-        pricing = PricingModel(
+        pricing = EndpointPrice(
             endpoint_id=endpoint_id,
-            pricing_type=pricing_type,
             amount_minor=amount_minor,
             currency=currency,
         )
@@ -249,7 +247,6 @@ async def _upsert_pricing(
         await session.flush()
         return
 
-    pricing.pricing_type = pricing_type
     pricing.amount_minor = amount_minor
     pricing.currency = currency
     await session.flush()
@@ -373,15 +370,7 @@ async def seed_demo_data() -> SeedResult:
             )
             await _upsert_pricing(
                 session,
-                endpoint_id=free_endpoint.id,
-                pricing_type=PricingModelType.FREE,
-                amount_minor=None,
-                currency=None,
-            )
-            await _upsert_pricing(
-                session,
                 endpoint_id=paid_endpoint.id,
-                pricing_type=PricingModelType.FIXED_PER_CALL,
                 amount_minor=25,
                 currency="USD",
             )

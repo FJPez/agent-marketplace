@@ -2,18 +2,19 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
+    create_endpoint_price_record,
     create_endpoint_record,
     create_moderation_action_record,
-    create_pricing_record,
     create_provider_account_record,
     create_service_record,
 )
 
 from app.core.config import Settings
-from app.core.enums import AccessMode, AppEnv, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
-from app.db.models import PricingModel, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
+from app.db.models import EndpointPrice, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
+from app.schemas.pricing import FixedPrice
 from app.services.provider_endpoints import (
     create_endpoint,
     get_endpoint,
@@ -51,7 +52,7 @@ async def _create_draft_service(
     )
 
 
-async def test_create_endpoint_persists_free_endpoint_with_free_pricing(
+async def test_create_endpoint_free_creates_no_pricing_row(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -71,12 +72,12 @@ async def test_create_endpoint_persists_free_endpoint_with_free_pricing(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing=None,
+            price=None,
         )
 
     async with db_session_factory() as session:
         persisted_endpoint = await session.get(ServiceEndpoint, endpoint.id)
-        persisted_pricing = await session.get(PricingModel, endpoint.id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint.id)
 
     assert persisted_endpoint is not None
     assert persisted_endpoint.service_id == service_id
@@ -87,10 +88,7 @@ async def test_create_endpoint_persists_free_endpoint_with_free_pricing(
     assert persisted_endpoint.access_mode is AccessMode.FREE
     assert persisted_endpoint.timeout_seconds == 30
     assert persisted_endpoint.is_enabled is True
-    assert persisted_pricing is not None
-    assert persisted_pricing.pricing_type is PricingModelType.FREE
-    assert persisted_pricing.amount_minor is None
-    assert persisted_pricing.currency is None
+    assert persisted_pricing is None
 
 
 async def test_create_endpoint_persists_paid_endpoint_with_fixed_pricing(
@@ -113,18 +111,13 @@ async def test_create_endpoint_persists_paid_endpoint_with_fixed_pricing(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing={
-                "pricing_type": PricingModelType.FIXED_PER_CALL,
-                "amount_minor": 250,
-                "currency": "USD",
-            },
+            price=FixedPrice(amount_minor=250, currency="USD"),
         )
 
     async with db_session_factory() as session:
-        persisted_pricing = await session.get(PricingModel, endpoint.id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint.id)
 
     assert persisted_pricing is not None
-    assert persisted_pricing.pricing_type is PricingModelType.FIXED_PER_CALL
     assert persisted_pricing.amount_minor == 250
     assert persisted_pricing.currency == "USD"
 
@@ -149,11 +142,11 @@ async def test_create_endpoint_paid_without_pricing_creates_no_pricing_row(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing=None,
+            price=None,
         )
 
     async with db_session_factory() as session:
-        persisted_pricing = await session.get(PricingModel, endpoint.id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint.id)
 
     assert persisted_pricing is None
 
@@ -178,11 +171,11 @@ async def test_create_endpoint_returns_endpoint_with_loaded_relations(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing=None,
+            price=None,
         )
 
     assert created.key == "loaded-relations"
-    assert created.pricing is None
+    assert created.price is None
     assert created.upstream is None
 
 
@@ -206,7 +199,7 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing=None,
+            price=None,
         )
 
     async with db_session_factory() as session:
@@ -224,7 +217,7 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
                 response_schema=RESPONSE_SCHEMA,
                 timeout_seconds=30,
                 is_enabled=True,
-                pricing=None,
+                price=None,
             )
 
 
@@ -257,7 +250,7 @@ async def test_create_endpoint_allows_same_key_different_service(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing=None,
+            price=None,
         )
 
     async with db_session_factory() as session:
@@ -274,7 +267,7 @@ async def test_create_endpoint_allows_same_key_different_service(
             response_schema=RESPONSE_SCHEMA,
             timeout_seconds=30,
             is_enabled=True,
-            pricing=None,
+            price=None,
         )
 
     assert endpoint_b.key == "shared-key"
@@ -282,56 +275,13 @@ async def test_create_endpoint_allows_same_key_different_service(
 
 
 @pytest.mark.parametrize(
-    ("key", "name", "timeout_seconds", "access_mode", "pricing"),
+    ("key", "name", "timeout_seconds", "access_mode", "price"),
     [
         ("Bad_Key", "Name", 30, AccessMode.FREE, None),
         ("valid-key", "  ", 30, AccessMode.FREE, None),
         ("valid-key", "Name", 0, AccessMode.FREE, None),
         ("valid-key", "Name", 3601, AccessMode.FREE, None),
-        (
-            "valid-key",
-            "Name",
-            30,
-            AccessMode.FREE,
-            {
-                "pricing_type": PricingModelType.FIXED_PER_CALL,
-                "amount_minor": 100,
-                "currency": "USD",
-            },
-        ),
-        ("valid-key", "Name", 30, AccessMode.PAID, {"pricing_type": PricingModelType.FREE}),
-        (
-            "valid-key",
-            "Name",
-            30,
-            AccessMode.PAID,
-            {
-                "pricing_type": PricingModelType.FIXED_PER_CALL,
-                "amount_minor": None,
-                "currency": "USD",
-            },
-        ),
-        (
-            "valid-key",
-            "Name",
-            30,
-            AccessMode.FREE,
-            {"pricing_type": PricingModelType.FREE, "unexpected": "value"},
-        ),
-        (
-            "valid-key",
-            "Name",
-            30,
-            AccessMode.FREE,
-            {"pricing_type": PricingModelType.FREE, "amount_minor": 250, "currency": None},
-        ),
-        (
-            "valid-key",
-            "Name",
-            30,
-            AccessMode.FREE,
-            {"pricing_type": PricingModelType.FREE, "amount_minor": None, "currency": "USD"},
-        ),
+        ("valid-key", "Name", 30, AccessMode.FREE, FixedPrice(amount_minor=100, currency="USD")),
     ],
 )
 async def test_create_endpoint_rejects_invalid_input(
@@ -340,7 +290,7 @@ async def test_create_endpoint_rejects_invalid_input(
     name: str,
     timeout_seconds: int,
     access_mode: AccessMode,
-    pricing: dict[str, object] | None,
+    price: FixedPrice | None,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
@@ -360,7 +310,7 @@ async def test_create_endpoint_rejects_invalid_input(
                 response_schema=RESPONSE_SCHEMA,
                 timeout_seconds=timeout_seconds,
                 is_enabled=True,
-                pricing=pricing,
+                price=price,
             )
 
 
@@ -390,7 +340,7 @@ async def test_create_endpoint_rejects_active_service(
                 response_schema=RESPONSE_SCHEMA,
                 timeout_seconds=30,
                 is_enabled=True,
-                pricing=None,
+                price=None,
             )
 
 
@@ -419,7 +369,7 @@ async def test_create_endpoint_rejects_other_accounts_service(
                 response_schema=RESPONSE_SCHEMA,
                 timeout_seconds=30,
                 is_enabled=True,
-                pricing=None,
+                price=None,
             )
 
 
@@ -627,7 +577,7 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
     assert persisted.updated_at > before_updated_at
 
 
-async def test_update_endpoint_switches_paid_fixed_pricing_to_free(
+async def test_update_endpoint_draft_sets_price_on_unpriced_paid_endpoint(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -642,30 +592,24 @@ async def test_update_endpoint_switches_paid_fixed_pricing_to_free(
         service_id=service_id,
         access_mode=AccessMode.PAID,
     )
-    await create_pricing_record(db_session_factory, endpoint_id=endpoint_id)
 
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={
-                "access_mode": AccessMode.FREE,
-                "pricing": {"pricing_type": PricingModelType.FREE},
-            },
+            updates={"pricing": FixedPrice(amount_minor=250, currency="USD")},
         )
 
     async with db_session_factory() as session:
-        persisted_pricing = await session.get(PricingModel, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
 
     assert persisted_pricing is not None
-    assert persisted_pricing.endpoint_id == endpoint_id
-    assert persisted_pricing.pricing_type is PricingModelType.FREE
-    assert persisted_pricing.amount_minor is None
-    assert persisted_pricing.currency is None
+    assert persisted_pricing.amount_minor == 250
+    assert persisted_pricing.currency == "USD"
 
 
-async def test_update_endpoint_paid_with_pricing_none_deletes_free_pricing_row(
+async def test_update_endpoint_draft_replaces_price_in_place(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -680,29 +624,42 @@ async def test_update_endpoint_paid_with_pricing_none_deletes_free_pricing_row(
         service_id=service_id,
         access_mode=AccessMode.PAID,
     )
-    await create_pricing_record(
+    await create_endpoint_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FREE,
-        amount_minor=None,
-        currency=None,
+        amount_minor=500,
+        currency="USD",
     )
+
+    async with db_session_factory() as session:
+        seeded_pricing = await session.get(EndpointPrice, endpoint_id)
+        assert seeded_pricing is not None
+        seeded_updated_at = seeded_pricing.updated_at
 
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": None},
+            updates={"pricing": FixedPrice(amount_minor=999, currency="GBP")},
         )
 
     async with db_session_factory() as session:
-        persisted_pricing = await session.get(PricingModel, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        pricing_count = await session.scalar(
+            select(func.count())
+            .select_from(EndpointPrice)
+            .where(EndpointPrice.endpoint_id == endpoint_id),
+        )
 
-    assert persisted_pricing is None
+    assert persisted_pricing is not None
+    assert persisted_pricing.amount_minor == 999
+    assert persisted_pricing.currency == "GBP"
+    assert persisted_pricing.updated_at > seeded_updated_at
+    assert pricing_count == 1
 
 
-async def test_update_endpoint_changes_fixed_pricing_amount(
+async def test_update_endpoint_draft_retains_price_when_pricing_is_omitted(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -717,7 +674,7 @@ async def test_update_endpoint_changes_fixed_pricing_amount(
         service_id=service_id,
         access_mode=AccessMode.PAID,
     )
-    await create_pricing_record(
+    await create_endpoint_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
         amount_minor=500,
@@ -729,21 +686,387 @@ async def test_update_endpoint_changes_fixed_pricing_amount(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
+            updates={"timeout_seconds": 60},
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_endpoint is not None
+    assert persisted_endpoint.timeout_seconds == 60
+    assert persisted_pricing is not None
+    assert persisted_pricing.amount_minor == 500
+    assert persisted_pricing.currency == "USD"
+
+
+async def test_update_endpoint_draft_clears_price_with_explicit_null(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            updates={"pricing": None},
+        )
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_pricing is None
+
+
+async def test_update_endpoint_draft_free_to_paid_without_price_creates_no_row(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            updates={"access_mode": AccessMode.PAID},
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_endpoint is not None
+    assert persisted_endpoint.access_mode is AccessMode.PAID
+    assert persisted_pricing is None
+
+
+async def test_update_endpoint_draft_free_to_paid_with_price_creates_row(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
             updates={
-                "pricing": {
-                    "pricing_type": PricingModelType.FIXED_PER_CALL,
-                    "amount_minor": 999,
-                    "currency": "GBP",
-                },
+                "access_mode": AccessMode.PAID,
+                "pricing": FixedPrice(amount_minor=250, currency="USD"),
             },
         )
 
     async with db_session_factory() as session:
-        persisted_pricing = await session.get(PricingModel, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_pricing is not None
+    assert persisted_pricing.amount_minor == 250
+    assert persisted_pricing.currency == "USD"
+
+
+async def test_update_endpoint_draft_paid_to_free_deletes_existing_price(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            updates={"access_mode": AccessMode.FREE},
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_endpoint is not None
+    assert persisted_endpoint.access_mode is AccessMode.FREE
+    assert persisted_pricing is None
+
+
+async def test_update_endpoint_draft_rejects_price_on_free_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await update_endpoint(
+                session=session,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                updates={"pricing": FixedPrice(amount_minor=250, currency="USD")},
+            )
+
+
+async def test_update_endpoint_draft_free_endpoint_accepts_explicit_null_price(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            updates={"pricing": None},
+        )
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_pricing is None
+
+
+async def test_update_endpoint_rejects_wrong_typed_pricing_value(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await update_endpoint(
+                session=session,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                updates={"pricing": {"amount_minor": 1}},
+            )
+
+
+async def test_update_endpoint_active_rejects_clearing_paid_price_without_mutating_state(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        amount_minor=500,
+        currency="USD",
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await update_endpoint(
+                session=session,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                updates={"pricing": None},
+            )
+        await session.commit()
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted_pricing is not None
+    assert persisted_pricing.amount_minor == 500
+    assert persisted_pricing.currency == "USD"
+
+
+async def test_update_endpoint_active_rejects_free_to_paid_without_price(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError):
+            await update_endpoint(
+                session=session,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                updates={"access_mode": AccessMode.PAID},
+            )
+
+
+async def test_update_endpoint_active_free_to_paid_with_price_creates_revision(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            updates={
+                "access_mode": AccessMode.PAID,
+                "pricing": FixedPrice(amount_minor=250, currency="USD"),
+            },
+        )
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted_pricing is not None
+    assert persisted_pricing.amount_minor == 250
+    assert revision_count == 2
+
+
+async def test_update_endpoint_active_price_replacement_creates_revision(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        amount_minor=500,
+        currency="USD",
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            updates={"pricing": FixedPrice(amount_minor=999, currency="GBP")},
+        )
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
 
     assert persisted_pricing is not None
     assert persisted_pricing.amount_minor == 999
     assert persisted_pricing.currency == "GBP"
+    assert revision_count == 2
 
 
 async def test_update_endpoint_active_material_update_creates_one_revision(
@@ -878,7 +1201,7 @@ async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutati
 
     async with db_session_factory() as session:
         persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
-        persisted_pricing = await session.get(PricingModel, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
 
     assert persisted_endpoint is not None
     assert persisted_endpoint.timeout_seconds == 30

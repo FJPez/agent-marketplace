@@ -6,7 +6,7 @@ import pytest
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.request_schema_validation import PayloadSchemaMismatchError
-from app.db.models.pricing_model import PricingModel
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.services.moderation_service import (
@@ -94,7 +94,7 @@ def _service(
     endpoint_key: str = "translate",
     endpoint_enabled: bool = True,
     access_mode: AccessMode = AccessMode.PAID,
-    pricing_type: PricingModelType | None = PricingModelType.FIXED_PER_CALL,
+    with_price: bool = True,
     request_schema: dict[str, object] | None = None,
 ) -> Service:
     service = Service(
@@ -121,10 +121,9 @@ def _service(
         timeout_seconds=30,
         is_enabled=endpoint_enabled,
     )
-    if pricing_type is not None:
-        endpoint.pricing = PricingModel(
+    if with_price:
+        endpoint.price = EndpointPrice(
             endpoint_id=endpoint.id,
-            pricing_type=pricing_type,
             amount_minor=500,
             currency="USD",
         )
@@ -272,7 +271,7 @@ async def test_create_quote_rejects_free_endpoint() -> None:
     service = QuoteService(cast("AsyncSession", FakeSession()))
     service._quote_repo = FakeQuoteRepository(quote)
     service._service_repo = FakeServiceRepository(
-        _service(access_mode=AccessMode.FREE, pricing_type=PricingModelType.FREE),
+        _service(access_mode=AccessMode.FREE, with_price=False),
     )
     service._moderation_service = FakeModerationService()
 
@@ -290,7 +289,7 @@ async def test_create_quote_rejects_paid_endpoint_without_fixed_pricing() -> Non
     service = QuoteService(cast("AsyncSession", FakeSession()))
     service._quote_repo = FakeQuoteRepository(quote)
     service._service_repo = FakeServiceRepository(
-        _service(pricing_type=PricingModelType.FREE),
+        _service(with_price=False),
     )
     service._moderation_service = FakeModerationService()
 

@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     ConsumerAccountFactory,
     EndpointFactory,
+    EndpointPriceFactory,
     ModerationActionFactory,
-    PricingFactory,
     ProviderAccountFactory,
     ServiceFactory,
 )
@@ -19,7 +19,7 @@ from tests.helpers.auth import (
 )
 
 from app.core.config import get_settings
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.logging import EVENT_FIELD, QUOTE_ID_FIELD, REQUEST_ID_FIELD, SERVICE_ID_FIELD
 from app.db.models import Account, Quote
 from app.main import create_app
@@ -50,13 +50,13 @@ async def _seed_service(
 
 async def _seed_endpoint(
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     *,
     service_id: int,
     key: str,
     access_mode: AccessMode = AccessMode.PAID,
     is_enabled: bool = True,
-    pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
+    with_price: bool = True,
 ) -> int:
     endpoint_id = await endpoint_factory(
         service_id=service_id,
@@ -66,12 +66,12 @@ async def _seed_endpoint(
         request_schema={"type": "object", "properties": {"text": {"type": "string"}}},
         response_schema={"type": "object", "properties": {"result": {"type": "string"}}},
     )
-    await pricing_factory(
-        endpoint_id=endpoint_id,
-        pricing_type=pricing_type,
-        amount_minor=None if pricing_type is PricingModelType.FREE else 500,
-        currency=None if pricing_type is PricingModelType.FREE else "USD",
-    )
+    if with_price:
+        await endpoint_price_factory(
+            endpoint_id=endpoint_id,
+            amount_minor=500,
+            currency="USD",
+        )
     return endpoint_id
 
 
@@ -90,7 +90,7 @@ async def test_create_quote_returns_snapshot_for_active_public_endpoint(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
@@ -102,7 +102,7 @@ async def test_create_quote_returns_snapshot_for_active_public_endpoint(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -139,7 +139,7 @@ async def test_create_quote_logs_correlated_quote_event(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
@@ -151,7 +151,7 @@ async def test_create_quote_logs_correlated_quote_event(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -182,7 +182,7 @@ async def test_create_quote_returns_conflict_for_free_endpoint(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -193,11 +193,11 @@ async def test_create_quote_returns_conflict_for_free_endpoint(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
         access_mode=AccessMode.FREE,
-        pricing_type=PricingModelType.FREE,
+        with_price=False,
     )
 
     response = await async_client.post(
@@ -251,7 +251,7 @@ async def test_create_quote_rate_limits_repeated_requests(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _ = migrated_database
@@ -269,7 +269,7 @@ async def test_create_quote_rate_limits_repeated_requests(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -303,7 +303,7 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     consumer_account_factory: ConsumerAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,7 +322,7 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -364,7 +364,7 @@ async def test_create_quote_returns_not_found_for_disabled_endpoint(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -375,7 +375,7 @@ async def test_create_quote_returns_not_found_for_disabled_endpoint(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
         is_enabled=False,
@@ -396,7 +396,7 @@ async def test_create_quote_accepts_non_object_payload_when_endpoint_schema_allo
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -412,9 +412,8 @@ async def test_create_quote_accepts_non_object_payload_when_endpoint_schema_allo
         request_schema={"type": "array", "items": {"type": "string"}},
         response_schema={"type": "string"},
     )
-    await pricing_factory(
+    await endpoint_price_factory(
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency="USD",
     )
@@ -433,7 +432,7 @@ async def test_create_quote_rejects_payload_that_does_not_match_endpoint_schema(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -454,9 +453,8 @@ async def test_create_quote_rejects_payload_that_does_not_match_endpoint_schema(
         },
         response_schema={"type": "object"},
     )
-    await pricing_factory(
+    await endpoint_price_factory(
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency="USD",
     )
@@ -476,7 +474,7 @@ async def test_create_quote_returns_conflict_for_paid_endpoint_without_fixed_pri
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -487,11 +485,11 @@ async def test_create_quote_returns_conflict_for_paid_endpoint_without_fixed_pri
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
         access_mode=AccessMode.PAID,
-        pricing_type=PricingModelType.FREE,
+        with_price=False,
     )
 
     response = await async_client.post(
@@ -509,7 +507,7 @@ async def test_create_quote_persists_quote_record(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
@@ -521,7 +519,7 @@ async def test_create_quote_persists_quote_record(
     )
     endpoint_id = await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -552,7 +550,7 @@ async def test_create_quote_works_with_authenticated_consumer(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
@@ -564,7 +562,7 @@ async def test_create_quote_works_with_authenticated_consumer(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -590,7 +588,7 @@ async def test_create_quote_returns_not_found_for_draft_service(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -601,7 +599,7 @@ async def test_create_quote_returns_not_found_for_draft_service(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -621,7 +619,7 @@ async def test_create_quote_returns_not_found_for_suspended_service(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     moderation_action_factory: ModerationActionFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
@@ -633,7 +631,7 @@ async def test_create_quote_returns_not_found_for_suspended_service(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -658,7 +656,7 @@ async def test_create_quote_returns_not_found_for_delisted_service(
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     moderation_action_factory: ModerationActionFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
@@ -670,7 +668,7 @@ async def test_create_quote_returns_not_found_for_delisted_service(
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )
@@ -695,7 +693,7 @@ async def test_create_quote_returns_conflict_when_service_lacks_contract_binding
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
 ) -> None:
     provider_account_id = await _create_provider_account(provider_account_factory)
     service_id = await _seed_service(
@@ -705,7 +703,7 @@ async def test_create_quote_returns_conflict_when_service_lacks_contract_binding
     )
     await _seed_endpoint(
         endpoint_factory,
-        pricing_factory,
+        endpoint_price_factory,
         service_id=service_id,
         key="translate",
     )

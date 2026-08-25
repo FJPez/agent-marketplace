@@ -5,17 +5,17 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_admin_account_record,
     create_consumer_account_record,
+    create_endpoint_price_record,
     create_endpoint_record,
     create_health_check_record,
     create_moderation_action_record,
-    create_pricing_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
 )
 from tests.helpers.auth import auth_headers_for_account_id
 
-from app.core.enums import AccessMode, PricingModelType, ServiceHealthStatus, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
 from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
@@ -108,14 +108,12 @@ async def _seed_pricing(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     endpoint_id: int,
-    pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
-    amount_minor: int | None = 1500,
-    currency: str | None = "USD",
+    amount_minor: int = 1500,
+    currency: str = "USD",
 ) -> None:
-    await create_pricing_record(
+    await create_endpoint_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        pricing_type=pricing_type,
         amount_minor=amount_minor,
         currency=currency,
     )
@@ -192,11 +190,7 @@ async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
             "response_schema": {"type": "object"},
             "timeout_seconds": 45,
             "is_enabled": True,
-            "pricing": {
-                "pricing_type": "fixed_per_call",
-                "amount_minor": 1500,
-                "currency": "USD",
-            },
+            "pricing": {"amount_minor": 1500, "currency": "USD"},
         },
     )
 
@@ -889,11 +883,7 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
         json={
-            "pricing": {
-                "pricing_type": "fixed_per_call",
-                "amount_minor": 2500,
-                "currency": "GBP",
-            },
+            "pricing": {"amount_minor": 2500, "currency": "GBP"},
         },
     )
 
@@ -1038,11 +1028,7 @@ async def test_patch_active_provider_endpoint_pricing_change_creates_revision_an
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
         json={
-            "pricing": {
-                "pricing_type": "fixed_per_call",
-                "amount_minor": 2500,
-                "currency": "GBP",
-            },
+            "pricing": {"amount_minor": 2500, "currency": "GBP"},
         },
     )
 
@@ -1093,7 +1079,7 @@ async def test_patch_active_provider_endpoint_rejects_paid_transition_without_pr
 
     assert response.status_code == 422
     assert response.json() == {
-        "detail": "active paid endpoints must define fixed_per_call pricing",
+        "detail": "active paid endpoints must define a price",
     }
 
 
@@ -1354,3 +1340,42 @@ async def test_publish_service_rejects_suspended_service(
     assert response.json() == {
         "detail": "service is suspended",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pricing", "rejected_field"),
+    [
+        (
+            {"pricing_type": "fixed_per_call", "amount_minor": 250, "currency": "USD"},
+            "pricing_type",
+        ),
+        ({"amount_minor": True, "currency": "USD"}, "amount_minor"),
+    ],
+)
+async def test_patch_provider_endpoint_rejects_invalid_pricing_payload(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    pricing: dict[str, object],
+    rejected_field: str,
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"pricing": pricing},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == rejected_field

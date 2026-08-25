@@ -1,5 +1,5 @@
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
-from app.db.models.pricing_model import PricingModel
+from app.core.enums import AccessMode, ServiceLifecycle
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.services.revision_service import (
@@ -45,9 +45,8 @@ def _service() -> Service:
         timeout_seconds=15,
         is_enabled=False,
     )
-    second_endpoint.pricing = PricingModel(
+    second_endpoint.price = EndpointPrice(
         endpoint_id=second_endpoint.id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=2500,
         currency="USD",
     )
@@ -65,7 +64,7 @@ def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
 
 def test_classify_endpoint_update_marks_pricing_as_material() -> None:
     impact = RevisionService.classify_endpoint_update(
-        {"pricing": {"pricing_type": "fixed_per_call", "amount_minor": 100}},
+        {"pricing": {"amount_minor": 100, "currency": "USD"}},
     )
 
     assert impact is UpdateImpact.MATERIAL

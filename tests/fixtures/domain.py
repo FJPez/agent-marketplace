@@ -21,12 +21,12 @@ from app.core.enums import (
 )
 from app.core.request_hash import hash_request_body
 from app.db.models import (
+    EndpointPrice,
     Invocation,
     LedgerEntry,
     ModerationAction,
     PaymentAttempt,
     Payout,
-    PricingModel,
     ProviderUpstream,
     Quote,
     Service,
@@ -123,14 +123,13 @@ class EndpointFactory(Protocol):
     ) -> Awaitable[int]: ...
 
 
-class PricingFactory(Protocol):
+class EndpointPriceFactory(Protocol):
     def __call__(
         self,
         *,
         endpoint_id: int,
-        pricing_type: PricingModelType = ...,
-        amount_minor: int | None = ...,
-        currency: str | None = ...,
+        amount_minor: int = ...,
+        currency: str = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -454,18 +453,16 @@ async def create_endpoint_record(
         return endpoint.id
 
 
-async def create_pricing_record(
+async def create_endpoint_price_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     endpoint_id: int,
-    pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
-    amount_minor: int | None = 500,
-    currency: str | None = "USD",
+    amount_minor: int = 500,
+    currency: str = "USD",
 ) -> int:
     async with db_session_factory.begin() as session:
-        pricing = PricingModel(
+        pricing = EndpointPrice(
             endpoint_id=endpoint_id,
-            pricing_type=pricing_type,
             amount_minor=amount_minor,
             currency=currency,
         )
@@ -526,10 +523,10 @@ async def create_quote_record(
             change_token = revision.change_token
 
         pricing = await session.scalar(
-            select(PricingModel).where(PricingModel.endpoint_id == endpoint_id),
+            select(EndpointPrice).where(EndpointPrice.endpoint_id == endpoint_id),
         )
         resolved_pricing_type = pricing_type or (
-            pricing.pricing_type if pricing is not None else PricingModelType.FREE
+            PricingModelType.FIXED_PER_CALL if pricing is not None else PricingModelType.FREE
         )
         resolved_amount_minor = (
             pricing.amount_minor
@@ -912,25 +909,23 @@ def endpoint_factory(
 
 
 @pytest.fixture
-def pricing_factory(
+def endpoint_price_factory(
     db_session_factory: async_sessionmaker[AsyncSession],
-) -> PricingFactory:
-    async def create_pricing(
+) -> EndpointPriceFactory:
+    async def create_endpoint_price(
         *,
         endpoint_id: int,
-        pricing_type: PricingModelType = PricingModelType.FIXED_PER_CALL,
-        amount_minor: int | None = 500,
-        currency: str | None = "USD",
+        amount_minor: int = 500,
+        currency: str = "USD",
     ) -> int:
-        return await create_pricing_record(
+        return await create_endpoint_price_record(
             db_session_factory,
             endpoint_id=endpoint_id,
-            pricing_type=pricing_type,
             amount_minor=amount_minor,
             currency=currency,
         )
 
-    return create_pricing
+    return create_endpoint_price
 
 
 @pytest.fixture

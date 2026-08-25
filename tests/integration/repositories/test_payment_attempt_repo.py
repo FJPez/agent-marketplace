@@ -5,15 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     ConsumerAccountFactory,
     EndpointFactory,
+    EndpointPriceFactory,
     InvocationFactory,
     PaymentAttemptFactory,
-    PricingFactory,
     ProviderAccountFactory,
     QuoteFactory,
     ServiceFactory,
 )
 
-from app.core.enums import AccessMode, InvocationStatus, PaymentAttemptStatus, PricingModelType
+from app.core.enums import AccessMode, InvocationStatus, PaymentAttemptStatus
 from app.db.models import PaymentAttempt
 from app.repositories.payment_attempt_repo import PaymentAttemptRepository
 
@@ -26,7 +26,7 @@ async def test_payment_attempt_repository_persists_and_loads_by_identifier(
     consumer_account_factory: ConsumerAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
-    pricing_factory: PricingFactory,
+    endpoint_price_factory: EndpointPriceFactory,
     quote_factory: QuoteFactory,
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
@@ -46,9 +46,8 @@ async def test_payment_attempt_repository_persists_and_loads_by_identifier(
         key="translate",
         access_mode=AccessMode.PAID,
     )
-    await pricing_factory(
+    await endpoint_price_factory(
         endpoint_id=endpoint_id,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency="USD",
     )

@@ -256,7 +256,6 @@ async def create_provider_endpoint(
                         },
                         "timeout_seconds": 30,
                         "is_enabled": True,
-                        "pricing": {"pricing_type": "free"},
                     },
                 }
             }
@@ -278,7 +277,7 @@ async def create_provider_endpoint(
         response_schema=request.response_schema,
         timeout_seconds=request.timeout_seconds,
         is_enabled=request.is_enabled,
-        pricing=request.pricing.model_dump() if request.pricing is not None else None,
+        price=request.pricing,
     )
     return EndpointResponse.from_model(endpoint)
 
@@ -306,11 +305,7 @@ async def update_provider_endpoint(
                     "value": {
                         "summary": "A paid endpoint that returns a compact summary.",
                         "timeout_seconds": 45,
-                        "pricing": {
-                            "pricing_type": "fixed_per_call",
-                            "amount_minor": 250,
-                            "currency": "USD",
-                        },
+                        "pricing": {"amount_minor": 250, "currency": "USD"},
                     },
                 }
             }
@@ -319,11 +314,14 @@ async def update_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
 ) -> EndpointResponse:
+    updates = request.model_dump(exclude_unset=True, exclude={"pricing"})
+    if "pricing" in request.model_fields_set:
+        updates["pricing"] = request.pricing
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
-        updates=request.model_dump(exclude_unset=True),
+        updates=updates,
     )
     return EndpointResponse.from_model(endpoint)
 

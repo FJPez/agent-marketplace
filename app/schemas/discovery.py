@@ -2,7 +2,7 @@ from typing import Self
 
 from pydantic import BaseModel
 
-from app.core.enums import AccessMode
+from app.core.enums import AccessMode, PricingModelType
 from app.core.json_types import to_json_object
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -50,23 +50,22 @@ class PublicEndpointPricing(BaseModel):
 
     @classmethod
     def from_model(cls, endpoint: ServiceEndpoint) -> Self:
-        pricing = getattr(endpoint, "pricing", None)
-        if pricing is not None:
-            pricing_type = getattr(pricing.pricing_type, "value", pricing.pricing_type)
-            return cls(
-                key=endpoint.key,
-                access_mode=endpoint.access_mode,
-                pricing_type=str(pricing_type),
-                amount_minor=getattr(pricing, "amount_minor", None),
-                currency=getattr(pricing, "currency", None),
-            )
         if endpoint.access_mode is AccessMode.FREE:
             return cls(
                 key=endpoint.key,
                 access_mode=endpoint.access_mode,
-                pricing_type="free",
+                pricing_type=PricingModelType.FREE.value,
                 amount_minor=None,
                 currency=None,
+            )
+        price = endpoint.price
+        if price is not None:
+            return cls(
+                key=endpoint.key,
+                access_mode=endpoint.access_mode,
+                pricing_type=PricingModelType.FIXED_PER_CALL.value,
+                amount_minor=price.amount_minor,
+                currency=price.currency,
             )
         return cls(
             key=endpoint.key,

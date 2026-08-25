@@ -2,8 +2,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
-from app.db.models.pricing_model import PricingModel
+from app.core.enums import AccessMode, ServiceLifecycle
+from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -38,7 +38,7 @@ def _build_endpoint(
     access_mode: AccessMode = AccessMode.FREE,
     is_enabled: bool = True,
     with_upstream: bool = True,
-    pricing: PricingModel | None = None,
+    price: EndpointPrice | None = None,
 ) -> ServiceEndpoint:
     endpoint = ServiceEndpoint(
         service_id=1,
@@ -66,14 +66,13 @@ def _build_endpoint(
                 },
             },
         )
-    endpoint.pricing = pricing
+    endpoint.price = price
     return endpoint
 
 
-def _build_fixed_price() -> PricingModel:
-    return PricingModel(
+def _build_fixed_price() -> EndpointPrice:
+    return EndpointPrice(
         endpoint_id=1,
-        pricing_type=PricingModelType.FIXED_PER_CALL,
         amount_minor=500,
         currency="USD",
     )
@@ -114,7 +113,7 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_p
         endpoints=[
             _build_endpoint(
                 access_mode=AccessMode.PAID,
-                pricing=_build_fixed_price(),
+                price=_build_fixed_price(),
             ),
         ],
     )
@@ -176,7 +175,7 @@ async def test_publish_readiness_checker_returns_fail_summary_for_invalid_servic
 async def test_publish_readiness_checker_returns_pass_for_ready_service(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = _build_service(endpoints=[_build_endpoint(pricing=_build_fixed_price())])
+    service = _build_service(endpoints=[_build_endpoint(price=_build_fixed_price())])
 
     async def fake_get_by_id(
         self: ServiceRepository,

@@ -68,7 +68,7 @@ async def list_services(*, session: AsyncSession, account_id: int) -> list[Servi
         select(Service)
         .options(
             selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.pricing),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)
