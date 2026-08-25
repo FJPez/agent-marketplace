@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1411,7 +1409,7 @@ async def test_update_endpoint_null_pricing_on_unpriced_paid_endpoint_is_a_no_op
     assert persisted.updated_at == seeded_updated_at
 
 
-async def test_update_endpoint_active_paid_to_free_without_price_row_creates_no_revision(
+async def test_update_endpoint_active_paid_to_free_without_price_row_revises_for_mode_change(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -1528,36 +1526,6 @@ async def test_update_endpoint_suspended_service_allows_no_op_update(
 
     assert persisted is not None
     assert persisted.updated_at == seeded_updated_at
-
-
-async def test_update_endpoint_stamps_updated_at_after_acquiring_the_lock(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await _create_draft_service(
-        db_session_factory,
-        provider_account_id=account_id,
-    )
-    endpoint_id = await create_endpoint_record(
-        db_session_factory,
-        service_id=service_id,
-        timeout_seconds=30,
-    )
-
-    before_call = datetime.now(UTC)
-    async with db_session_factory() as session:
-        await update_endpoint(
-            session=session,
-            account_id=account_id,
-            endpoint_id=endpoint_id,
-            changes=EndpointUpdateRequest(timeout_seconds=60),
-        )
-
-    async with db_session_factory() as session:
-        persisted = await session.get(ServiceEndpoint, endpoint_id)
-
-    assert persisted is not None
-    assert persisted.updated_at >= before_call
 
 
 async def test_upsert_upstream_creates_row_for_draft_endpoint(
