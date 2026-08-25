@@ -6,8 +6,14 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    StrictBool,
+    StrictInt,
     StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
@@ -163,7 +169,16 @@ class EndpointCreateRequest(BaseModel):
 
 
 class EndpointUpdateRequest(BaseModel):
+    """Partial endpoint update.
+
+    Omitted fields are left unchanged. ``summary``, ``description``, and
+    ``pricing`` are clearable and accept an explicit null. Every other field is
+    non-clearable: sending an explicit null is a client error rather than a
+    request to unset the value.
+    """
+
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -173,18 +188,44 @@ class EndpointUpdateRequest(BaseModel):
                     "pricing": {"amount_minor": 250, "currency": "USD"},
                 }
             ]
-        }
+        },
     )
 
-    name: ServiceName | None = None
+    name: ServiceName | SkipJsonSchema[None] = None
     summary: Summary | None = None
     description: Description | None = None
-    access_mode: AccessMode | None = None
-    request_schema: SchemaObject | None = None
-    response_schema: SchemaObject | None = None
-    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | None = None
-    is_enabled: bool | None = None
+    access_mode: AccessMode | SkipJsonSchema[None] = None
+    request_schema: SchemaObject | SkipJsonSchema[None] = None
+    response_schema: SchemaObject | SkipJsonSchema[None] = None
+    timeout_seconds: (
+        Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | SkipJsonSchema[None]
+    ) = None
+    is_enabled: StrictBool | SkipJsonSchema[None] = None
     pricing: FixedPrice | None = None
+
+    @field_validator(
+        "name",
+        "access_mode",
+        "request_schema",
+        "response_schema",
+        "timeout_seconds",
+        "is_enabled",
+    )
+    @classmethod
+    def reject_explicit_null(cls, value: object, info: ValidationInfo) -> object:
+        # Field validators never run for defaults, so this fires only when the
+        # client actually sent a null for a non-clearable field.
+        if value is None:
+            msg = f"{info.field_name} cannot be null"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def require_a_field(self) -> Self:
+        if not self.model_fields_set:
+            msg = "at least one field must be provided"
+            raise ValueError(msg)
+        return self
 
 
 class EndpointUpstreamRequest(BaseModel):

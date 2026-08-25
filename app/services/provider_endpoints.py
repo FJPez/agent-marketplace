@@ -1,3 +1,4 @@
+from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -8,7 +9,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
-from app.core.json_types import JsonObject, to_json_value
+from app.core.json_types import JsonObject
 from app.core.service_fields import (
     normalize_endpoint_summary,
     normalize_http_method,
@@ -25,23 +26,10 @@ from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.pricing import FixedPrice
+from app.schemas.service import EndpointUpdateRequest
 from app.services import service_access
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.revision_service import RevisionService, UpdateImpact
-
-ENDPOINT_UPDATE_FIELDS = frozenset(
-    {
-        "name",
-        "summary",
-        "description",
-        "access_mode",
-        "request_schema",
-        "response_schema",
-        "timeout_seconds",
-        "is_enabled",
-        "pricing",
-    },
-)
 
 
 async def create_endpoint(
@@ -132,15 +120,8 @@ async def update_endpoint(
     session: AsyncSession,
     account_id: int,
     endpoint_id: int,
-    updates: dict[str, object],
+    changes: EndpointUpdateRequest,
 ) -> ServiceEndpoint:
-    if not updates:
-        raise InvalidInputError("at least one field must be provided")
-
-    unknown_fields = set(updates) - ENDPOINT_UPDATE_FIELDS
-    if unknown_fields:
-        raise InvalidInputError(f"unknown update fields: {', '.join(sorted(unknown_fields))}")
-
     now = datetime.now(UTC)
 
     locked_service_id = await service_access.lock_owned_service_by_endpoint(
@@ -160,96 +141,30 @@ async def update_endpoint(
     if endpoint is None:
         raise NotFoundError("endpoint not found")
 
-    update_fields: dict[str, object] = {}
-    revision_fields: dict[str, object] = {}
-    target_access_mode = endpoint.access_mode
-    price_specified = "pricing" in updates
-    price_update: FixedPrice | None = None
-    try:
-        if "name" in updates:
-            name = updates["name"]
-            if name is None:
-                raise InvalidInputError("name cannot be null")
-            if not isinstance(name, str):
-                raise InvalidInputError("name must be a string")
-            update_fields["name"] = normalize_service_name(name)
-            revision_fields["name"] = name
-        if "summary" in updates:
-            summary = updates["summary"]
-            if summary is not None and not isinstance(summary, str):
-                raise InvalidInputError("summary must be a string")
-            update_fields["summary"] = normalize_endpoint_summary(summary)
-            revision_fields["summary"] = summary
-        if "description" in updates:
-            description = updates["description"]
-            if description is not None and not isinstance(description, str):
-                raise InvalidInputError("description must be a string")
-            update_fields["description"] = normalize_service_description(description)
-            revision_fields["description"] = description
-        if "access_mode" in updates:
-            access_mode = updates["access_mode"]
-            if access_mode is None:
-                raise InvalidInputError("access_mode cannot be null")
-            if not isinstance(access_mode, AccessMode):
-                raise InvalidInputError("access_mode must be a valid access mode")
-            update_fields["access_mode"] = access_mode
-            revision_fields["access_mode"] = access_mode
-            target_access_mode = access_mode
-        if "request_schema" in updates:
-            request_schema = to_json_value(updates["request_schema"])
-            if request_schema is None:
-                raise InvalidInputError("request_schema cannot be null")
-            if not isinstance(request_schema, dict):
-                raise InvalidInputError("request_schema must be an object")
-            update_fields["request_schema"] = request_schema
-            revision_fields["request_schema"] = request_schema
-        if "response_schema" in updates:
-            response_schema = to_json_value(updates["response_schema"])
-            if response_schema is None:
-                raise InvalidInputError("response_schema cannot be null")
-            if not isinstance(response_schema, dict):
-                raise InvalidInputError("response_schema must be an object")
-            update_fields["response_schema"] = response_schema
-            revision_fields["response_schema"] = response_schema
-        if "timeout_seconds" in updates:
-            timeout_seconds = updates["timeout_seconds"]
-            if timeout_seconds is None:
-                raise InvalidInputError("timeout_seconds cannot be null")
-            if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
-                raise InvalidInputError("timeout_seconds must be an integer")
-            update_fields["timeout_seconds"] = validate_endpoint_timeout(timeout_seconds)
-            revision_fields["timeout_seconds"] = timeout_seconds
-        if "is_enabled" in updates:
-            is_enabled = updates["is_enabled"]
-            if is_enabled is None:
-                raise InvalidInputError("is_enabled cannot be null")
-            if not isinstance(is_enabled, bool):
-                raise InvalidInputError("is_enabled must be a boolean")
-            update_fields["is_enabled"] = is_enabled
-            revision_fields["is_enabled"] = is_enabled
-        if price_specified:
-            revision_fields["pricing"] = updates["pricing"]
-            pricing_value = updates["pricing"]
-            if pricing_value is not None and not isinstance(pricing_value, FixedPrice):
-                raise InvalidInputError("pricing must be a fixed price or null")
-            price_update = pricing_value
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
+    set_fields = changes.model_fields_set
+    if "access_mode" in set_fields:
+        if changes.access_mode is None:
+            # Unreachable: the request schema rejects an explicit null here.
+            raise InvalidInputError("access_mode cannot be null")
+        target_access_mode = changes.access_mode
+    else:
+        target_access_mode = endpoint.access_mode
+    price_specified = "pricing" in set_fields
 
-    if target_access_mode is AccessMode.FREE and price_update is not None:
+    if target_access_mode is AccessMode.FREE and price_specified and changes.pricing is not None:
         raise InvalidInputError("free endpoints cannot have a price")
 
     if target_access_mode is AccessMode.FREE:
         has_resulting_price = False
     elif price_specified:
-        has_resulting_price = price_update is not None
+        has_resulting_price = changes.pricing is not None
     else:
         has_resulting_price = endpoint.price is not None
 
     await _ensure_endpoint_update_allowed(
         session=session,
         service=service,
-        revision_fields=revision_fields,
+        changed_fields=set_fields,
     )
 
     _ensure_active_paid_endpoint_priced(
@@ -258,34 +173,35 @@ async def update_endpoint(
         has_price=has_resulting_price,
     )
 
-    for attribute_name, value in update_fields.items():
+    column_changes = changes.model_dump(exclude_unset=True, exclude={"pricing"})
+    for attribute_name, value in column_changes.items():
         setattr(endpoint, attribute_name, value)
     endpoint.updated_at = now
 
-    if target_access_mode is AccessMode.FREE or (price_specified and price_update is None):
+    if target_access_mode is AccessMode.FREE or (price_specified and changes.pricing is None):
         existing_price = endpoint.price
         if existing_price is not None:
             endpoint.price = None
             await session.delete(existing_price)
-    elif price_update is not None:
+    elif changes.pricing is not None:
         existing_price = endpoint.price
         if existing_price is None:
             pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                amount_minor=price_update.amount_minor,
-                currency=price_update.currency,
+                amount_minor=changes.pricing.amount_minor,
+                currency=changes.pricing.currency,
             )
             session.add(pricing_row)
             endpoint.price = pricing_row
         else:
-            existing_price.amount_minor = price_update.amount_minor
-            existing_price.currency = price_update.currency
+            existing_price.amount_minor = changes.pricing.amount_minor
+            existing_price.currency = changes.pricing.currency
             existing_price.updated_at = now
 
     if service.lifecycle is ServiceLifecycle.ACTIVE:
         await RevisionService(session).create_revision_if_material_endpoint_update(
             service,
-            update_fields=revision_fields,
+            update_fields=set_fields,
         )
 
     await session.commit()
@@ -384,12 +300,12 @@ async def _ensure_endpoint_update_allowed(
     *,
     session: AsyncSession,
     service: Service,
-    revision_fields: dict[str, object],
+    changed_fields: Collection[str],
 ) -> None:
     if service.lifecycle is ServiceLifecycle.DRAFT:
         return
     if service.lifecycle is ServiceLifecycle.ACTIVE:
-        if RevisionService.classify_endpoint_update(revision_fields) is not UpdateImpact.MATERIAL:
+        if RevisionService.classify_endpoint_update(changed_fields) is not UpdateImpact.MATERIAL:
             return
         try:
             await ModerationService(session).ensure_service_publishable(service.id)

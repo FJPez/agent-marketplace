@@ -8,7 +8,7 @@ from app.core.enums import AccessMode, PricingModelType
 from app.repositories.service_revision_repo import ServiceRevisionRepository
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Collection, Mapping
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,7 +102,7 @@ class RevisionService:
 
     @staticmethod
     def classify_endpoint_update(
-        update_fields: Mapping[str, object],
+        update_fields: Collection[str],
     ) -> UpdateImpact:
         if MATERIAL_ENDPOINT_FIELDS.intersection(update_fields):
             return UpdateImpact.MATERIAL
@@ -139,7 +139,7 @@ class RevisionService:
         self,
         service: Service,
         *,
-        update_fields: Mapping[str, object],
+        update_fields: Collection[str],
     ) -> UpdateImpact:
         impact = self.classify_endpoint_update(update_fields)
         if impact is UpdateImpact.MATERIAL:

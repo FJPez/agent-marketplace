@@ -15,6 +15,7 @@ from app.core.errors import ConflictError, InvalidInputError, InvalidStateError,
 from app.core.json_types import JsonObject
 from app.db.models import EndpointPrice, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
 from app.schemas.pricing import FixedPrice
+from app.schemas.service import EndpointUpdateRequest
 from app.services.provider_endpoints import (
     create_endpoint,
     get_endpoint,
@@ -400,115 +401,6 @@ async def test_get_endpoint_raises_not_found_for_other_accounts_endpoint(
             await get_endpoint(session=session, account_id=account_id, endpoint_id=endpoint_id)
 
 
-async def test_update_endpoint_rejects_empty_updates(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={},
-            )
-
-
-async def test_update_endpoint_rejects_unknown_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match="unknown update fields: bar, foo"):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={"foo": "x", "bar": "y", "key": "new-key"},
-            )
-
-
-@pytest.mark.parametrize(
-    "field",
-    ["name", "access_mode", "request_schema", "response_schema", "timeout_seconds", "is_enabled"],
-)
-async def test_update_endpoint_rejects_null_required_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    field: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={field: None},
-            )
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("name", 42, "name must be a string"),
-        ("summary", 42, "summary must be a string"),
-        ("description", 42, "description must be a string"),
-        ("access_mode", "free", "access_mode must be a valid access mode"),
-        ("request_schema", "schema", "request_schema must be an object"),
-        ("response_schema", "schema", "response_schema must be an object"),
-        ("timeout_seconds", True, "timeout_seconds must be an integer"),
-        ("is_enabled", "yes", "is_enabled must be a boolean"),
-    ],
-)
-async def test_update_endpoint_rejects_wrong_typed_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    field: str,
-    value: object,
-    message: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match=message):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={field: value},
-            )
-
-
 async def test_update_endpoint_clears_summary_and_description(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -531,7 +423,7 @@ async def test_update_endpoint_clears_summary_and_description(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"summary": None, "description": None},
+            changes=EndpointUpdateRequest(summary=None, description=None),
         )
 
     async with db_session_factory() as session:
@@ -564,7 +456,9 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"name": "  New Name  ", "summary": "  New Summary  ", "timeout_seconds": 45},
+            changes=EndpointUpdateRequest(
+                name="  New Name  ", summary="  New Summary  ", timeout_seconds=45
+            ),
         )
 
     async with db_session_factory() as session:
@@ -598,7 +492,7 @@ async def test_update_endpoint_draft_sets_price_on_unpriced_paid_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": FixedPrice(amount_minor=250, currency="USD")},
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=250, currency="USD")),
         )
 
     async with db_session_factory() as session:
@@ -641,7 +535,7 @@ async def test_update_endpoint_draft_replaces_price_in_place(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": FixedPrice(amount_minor=999, currency="GBP")},
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=999, currency="GBP")),
         )
 
     async with db_session_factory() as session:
@@ -686,7 +580,7 @@ async def test_update_endpoint_draft_retains_price_when_pricing_is_omitted(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"timeout_seconds": 60},
+            changes=EndpointUpdateRequest(timeout_seconds=60),
         )
 
     async with db_session_factory() as session:
@@ -722,7 +616,7 @@ async def test_update_endpoint_draft_clears_price_with_explicit_null(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": None},
+            changes=EndpointUpdateRequest(pricing=None),
         )
 
     async with db_session_factory() as session:
@@ -752,7 +646,7 @@ async def test_update_endpoint_draft_free_to_paid_without_price_creates_no_row(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"access_mode": AccessMode.PAID},
+            changes=EndpointUpdateRequest(access_mode=AccessMode.PAID),
         )
 
     async with db_session_factory() as session:
@@ -785,10 +679,10 @@ async def test_update_endpoint_draft_free_to_paid_with_price_creates_row(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={
-                "access_mode": AccessMode.PAID,
-                "pricing": FixedPrice(amount_minor=250, currency="USD"),
-            },
+            changes=EndpointUpdateRequest(
+                access_mode=AccessMode.PAID,
+                pricing=FixedPrice(amount_minor=250, currency="USD"),
+            ),
         )
 
     async with db_session_factory() as session:
@@ -821,7 +715,7 @@ async def test_update_endpoint_draft_paid_to_free_deletes_existing_price(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"access_mode": AccessMode.FREE},
+            changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
         )
 
     async with db_session_factory() as session:
@@ -855,7 +749,7 @@ async def test_update_endpoint_draft_rejects_price_on_free_endpoint(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"pricing": FixedPrice(amount_minor=250, currency="USD")},
+                changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=250, currency="USD")),
             )
 
 
@@ -880,39 +774,13 @@ async def test_update_endpoint_draft_free_endpoint_accepts_explicit_null_price(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": None},
+            changes=EndpointUpdateRequest(pricing=None),
         )
 
     async with db_session_factory() as session:
         persisted_pricing = await session.get(EndpointPrice, endpoint_id)
 
     assert persisted_pricing is None
-
-
-async def test_update_endpoint_rejects_wrong_typed_pricing_value(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(
-        db_session_factory,
-        service_id=service_id,
-        access_mode=AccessMode.PAID,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={"pricing": {"amount_minor": 1}},
-            )
 
 
 async def test_update_endpoint_active_rejects_clearing_paid_price_without_mutating_state(
@@ -944,7 +812,7 @@ async def test_update_endpoint_active_rejects_clearing_paid_price_without_mutati
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"pricing": None},
+                changes=EndpointUpdateRequest(pricing=None),
             )
         await session.commit()
 
@@ -979,7 +847,7 @@ async def test_update_endpoint_active_rejects_free_to_paid_without_price(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"access_mode": AccessMode.PAID},
+                changes=EndpointUpdateRequest(access_mode=AccessMode.PAID),
             )
 
 
@@ -1005,10 +873,10 @@ async def test_update_endpoint_active_free_to_paid_with_price_creates_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={
-                "access_mode": AccessMode.PAID,
-                "pricing": FixedPrice(amount_minor=250, currency="USD"),
-            },
+            changes=EndpointUpdateRequest(
+                access_mode=AccessMode.PAID,
+                pricing=FixedPrice(amount_minor=250, currency="USD"),
+            ),
         )
 
     async with db_session_factory() as session:
@@ -1052,7 +920,7 @@ async def test_update_endpoint_active_price_replacement_creates_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": FixedPrice(amount_minor=999, currency="GBP")},
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=999, currency="GBP")),
         )
 
     async with db_session_factory() as session:
@@ -1092,7 +960,7 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"timeout_seconds": 60},
+            changes=EndpointUpdateRequest(timeout_seconds=60),
         )
 
     async with db_session_factory() as session:
@@ -1126,7 +994,7 @@ async def test_update_endpoint_active_name_only_update_creates_zero_revisions(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"name": "Renamed Endpoint"},
+            changes=EndpointUpdateRequest(name="Renamed Endpoint"),
         )
 
     async with db_session_factory() as session:
@@ -1162,7 +1030,7 @@ async def test_update_endpoint_active_paid_endpoint_without_pricing_rejects_mate
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": 60},
+                changes=EndpointUpdateRequest(timeout_seconds=60),
             )
 
 
@@ -1195,7 +1063,7 @@ async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutati
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": 60},
+                changes=EndpointUpdateRequest(timeout_seconds=60),
             )
         await session.commit()
 
@@ -1233,7 +1101,7 @@ async def test_update_endpoint_suspended_service_blocks_material_update(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": 60},
+                changes=EndpointUpdateRequest(timeout_seconds=60),
             )
 
 
@@ -1260,7 +1128,7 @@ async def test_update_endpoint_suspended_service_allows_name_only_update(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"name": "Renamed While Suspended"},
+            changes=EndpointUpdateRequest(name="Renamed While Suspended"),
         )
 
     async with db_session_factory() as session:
@@ -1289,7 +1157,7 @@ async def test_update_endpoint_rejects_other_accounts_endpoint(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"name": "New Name"},
+                changes=EndpointUpdateRequest(name="New Name"),
             )
 
 

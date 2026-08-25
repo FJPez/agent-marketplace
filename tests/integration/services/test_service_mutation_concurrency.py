@@ -17,6 +17,7 @@ from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.db.models import Service, ServiceRevision
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
+from app.schemas.service import EndpointUpdateRequest
 from app.services import provider_endpoints, service_access
 from app.services.publish_service import PublishService
 
@@ -141,7 +142,7 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
                 session=session,
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": timeout_seconds},
+                changes=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
             )
 
     first_update = asyncio.create_task(update_timeout(45))

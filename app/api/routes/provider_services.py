@@ -314,14 +314,11 @@ async def update_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
 ) -> EndpointResponse:
-    updates = request.model_dump(exclude_unset=True, exclude={"pricing"})
-    if "pricing" in request.model_fields_set:
-        updates["pricing"] = request.pricing
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
-        updates=updates,
+        changes=request,
     )
     return EndpointResponse.from_model(endpoint)
 

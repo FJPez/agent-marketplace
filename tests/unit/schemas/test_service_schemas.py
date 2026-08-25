@@ -2,7 +2,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.core.enums import AccessMode
-from app.schemas.service import EndpointCreateRequest, ServiceCreateRequest
+from app.schemas.service import (
+    EndpointCreateRequest,
+    EndpointUpdateRequest,
+    ServiceCreateRequest,
+)
 
 
 def test_service_create_request_rejects_numeric_only_slug() -> None:
@@ -47,3 +51,60 @@ def test_endpoint_create_request_accepts_mixed_alphanumeric_key() -> None:
     )
 
     assert request.key == "translate-123"
+
+
+def test_endpoint_update_request_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError):
+        EndpointUpdateRequest.model_validate({"name": "Renamed", "unknown_field": "x"})
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["name", "access_mode", "request_schema", "response_schema", "timeout_seconds", "is_enabled"],
+)
+def test_endpoint_update_request_rejects_explicit_null(field: str) -> None:
+    with pytest.raises(ValidationError) as error:
+        EndpointUpdateRequest.model_validate({field: None})
+
+    first_error = error.value.errors()[0]
+    assert first_error["loc"] == (field,)
+    assert "cannot be null" in first_error["msg"]
+
+
+@pytest.mark.parametrize("field", ["summary", "description", "pricing"])
+def test_endpoint_update_request_accepts_explicit_null_for_clearable_field(field: str) -> None:
+    request = EndpointUpdateRequest.model_validate({field: None})
+
+    assert getattr(request, field) is None
+    assert request.model_fields_set == {field}
+
+
+def test_endpoint_update_request_omits_unsent_fields_from_fields_set() -> None:
+    request = EndpointUpdateRequest.model_validate({"timeout_seconds": 45})
+
+    assert request.model_fields_set == {"timeout_seconds"}
+    assert request.name is None
+
+
+def test_endpoint_update_request_rejects_empty_payload() -> None:
+    with pytest.raises(ValidationError, match="at least one field must be provided"):
+        EndpointUpdateRequest.model_validate({})
+
+
+def test_endpoint_update_request_rejects_boolean_timeout_seconds() -> None:
+    with pytest.raises(ValidationError):
+        EndpointUpdateRequest.model_validate({"timeout_seconds": True})
+
+
+def test_endpoint_update_request_rejects_integer_is_enabled() -> None:
+    with pytest.raises(ValidationError):
+        EndpointUpdateRequest.model_validate({"is_enabled": 1})
+
+
+def test_endpoint_update_request_schema_hides_null_from_non_clearable_fields() -> None:
+    schema = EndpointUpdateRequest.model_json_schema()
+
+    name_schema = schema["properties"]["name"]
+    assert "anyOf" not in name_schema
+    assert "null" not in str(name_schema.get("type", ""))
+    assert "required" not in schema
