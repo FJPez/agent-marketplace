@@ -99,8 +99,7 @@ async def update_service(
 
     unknown_fields = set(updates) - SERVICE_UPDATE_FIELDS
     if unknown_fields:
-        unknown_field = sorted(unknown_fields)[0]
-        raise InvalidInputError(f"unknown update field: {unknown_field}")
+        raise InvalidInputError(f"unknown update fields: {', '.join(sorted(unknown_fields))}")
 
     now = datetime.now(UTC)
     service = await service_access.load_owned_service_for_update(

@@ -485,12 +485,12 @@ async def test_update_endpoint_rejects_unknown_field(
     endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
 
     async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
+        with pytest.raises(InvalidInputError, match="unknown update fields: bar, foo"):
             await update_endpoint(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"key": "new-key"},
+                updates={"foo": "x", "bar": "y", "key": "new-key"},
             )
 
 

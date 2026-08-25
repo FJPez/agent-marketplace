@@ -214,12 +214,12 @@ async def test_update_service_rejects_unknown_field(
     )
 
     async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
+        with pytest.raises(InvalidInputError, match="unknown update fields: bar, foo"):
             await update_service(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                updates={"slug": "new-slug"},
+                updates={"foo": "x", "bar": "y", "slug": "new-slug"},
             )
 
 

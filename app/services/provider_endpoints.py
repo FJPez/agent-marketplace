@@ -19,7 +19,7 @@ from app.core.service_fields import (
     normalize_upstream_path,
     validate_endpoint_timeout,
 )
-from app.core.upstream_targets import UnsafeUpstreamTargetError, validate_upstream_base_url
+from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation
 from app.db.models.pricing_model import PricingModel
 from app.db.models.provider_upstream import ProviderUpstream
@@ -148,8 +148,7 @@ async def update_endpoint(
 
     unknown_fields = set(updates) - ENDPOINT_UPDATE_FIELDS
     if unknown_fields:
-        unknown_field = sorted(unknown_fields)[0]
-        raise InvalidInputError(f"unknown update field: {unknown_field}")
+        raise InvalidInputError(f"unknown update fields: {', '.join(sorted(unknown_fields))}")
 
     now = datetime.now(UTC)
 
@@ -240,7 +239,7 @@ async def update_endpoint(
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
-    parsed_pricing = _parse_pricing(updates["pricing"]) if "pricing" in updates else None
+    parsed_pricing = _parse_pricing(updates.get("pricing"))
     pricing_plan = _plan_pricing(access_mode=target_access_mode, parsed=parsed_pricing)
 
     await _ensure_endpoint_update_allowed(
@@ -286,13 +285,10 @@ async def upsert_upstream(
     try:
         normalized_path = normalize_upstream_path(path)
         normalized_http_method = normalize_http_method(http_method)
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-    # Resolves DNS - must run before the first query so no transaction or row
-    # lock is held across the network I/O.
-    try:
+        # Resolves DNS - must run before the first query so no transaction or row
+        # lock is held across the network I/O.
         validated_base_url = validate_upstream_base_url(base_url, settings=settings)
-    except UnsafeUpstreamTargetError as exc:
+    except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
     locked_service_id = await service_access.lock_owned_service_by_endpoint(
@@ -390,18 +386,8 @@ def _ensure_active_endpoint_pricing_valid(
 ) -> None:
     if access_mode is not AccessMode.PAID:
         return
-    target: ParsedPricing | PricingModel | None = plan
-    if target is None and (
-        current_pricing is not None
-        and current_pricing.pricing_type is PricingModelType.FIXED_PER_CALL
-    ):
-        target = current_pricing
-    if (
-        target is None
-        or target.pricing_type is not PricingModelType.FIXED_PER_CALL
-        or target.amount_minor is None
-        or target.currency is None
-    ):
+    target: ParsedPricing | PricingModel | None = plan if plan is not None else current_pricing
+    if target is None or target.pricing_type is not PricingModelType.FIXED_PER_CALL:
         raise InvalidInputError(
             "active paid endpoints must define fixed_per_call pricing",
         )
@@ -469,13 +455,12 @@ def _parse_pricing(pricing: object) -> ParsedPricing | None:
     fields: dict[str, object] = {}
     for field_name, field_value in pricing.items():
         if not isinstance(field_name, str):
-            raise InvalidInputError(f"unknown pricing field: {field_name}")
+            raise InvalidInputError("pricing field names must be strings")
         fields[field_name] = field_value
 
     unknown_fields = set(fields) - PRICING_FIELDS
     if unknown_fields:
-        unknown_field = sorted(unknown_fields)[0]
-        raise InvalidInputError(f"unknown pricing field: {unknown_field}")
+        raise InvalidInputError(f"unknown pricing fields: {', '.join(sorted(unknown_fields))}")
 
     pricing_type = _parse_pricing_type(fields)
     amount_minor = _parse_amount_minor(fields)
