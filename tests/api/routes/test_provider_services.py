@@ -824,7 +824,7 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
     assert response.status_code == 422
     error = response.json()["detail"][0]
     assert error["loc"] == ["body", "http_method"]
-    assert "must be one of: PATCH, POST, PUT" in error["msg"]
+    assert error["msg"] == "Input should be 'POST', 'PUT' or 'PATCH'"
 
 
 @pytest.mark.asyncio

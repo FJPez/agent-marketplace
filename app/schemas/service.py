@@ -1,4 +1,4 @@
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AfterValidator,
@@ -19,8 +19,6 @@ from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
 from app.core.service_fields import (
     ENDPOINT_TIMEOUT_MAX_SECONDS,
-    HTTP_METHOD_MAX_LENGTH,
-    HTTP_METHOD_MIN_LENGTH,
     SERVICE_DESCRIPTION_MAX_LENGTH,
     SERVICE_NAME_MAX_LENGTH,
     SERVICE_SUMMARY_MAX_LENGTH,
@@ -28,7 +26,6 @@ from app.core.service_fields import (
     SLUG_MAX_LENGTH,
     TAG_MAX_LENGTH,
     UPSTREAM_PATH_MAX_LENGTH,
-    normalize_http_method,
     normalize_slug,
     normalize_tag,
     normalize_upstream_path,
@@ -71,16 +68,6 @@ Tag = Annotated[
     AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
-HttpMethod = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=HTTP_METHOD_MIN_LENGTH,
-        max_length=HTTP_METHOD_MAX_LENGTH,
-        pattern=r"^[A-Z]+$",
-    ),
-    AfterValidator(normalize_http_method),
-]
 
 
 def reject_explicit_null(value: object, info: ValidationInfo) -> object:
@@ -105,6 +92,7 @@ def require_a_field[ModelT: BaseModel](model: ModelT) -> ModelT:
 
 class ServiceCreateRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -114,7 +102,7 @@ class ServiceCreateRequest(BaseModel):
                     "description": "Exposes free and paid endpoints for guided walkthroughs.",
                 }
             ]
-        }
+        },
     )
 
     slug: Slug
@@ -153,13 +141,17 @@ class ServiceUpdateRequest(BaseModel):
 
 
 class ServiceTagsUpdateRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]})
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]},
+    )
 
     tags: Annotated[list[Tag], Field(max_length=SERVICE_TAGS_MAX_COUNT)]
 
 
 class EndpointCreateRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -184,7 +176,7 @@ class EndpointCreateRequest(BaseModel):
                     "is_enabled": True,
                 }
             ]
-        }
+        },
     )
 
     key: Slug
@@ -194,9 +186,16 @@ class EndpointCreateRequest(BaseModel):
     access_mode: AccessMode
     request_schema: SchemaObject
     response_schema: SchemaObject
-    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
-    is_enabled: bool = True
+    timeout_seconds: Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
+    is_enabled: StrictBool = True
     pricing: FixedPrice | None = None
+
+    @model_validator(mode="after")
+    def reject_price_on_free_endpoint(self) -> Self:
+        if self.access_mode is AccessMode.FREE and self.pricing is not None:
+            msg = "free endpoints cannot have a price"
+            raise ValueError(msg)
+        return self
 
 
 class EndpointUpdateRequest(BaseModel):
@@ -247,6 +246,7 @@ class EndpointUpdateRequest(BaseModel):
 
 class EndpointUpstreamRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -262,7 +262,7 @@ class EndpointUpstreamRequest(BaseModel):
                     },
                 }
             ]
-        }
+        },
     )
 
     base_url: HttpUrl
@@ -271,7 +271,7 @@ class EndpointUpstreamRequest(BaseModel):
         StringConstraints(strip_whitespace=True, min_length=1, max_length=UPSTREAM_PATH_MAX_LENGTH),
         AfterValidator(normalize_upstream_path),
     ]
-    http_method: HttpMethod
+    http_method: Literal["POST", "PUT", "PATCH"]
     config: SchemaObject = Field(default_factory=dict)
 
 

@@ -9,16 +9,6 @@ from sqlalchemy.orm import joinedload, selectinload
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
-from app.core.json_types import JsonObject
-from app.core.service_fields import (
-    normalize_endpoint_summary,
-    normalize_http_method,
-    normalize_service_description,
-    normalize_service_name,
-    normalize_slug,
-    normalize_upstream_path,
-    validate_endpoint_timeout,
-)
 from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation
 from app.db.models.endpoint_price import EndpointPrice
@@ -26,7 +16,11 @@ from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.pricing import FixedPrice
-from app.schemas.service import EndpointUpdateRequest
+from app.schemas.service import (
+    EndpointCreateRequest,
+    EndpointUpdateRequest,
+    EndpointUpstreamRequest,
+)
 from app.services import service_access
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 from app.services.revision_service import RevisionService, UpdateImpact
@@ -37,28 +31,8 @@ async def create_endpoint(
     session: AsyncSession,
     account_id: int,
     service_id: int,
-    key: str,
-    name: str,
-    summary: str | None,
-    description: str | None,
-    access_mode: AccessMode,
-    request_schema: JsonObject,
-    response_schema: JsonObject,
-    timeout_seconds: int,
-    is_enabled: bool,
-    price: FixedPrice | None,
+    request: EndpointCreateRequest,
 ) -> ServiceEndpoint:
-    try:
-        normalized_key = normalize_slug(key)
-        normalized_name = normalize_service_name(name)
-        normalized_summary = normalize_endpoint_summary(summary)
-        normalized_description = normalize_service_description(description)
-        normalized_timeout = validate_endpoint_timeout(timeout_seconds)
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-    if access_mode is AccessMode.FREE and price is not None:
-        raise InvalidInputError("free endpoints cannot have a price")
-
     service = await service_access.load_owned_service_for_update(
         session=session,
         account_id=account_id,
@@ -69,26 +43,26 @@ async def create_endpoint(
 
     endpoint = ServiceEndpoint(
         service_id=service.id,
-        key=normalized_key,
-        name=normalized_name,
-        summary=normalized_summary,
-        description=normalized_description,
-        access_mode=access_mode,
-        request_schema=request_schema,
-        response_schema=response_schema,
-        timeout_seconds=normalized_timeout,
-        is_enabled=is_enabled,
+        key=request.key,
+        name=request.name,
+        summary=request.summary,
+        description=request.description,
+        access_mode=request.access_mode,
+        request_schema=request.request_schema,
+        response_schema=request.response_schema,
+        timeout_seconds=request.timeout_seconds,
+        is_enabled=request.is_enabled,
         price=None,
         upstream=None,
     )
     session.add(endpoint)
     try:
         await session.flush()
-        if price is not None:
+        if request.pricing is not None:
             pricing_row = EndpointPrice(
                 endpoint_id=endpoint.id,
-                amount_minor=price.amount_minor,
-                currency=price.currency,
+                amount_minor=request.pricing.amount_minor,
+                currency=request.pricing.currency,
             )
             session.add(pricing_row)
             endpoint.price = pricing_row
@@ -244,17 +218,12 @@ async def upsert_upstream(
     settings: Settings,
     account_id: int,
     endpoint_id: int,
-    base_url: str,
-    path: str,
-    http_method: str,
-    config: JsonObject,
+    request: EndpointUpstreamRequest,
 ) -> None:
     try:
-        normalized_path = normalize_upstream_path(path)
-        normalized_http_method = normalize_http_method(http_method)
         # Resolves DNS - must run before the first query so no transaction or row
         # lock is held across the network I/O.
-        validated_base_url = validate_upstream_base_url(base_url, settings=settings)
+        validated_base_url = validate_upstream_base_url(str(request.base_url), settings=settings)
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
@@ -284,17 +253,17 @@ async def upsert_upstream(
         upstream = ProviderUpstream(
             endpoint_id=endpoint.id,
             base_url=validated_base_url,
-            path=normalized_path,
-            http_method=normalized_http_method,
-            config=config,
+            path=request.path,
+            http_method=request.http_method,
+            config=request.config,
         )
         session.add(upstream)
         endpoint.upstream = upstream
     else:
         upstream.base_url = validated_base_url
-        upstream.path = normalized_path
-        upstream.http_method = normalized_http_method
-        upstream.config = config
+        upstream.path = request.path
+        upstream.http_method = request.http_method
+        upstream.config = request.config
         upstream.updated_at = now
 
     await session.commit()

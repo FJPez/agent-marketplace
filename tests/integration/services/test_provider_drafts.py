@@ -5,10 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import create_provider_account_record, create_service_record
 
 from app.core.enums import ServiceLifecycle
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
-from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
+from app.core.errors import ConflictError, InvalidStateError, NotFoundError
 from app.db.models import Service, ServiceRevision, ServiceTag
-from app.schemas.service import ServiceUpdateRequest
+from app.schemas.service import (
+    ServiceCreateRequest,
+    ServiceTagsUpdateRequest,
+    ServiceUpdateRequest,
+)
 from app.services.provider_drafts import (
     create_service,
     get_service,
@@ -32,10 +35,12 @@ async def test_create_service_persists_draft_service_with_stripped_fields(
         service = await create_service(
             session=session,
             account_id=account_id,
-            slug="demo-agent-service",
-            name="  My Name  ",
-            summary="  My Summary  ",
-            description="  My Description  ",
+            request=ServiceCreateRequest(
+                slug="demo-agent-service",
+                name="  My Name  ",
+                summary="  My Summary  ",
+                description="  My Description  ",
+            ),
         )
 
     async with db_session_factory() as session:
@@ -59,10 +64,11 @@ async def test_create_service_returns_service_with_loaded_relations(
         created = await create_service(
             session=session,
             account_id=account_id,
-            slug="loaded-relations-service",
-            name="Loaded Relations",
-            summary="A summary",
-            description=None,
+            request=ServiceCreateRequest(
+                slug="loaded-relations-service",
+                name="Loaded Relations",
+                summary="A summary",
+            ),
         )
 
     assert created.slug == "loaded-relations-service"
@@ -80,10 +86,11 @@ async def test_create_service_rejects_duplicate_slug(
         await create_service(
             session=session,
             account_id=account_id,
-            slug="translation-service",
-            name="Translation Service",
-            summary="A summary",
-            description=None,
+            request=ServiceCreateRequest(
+                slug="translation-service",
+                name="Translation Service",
+                summary="A summary",
+            ),
         )
 
     async with db_session_factory() as session:
@@ -91,41 +98,11 @@ async def test_create_service_rejects_duplicate_slug(
             await create_service(
                 session=session,
                 account_id=other_account_id,
-                slug="translation-service",
-                name="Another Name",
-                summary="Another summary",
-                description=None,
-            )
-
-
-@pytest.mark.parametrize(
-    ("slug", "name", "summary", "description"),
-    [
-        ("Bad_Slug", "Name", "Summary", None),
-        ("123", "Name", "Summary", None),
-        ("valid-slug", "", "Summary", None),
-        ("valid-slug", "x" * 256, "Summary", None),
-        ("valid-slug", "Name", "", None),
-    ],
-)
-async def test_create_service_rejects_invalid_input(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    slug: str,
-    name: str,
-    summary: str,
-    description: str | None,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await create_service(
-                session=session,
-                account_id=account_id,
-                slug=slug,
-                name=name,
-                summary=summary,
-                description=description,
+                request=ServiceCreateRequest(
+                    slug="translation-service",
+                    name="Another Name",
+                    summary="Another summary",
+                ),
             )
 
 
@@ -407,7 +384,7 @@ async def test_replace_tags_persists_normalized_sorted_tags(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            tags=["  Demo ", "translation", "demo"],
+            request=ServiceTagsUpdateRequest(tags=["  Demo ", "translation", "demo"]),
         )
 
     async with db_session_factory() as session:
@@ -439,7 +416,7 @@ async def test_replace_tags_fully_replaces_existing_rows(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            tags=["billing"],
+            request=ServiceTagsUpdateRequest(tags=["billing"]),
         )
 
     async with db_session_factory() as session:
@@ -469,7 +446,7 @@ async def test_replace_tags_keeps_overlapping_tags_and_returns_new_set(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            tags=["demo", "billing"],
+            request=ServiceTagsUpdateRequest(tags=["demo", "billing"]),
         )
         returned_tags = sorted(service_tag.tag for service_tag in service.tags)
 
@@ -491,54 +468,11 @@ async def test_create_service_raises_integrity_error_for_unknown_account(
             await create_service(
                 session=session,
                 account_id=999_999,
-                slug="orphaned-service",
-                name="Orphaned",
-                summary="A summary",
-                description=None,
-            )
-
-
-@pytest.mark.parametrize("tag", ["x" * 65, "bad tag!"])
-async def test_replace_tags_rejects_invalid_tag_values(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    tag: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await replace_tags(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                tags=[tag],
-            )
-
-
-async def test_replace_tags_rejects_more_than_max_tags(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await replace_tags(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                tags=[f"tag-{index}" for index in range(SERVICE_TAGS_MAX_COUNT + 1)],
+                request=ServiceCreateRequest(
+                    slug="orphaned-service",
+                    name="Orphaned",
+                    summary="A summary",
+                ),
             )
 
 
@@ -559,5 +493,5 @@ async def test_replace_tags_rejects_active_lifecycle(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                tags=["demo"],
+                request=ServiceTagsUpdateRequest(tags=["demo"]),
             )

@@ -6,20 +6,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.enums import ServiceLifecycle
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
-from app.core.service_fields import (
-    SERVICE_TAGS_MAX_COUNT,
-    normalize_service_description,
-    normalize_service_name,
-    normalize_service_summary,
-    normalize_slug,
-    normalize_tag,
-)
+from app.core.errors import ConflictError, InvalidStateError
 from app.db.errors import is_unique_violation
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
-from app.schemas.service import ServiceUpdateRequest
+from app.schemas.service import (
+    ServiceCreateRequest,
+    ServiceTagsUpdateRequest,
+    ServiceUpdateRequest,
+)
 from app.services import service_access
 
 
@@ -27,25 +23,14 @@ async def create_service(
     *,
     session: AsyncSession,
     account_id: int,
-    slug: str,
-    name: str,
-    summary: str,
-    description: str | None,
+    request: ServiceCreateRequest,
 ) -> Service:
-    try:
-        normalized_slug = normalize_slug(slug)
-        normalized_name = normalize_service_name(name)
-        normalized_summary = normalize_service_summary(summary)
-        normalized_description = normalize_service_description(description)
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-
     service = Service(
         provider_account_id=account_id,
-        slug=normalized_slug,
-        name=normalized_name,
-        summary=normalized_summary,
-        description=normalized_description,
+        slug=request.slug,
+        name=request.name,
+        summary=request.summary,
+        description=request.description,
         tags=[],
         endpoints=[],
     )
@@ -126,11 +111,8 @@ async def replace_tags(
     session: AsyncSession,
     account_id: int,
     service_id: int,
-    tags: list[str],
+    request: ServiceTagsUpdateRequest,
 ) -> Service:
-    if len(tags) > SERVICE_TAGS_MAX_COUNT:
-        raise InvalidInputError(f"at most {SERVICE_TAGS_MAX_COUNT} tags are allowed")
-
     now = datetime.now(UTC)
     service = await service_access.load_owned_service_for_update(
         session=session,
@@ -140,11 +122,7 @@ async def replace_tags(
     if service.lifecycle is not ServiceLifecycle.DRAFT:
         raise InvalidStateError("service is not mutable outside draft")
 
-    try:
-        normalized_tags = {normalize_tag(tag) for tag in tags}
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-
+    normalized_tags = set(request.tags)
     existing_tags = {service_tag.tag for service_tag in service.tags}
     for service_tag in list(service.tags):
         if service_tag.tag not in normalized_tags:
