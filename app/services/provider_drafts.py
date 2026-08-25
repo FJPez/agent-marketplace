@@ -19,10 +19,8 @@ from app.db.errors import is_unique_violation
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_tag import ServiceTag
+from app.schemas.service import ServiceUpdateRequest
 from app.services import service_access
-from app.services.revision_service import RevisionService, UpdateImpact
-
-SERVICE_UPDATE_FIELDS = frozenset({"name", "summary", "description"})
 
 
 async def create_service(
@@ -92,50 +90,33 @@ async def update_service(
     session: AsyncSession,
     account_id: int,
     service_id: int,
-    updates: dict[str, str | None],
+    changes: ServiceUpdateRequest,
 ) -> Service:
-    if not updates:
-        raise InvalidInputError("at least one field must be provided")
-
-    unknown_fields = set(updates) - SERVICE_UPDATE_FIELDS
-    if unknown_fields:
-        raise InvalidInputError(f"unknown update fields: {', '.join(sorted(unknown_fields))}")
-
-    now = datetime.now(UTC)
     service = await service_access.load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
     )
-    update_fields: dict[str, str | None] = {}
-    try:
-        if "name" in updates:
-            name = updates["name"]
-            if name is None:
-                raise InvalidInputError("name cannot be null")
-            update_fields["name"] = normalize_service_name(name)
-        if "summary" in updates:
-            summary = updates["summary"]
-            if summary is None:
-                raise InvalidInputError("summary cannot be null")
-            update_fields["summary"] = normalize_service_summary(summary)
-        if "description" in updates:
-            update_fields["description"] = normalize_service_description(updates["description"])
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-    impact = RevisionService.classify_service_update(update_fields)
-    _ensure_service_update_allowed(service, impact=impact)
 
-    for attribute_name, value in update_fields.items():
+    # Only descriptive columns are patchable and none live in another table, so a
+    # single effective-changes mapping is enough here (contrast update_endpoint,
+    # where pricing is tracked separately).
+    supplied = changes.model_dump(exclude_unset=True)
+    effective_changes = {
+        name: value for name, value in supplied.items() if value != getattr(service, name)
+    }
+    if not effective_changes:
+        return service
+
+    _ensure_service_update_allowed(service)
+
+    # Stamped after the lock wait so the timestamp reflects when the row was
+    # actually mutated.
+    now = datetime.now(UTC)
+
+    for attribute_name, value in effective_changes.items():
         setattr(service, attribute_name, value)
     service.updated_at = now
-
-    if service.lifecycle is ServiceLifecycle.ACTIVE:
-        await RevisionService(session).create_revision_if_material_service_update(
-            service,
-            update_fields=update_fields,
-        )
-
     await session.commit()
     return service
 
@@ -175,9 +156,7 @@ async def replace_tags(
     return service
 
 
-def _ensure_service_update_allowed(service: Service, *, impact: UpdateImpact) -> None:
-    if service.lifecycle is ServiceLifecycle.DRAFT:
-        return
-    if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.NON_MATERIAL:
+def _ensure_service_update_allowed(service: Service) -> None:
+    if service.lifecycle in {ServiceLifecycle.DRAFT, ServiceLifecycle.ACTIVE}:
         return
     raise InvalidStateError("service is not mutable outside draft")

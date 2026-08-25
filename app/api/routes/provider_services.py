@@ -148,7 +148,7 @@ async def update_provider_service(
         session=session,
         account_id=actor.account_id,
         service_id=service_id,
-        updates=request.model_dump(exclude_unset=True),
+        changes=request,
     )
     return ServiceResponse.from_model(updated)
 

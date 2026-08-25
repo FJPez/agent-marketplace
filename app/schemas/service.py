@@ -83,6 +83,26 @@ HttpMethod = Annotated[
 ]
 
 
+def reject_explicit_null(value: object, info: ValidationInfo) -> object:
+    """Reject an explicit null sent for a non-clearable field.
+
+    Field validators never run for defaults, so this fires only when the client
+    actually sent a null.
+    """
+    if value is None:
+        msg = f"{info.field_name} cannot be null"
+        raise ValueError(msg)
+    return value
+
+
+def require_a_field[ModelT: BaseModel](model: ModelT) -> ModelT:
+    """Reject a partial-update payload that carries no fields at all."""
+    if not model.model_fields_set:
+        msg = "at least one field must be provided"
+        raise ValueError(msg)
+    return model
+
+
 class ServiceCreateRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
@@ -104,7 +124,15 @@ class ServiceCreateRequest(BaseModel):
 
 
 class ServiceUpdateRequest(BaseModel):
+    """Partial service update.
+
+    Omitted fields are left unchanged. ``description`` is clearable and accepts
+    an explicit null. ``name`` and ``summary`` are non-clearable: sending an
+    explicit null is a client error rather than a request to unset the value.
+    """
+
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -113,12 +141,15 @@ class ServiceUpdateRequest(BaseModel):
                     "description": "Optional long-form provider description.",
                 }
             ]
-        }
+        },
     )
 
-    name: ServiceName | None = None
-    summary: Summary | None = None
+    name: ServiceName | SkipJsonSchema[None] = None
+    summary: Summary | SkipJsonSchema[None] = None
     description: Description | None = None
+
+    validate_non_clearable = field_validator("name", "summary")(reject_explicit_null)
+    validate_any_field_supplied = model_validator(mode="after")(require_a_field)
 
 
 class ServiceTagsUpdateRequest(BaseModel):
@@ -203,29 +234,15 @@ class EndpointUpdateRequest(BaseModel):
     is_enabled: StrictBool | SkipJsonSchema[None] = None
     pricing: FixedPrice | None = None
 
-    @field_validator(
+    validate_non_clearable = field_validator(
         "name",
         "access_mode",
         "request_schema",
         "response_schema",
         "timeout_seconds",
         "is_enabled",
-    )
-    @classmethod
-    def reject_explicit_null(cls, value: object, info: ValidationInfo) -> object:
-        # Field validators never run for defaults, so this fires only when the
-        # client actually sent a null for a non-clearable field.
-        if value is None:
-            msg = f"{info.field_name} cannot be null"
-            raise ValueError(msg)
-        return value
-
-    @model_validator(mode="after")
-    def require_a_field(self) -> Self:
-        if not self.model_fields_set:
-            msg = "at least one field must be provided"
-            raise ValueError(msg)
-        return self
+    )(reject_explicit_null)
+    validate_any_field_supplied = model_validator(mode="after")(require_a_field)
 
 
 class EndpointUpstreamRequest(BaseModel):

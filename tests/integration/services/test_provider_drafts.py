@@ -8,6 +8,7 @@ from app.core.enums import ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
 from app.db.models import Service, ServiceRevision, ServiceTag
+from app.schemas.service import ServiceUpdateRequest
 from app.services.provider_drafts import (
     create_service,
     get_service,
@@ -181,71 +182,6 @@ async def test_get_service_raises_not_found_for_other_accounts_service(
             await get_service(session=session, account_id=account_id, service_id=service_id)
 
 
-async def test_update_service_rejects_empty_updates(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_service(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                updates={},
-            )
-
-
-async def test_update_service_rejects_unknown_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match="unknown update fields: bar, foo"):
-            await update_service(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                updates={"foo": "x", "bar": "y", "slug": "new-slug"},
-            )
-
-
-@pytest.mark.parametrize("field", ["name", "summary"])
-async def test_update_service_rejects_null_required_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    field: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_service(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                updates={field: None},
-            )
-
-
 async def test_update_service_clears_description_when_set_to_null(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -263,7 +199,7 @@ async def test_update_service_clears_description_when_set_to_null(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            updates={"description": None},
+            changes=ServiceUpdateRequest(description=None),
         )
 
     async with db_session_factory() as session:
@@ -294,7 +230,7 @@ async def test_update_service_draft_persists_name_and_summary_and_bumps_updated_
             session=session,
             account_id=account_id,
             service_id=service_id,
-            updates={"name": "  New Name  ", "summary": "  New Summary  "},
+            changes=ServiceUpdateRequest(name="  New Name  ", summary="  New Summary  "),
         )
 
     async with db_session_factory() as session:
@@ -322,11 +258,11 @@ async def test_update_service_active_non_material_update_succeeds_without_revisi
             session=session,
             account_id=account_id,
             service_id=service_id,
-            updates={
-                "name": "Active Name",
-                "summary": "Active Summary",
-                "description": "Active Description",
-            },
+            changes=ServiceUpdateRequest(
+                name="Active Name",
+                summary="Active Summary",
+                description="Active Description",
+            ),
         )
 
     async with db_session_factory() as session:
@@ -342,6 +278,96 @@ async def test_update_service_active_non_material_update_succeeds_without_revisi
     assert persisted is not None
     assert persisted.name == "Active Name"
     assert revision_count == 0
+
+
+async def test_update_service_ignores_identical_values_without_touching_updated_at(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        name="Same Name",
+        summary="Same Summary",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+
+    async with db_session_factory() as session:
+        before = await session.get(Service, service_id)
+        assert before is not None
+        before_updated_at = before.updated_at
+
+    async with db_session_factory() as session:
+        await update_service(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            changes=ServiceUpdateRequest(name="Same Name", summary="Same Summary"),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(Service, service_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == before_updated_at
+
+
+async def test_update_service_treats_normalized_identical_value_as_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        name="Same",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+
+    async with db_session_factory() as session:
+        before = await session.get(Service, service_id)
+        assert before is not None
+        before_updated_at = before.updated_at
+
+    async with db_session_factory() as session:
+        await update_service(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            changes=ServiceUpdateRequest(name="  Same  "),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(Service, service_id)
+
+    assert persisted is not None
+    assert persisted.name == "Same"
+    assert persisted.updated_at == before_updated_at
+
+
+async def test_update_service_no_op_on_suspended_service_returns_service(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        name="Suspended Name",
+        lifecycle=ServiceLifecycle.SUSPENDED,
+    )
+
+    async with db_session_factory() as session:
+        service = await update_service(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            changes=ServiceUpdateRequest(name="Suspended Name"),
+        )
+
+    assert service.id == service_id
+    assert service.name == "Suspended Name"
 
 
 async def test_update_service_suspended_lifecycle_raises_invalid_state(
@@ -361,7 +387,7 @@ async def test_update_service_suspended_lifecycle_raises_invalid_state(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                updates={"name": "New Name"},
+                changes=ServiceUpdateRequest(name="New Name"),
             )
 
 
