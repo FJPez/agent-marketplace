@@ -1,32 +1,16 @@
-from typing import Annotated
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter
 
 from app.api.deps.database import SessionDep
+from app.api.deps.service_ref import ServiceRefPath
 from app.schemas.discovery import (
     PublicServiceDetail,
     PublicServiceListItem,
     PublicServicePricingResponse,
-    PublicServiceRef,
     PublicServiceSchemaResponse,
-    parse_public_service_ref,
 )
 from app.services import discovery
 
 router = APIRouter(tags=["discovery"])
-
-
-def require_public_service_ref(service_id_or_slug: str) -> PublicServiceRef:
-    try:
-        return parse_public_service_ref(service_id_or_slug)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="service identifier must be a service id or a service slug",
-        ) from exc
-
-
-ServiceRefPath = Annotated[PublicServiceRef, Depends(require_public_service_ref)]
 
 
 @router.get(

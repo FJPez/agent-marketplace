@@ -5,12 +5,8 @@ from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.service_fields import SLUG_MAX_LENGTH
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
-from app.schemas.discovery import (
-    SERVICE_ID_MAX,
-    PublicEndpointPricing,
-    PublicServiceDetail,
-    parse_public_service_ref,
-)
+from app.schemas.discovery import PublicEndpointPricing, PublicServiceDetail
+from app.schemas.service_ref import SERVICE_ID_MAX, parse_public_service_ref
 
 
 def _build_endpoint(

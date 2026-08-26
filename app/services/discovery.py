@@ -8,7 +8,7 @@ from app.core.enums import ServiceLifecycle
 from app.core.errors import NotFoundError
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
-from app.schemas.discovery import PublicServiceRef
+from app.schemas.service_ref import PublicServiceRef
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
 
 
