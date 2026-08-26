@@ -128,13 +128,9 @@ class PublicServiceDetail(PublicServiceListItem):
 
     @classmethod
     def from_model(cls, service: Service) -> Self:
+        list_item = PublicServiceListItem.from_model(service)
         return cls(
-            id=service.id,
-            slug=service.slug,
-            name=service.name,
-            summary=service.summary,
-            description=service.description,
-            tags=sorted(tag.tag for tag in service.tags),
+            **dict(list_item),
             endpoints=[
                 PublicEndpointSummary.from_model(endpoint)
                 for endpoint in service.endpoints
