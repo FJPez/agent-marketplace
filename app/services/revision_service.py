@@ -134,14 +134,3 @@ class RevisionService:
         if impact is UpdateImpact.MATERIAL:
             await self.create_revision(service)
         return impact
-
-    async def create_revision_if_material_endpoint_update(
-        self,
-        service: Service,
-        *,
-        update_fields: Collection[str],
-    ) -> UpdateImpact:
-        impact = self.classify_endpoint_update(update_fields)
-        if impact is UpdateImpact.MATERIAL:
-            await self.create_revision(service)
-        return impact
