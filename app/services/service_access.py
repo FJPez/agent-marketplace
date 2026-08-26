@@ -15,6 +15,8 @@ async def load_owned_service(
     account_id: int,
     service_id: int,
 ) -> Service:
+    # populate_existing: rows already in the identity map may predate a lock
+    # wait; refresh them so callers see the state the lock now protects.
     statement = (
         select(Service)
         .options(
@@ -22,8 +24,6 @@ async def load_owned_service(
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
-        # Rows already in the identity map may predate a lock wait; refresh
-        # them so callers see the state the lock now protects.
         .execution_options(populate_existing=True)
         .where(
             Service.id == service_id,
