@@ -83,6 +83,8 @@ async def lock_owned_service_by_endpoint(
     account_id: int,
     endpoint_id: int,
 ) -> int:
+    # The service row is the single serialization point for its graph, so
+    # only it is locked; the joined endpoint row is not.
     locked_service_id = await session.scalar(
         select(Service.id)
         .join(Service.endpoints)
@@ -90,7 +92,7 @@ async def lock_owned_service_by_endpoint(
             ServiceEndpoint.id == endpoint_id,
             Service.provider_account_id == account_id,
         )
-        .with_for_update(),
+        .with_for_update(of=Service),
     )
     if locked_service_id is None:
         raise NotFoundError("endpoint not found")
