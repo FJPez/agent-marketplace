@@ -1,6 +1,7 @@
 import asyncio
 
 import pytest
+from pydantic import HttpUrl
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
@@ -17,6 +18,7 @@ from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.db.models import Service, ServiceRevision
 from app.repositories.service_repo import ServiceRepository
 from app.repositories.service_revision_repo import ServiceRevisionRepository
+from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
 from app.services import provider_endpoints, service_access
 from app.services.publish_service import PublishService
 
@@ -141,7 +143,7 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
                 session=session,
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": timeout_seconds},
+                changes=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
             )
 
     first_update = asyncio.create_task(update_timeout(45))
@@ -247,10 +249,11 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
                 settings=_upstream_settings(),
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                base_url="http://127.0.0.1:9000",
-                path="/mutated",
-                http_method="POST",
-                config={},
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl("http://127.0.0.1:9000"),
+                    path="/mutated",
+                    http_method="POST",
+                ),
             )
 
     publish_task = asyncio.create_task(publish_service())

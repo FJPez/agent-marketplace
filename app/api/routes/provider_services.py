@@ -63,10 +63,7 @@ async def create_provider_service(
     created = await provider_drafts.create_service(
         session=session,
         account_id=actor.account_id,
-        slug=request.slug,
-        name=request.name,
-        summary=request.summary,
-        description=request.description,
+        request=request,
     )
     return ServiceResponse.from_model(created)
 
@@ -148,7 +145,7 @@ async def update_provider_service(
         session=session,
         account_id=actor.account_id,
         service_id=service_id,
-        updates=request.model_dump(exclude_unset=True),
+        changes=request,
     )
     return ServiceResponse.from_model(updated)
 
@@ -185,7 +182,7 @@ async def replace_provider_service_tags(
         session=session,
         account_id=actor.account_id,
         service_id=service_id,
-        tags=request.tags,
+        request=request,
     )
     return ServiceResponse.from_model(updated)
 
@@ -268,16 +265,7 @@ async def create_provider_endpoint(
         session=session,
         account_id=actor.account_id,
         service_id=service_id,
-        key=request.key,
-        name=request.name,
-        summary=request.summary,
-        description=request.description,
-        access_mode=request.access_mode,
-        request_schema=request.request_schema,
-        response_schema=request.response_schema,
-        timeout_seconds=request.timeout_seconds,
-        is_enabled=request.is_enabled,
-        price=request.pricing,
+        request=request,
     )
     return EndpointResponse.from_model(endpoint)
 
@@ -314,14 +302,11 @@ async def update_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
 ) -> EndpointResponse:
-    updates = request.model_dump(exclude_unset=True, exclude={"pricing"})
-    if "pricing" in request.model_fields_set:
-        updates["pricing"] = request.pricing
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
-        updates=updates,
+        changes=request,
     )
     return EndpointResponse.from_model(endpoint)
 
@@ -378,9 +363,6 @@ async def put_provider_endpoint_upstream(
         settings=settings,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
-        base_url=str(request.base_url),
-        path=request.path,
-        http_method=request.http_method,
-        config=request.config,
+        request=request,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

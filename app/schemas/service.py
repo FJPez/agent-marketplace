@@ -1,4 +1,4 @@
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     AfterValidator,
@@ -6,15 +6,19 @@ from pydantic import (
     ConfigDict,
     Field,
     HttpUrl,
+    StrictBool,
+    StrictInt,
     StringConstraints,
+    ValidationInfo,
+    field_validator,
+    model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
 from app.core.service_fields import (
     ENDPOINT_TIMEOUT_MAX_SECONDS,
-    HTTP_METHOD_MAX_LENGTH,
-    HTTP_METHOD_MIN_LENGTH,
     SERVICE_DESCRIPTION_MAX_LENGTH,
     SERVICE_NAME_MAX_LENGTH,
     SERVICE_SUMMARY_MAX_LENGTH,
@@ -22,7 +26,6 @@ from app.core.service_fields import (
     SLUG_MAX_LENGTH,
     TAG_MAX_LENGTH,
     UPSTREAM_PATH_MAX_LENGTH,
-    normalize_http_method,
     normalize_slug,
     normalize_tag,
     normalize_upstream_path,
@@ -65,20 +68,31 @@ Tag = Annotated[
     AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
-HttpMethod = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=HTTP_METHOD_MIN_LENGTH,
-        max_length=HTTP_METHOD_MAX_LENGTH,
-        pattern=r"^[A-Z]+$",
-    ),
-    AfterValidator(normalize_http_method),
-]
+
+
+def reject_explicit_null(value: object, info: ValidationInfo) -> object:
+    """Reject an explicit null sent for a non-clearable field.
+
+    Field validators never run for defaults, so this fires only when the client
+    actually sent a null.
+    """
+    if value is None:
+        msg = f"{info.field_name} cannot be null"
+        raise ValueError(msg)
+    return value
+
+
+def require_a_field[ModelT: BaseModel](model: ModelT) -> ModelT:
+    """Reject a partial-update payload that carries no fields at all."""
+    if not model.model_fields_set:
+        msg = "at least one field must be provided"
+        raise ValueError(msg)
+    return model
 
 
 class ServiceCreateRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -88,7 +102,7 @@ class ServiceCreateRequest(BaseModel):
                     "description": "Exposes free and paid endpoints for guided walkthroughs.",
                 }
             ]
-        }
+        },
     )
 
     slug: Slug
@@ -98,7 +112,15 @@ class ServiceCreateRequest(BaseModel):
 
 
 class ServiceUpdateRequest(BaseModel):
+    """Partial service update.
+
+    Omitted fields are left unchanged. ``description`` is clearable and accepts
+    an explicit null. ``name`` and ``summary`` are non-clearable: sending an
+    explicit null is a client error rather than a request to unset the value.
+    """
+
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -107,22 +129,29 @@ class ServiceUpdateRequest(BaseModel):
                     "description": "Optional long-form provider description.",
                 }
             ]
-        }
+        },
     )
 
-    name: ServiceName | None = None
-    summary: Summary | None = None
+    name: ServiceName | SkipJsonSchema[None] = None
+    summary: Summary | SkipJsonSchema[None] = None
     description: Description | None = None
+
+    validate_non_clearable = field_validator("name", "summary")(reject_explicit_null)
+    validate_any_field_supplied = model_validator(mode="after")(require_a_field)
 
 
 class ServiceTagsUpdateRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]})
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"examples": [{"tags": ["demo", "translation"]}]},
+    )
 
     tags: Annotated[list[Tag], Field(max_length=SERVICE_TAGS_MAX_COUNT)]
 
 
 class EndpointCreateRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -147,7 +176,7 @@ class EndpointCreateRequest(BaseModel):
                     "is_enabled": True,
                 }
             ]
-        }
+        },
     )
 
     key: Slug
@@ -157,13 +186,29 @@ class EndpointCreateRequest(BaseModel):
     access_mode: AccessMode
     request_schema: SchemaObject
     response_schema: SchemaObject
-    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
-    is_enabled: bool = True
+    timeout_seconds: Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
+    is_enabled: StrictBool = True
     pricing: FixedPrice | None = None
+
+    @model_validator(mode="after")
+    def reject_price_on_free_endpoint(self) -> Self:
+        if self.access_mode is AccessMode.FREE and self.pricing is not None:
+            msg = "free endpoints cannot have a price"
+            raise ValueError(msg)
+        return self
 
 
 class EndpointUpdateRequest(BaseModel):
+    """Partial endpoint update.
+
+    Omitted fields are left unchanged. ``summary``, ``description``, and
+    ``pricing`` are clearable and accept an explicit null. Every other field is
+    non-clearable: sending an explicit null is a client error rather than a
+    request to unset the value.
+    """
+
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -173,22 +218,35 @@ class EndpointUpdateRequest(BaseModel):
                     "pricing": {"amount_minor": 250, "currency": "USD"},
                 }
             ]
-        }
+        },
     )
 
-    name: ServiceName | None = None
+    name: ServiceName | SkipJsonSchema[None] = None
     summary: Summary | None = None
     description: Description | None = None
-    access_mode: AccessMode | None = None
-    request_schema: SchemaObject | None = None
-    response_schema: SchemaObject | None = None
-    timeout_seconds: Annotated[int, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | None = None
-    is_enabled: bool | None = None
+    access_mode: AccessMode | SkipJsonSchema[None] = None
+    request_schema: SchemaObject | SkipJsonSchema[None] = None
+    response_schema: SchemaObject | SkipJsonSchema[None] = None
+    timeout_seconds: (
+        Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | SkipJsonSchema[None]
+    ) = None
+    is_enabled: StrictBool | SkipJsonSchema[None] = None
     pricing: FixedPrice | None = None
+
+    validate_non_clearable = field_validator(
+        "name",
+        "access_mode",
+        "request_schema",
+        "response_schema",
+        "timeout_seconds",
+        "is_enabled",
+    )(reject_explicit_null)
+    validate_any_field_supplied = model_validator(mode="after")(require_a_field)
 
 
 class EndpointUpstreamRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -204,7 +262,7 @@ class EndpointUpstreamRequest(BaseModel):
                     },
                 }
             ]
-        }
+        },
     )
 
     base_url: HttpUrl
@@ -213,7 +271,7 @@ class EndpointUpstreamRequest(BaseModel):
         StringConstraints(strip_whitespace=True, min_length=1, max_length=UPSTREAM_PATH_MAX_LENGTH),
         AfterValidator(normalize_upstream_path),
     ]
-    http_method: HttpMethod
+    http_method: Literal["POST", "PUT", "PATCH"]
     config: SchemaObject = Field(default_factory=dict)
 
 

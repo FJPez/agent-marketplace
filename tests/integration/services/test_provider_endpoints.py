@@ -1,4 +1,5 @@
 import pytest
+from pydantic import HttpUrl
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
@@ -7,6 +8,7 @@ from tests.fixtures.domain import (
     create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
+    create_upstream_record,
 )
 
 from app.core.config import Settings
@@ -15,9 +17,13 @@ from app.core.errors import ConflictError, InvalidInputError, InvalidStateError,
 from app.core.json_types import JsonObject
 from app.db.models import EndpointPrice, ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
 from app.schemas.pricing import FixedPrice
+from app.schemas.service import (
+    EndpointCreateRequest,
+    EndpointUpdateRequest,
+    EndpointUpstreamRequest,
+)
 from app.services.provider_endpoints import (
     create_endpoint,
-    get_endpoint,
     update_endpoint,
     upsert_upstream,
 )
@@ -63,16 +69,17 @@ async def test_create_endpoint_free_creates_no_pricing_row(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            key="free-ping",
-            name="  Free Ping  ",
-            summary="  A summary  ",
-            description="  A description  ",
-            access_mode=AccessMode.FREE,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=None,
+            request=EndpointCreateRequest(
+                key="free-ping",
+                name="  Free Ping  ",
+                summary="  A summary  ",
+                description="  A description  ",
+                access_mode=AccessMode.FREE,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+            ),
         )
 
     async with db_session_factory() as session:
@@ -102,16 +109,16 @@ async def test_create_endpoint_persists_paid_endpoint_with_fixed_pricing(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            key="paid-call",
-            name="Paid Call",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.PAID,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=FixedPrice(amount_minor=250, currency="USD"),
+            request=EndpointCreateRequest(
+                key="paid-call",
+                name="Paid Call",
+                access_mode=AccessMode.PAID,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+                pricing=FixedPrice(amount_minor=250, currency="USD"),
+            ),
         )
 
     async with db_session_factory() as session:
@@ -133,16 +140,15 @@ async def test_create_endpoint_paid_without_pricing_creates_no_pricing_row(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            key="paid-no-pricing",
-            name="Paid No Pricing",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.PAID,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=None,
+            request=EndpointCreateRequest(
+                key="paid-no-pricing",
+                name="Paid No Pricing",
+                access_mode=AccessMode.PAID,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+            ),
         )
 
     async with db_session_factory() as session:
@@ -162,16 +168,15 @@ async def test_create_endpoint_returns_endpoint_with_loaded_relations(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            key="loaded-relations",
-            name="Loaded Relations",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.PAID,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=None,
+            request=EndpointCreateRequest(
+                key="loaded-relations",
+                name="Loaded Relations",
+                access_mode=AccessMode.PAID,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+            ),
         )
 
     assert created.key == "loaded-relations"
@@ -190,16 +195,15 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
             session=session,
             account_id=account_id,
             service_id=service_id,
-            key="dup-key",
-            name="Endpoint",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.FREE,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=None,
+            request=EndpointCreateRequest(
+                key="dup-key",
+                name="Endpoint",
+                access_mode=AccessMode.FREE,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+            ),
         )
 
     async with db_session_factory() as session:
@@ -208,16 +212,15 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                key="dup-key",
-                name="Endpoint 2",
-                summary=None,
-                description=None,
-                access_mode=AccessMode.FREE,
-                request_schema=REQUEST_SCHEMA,
-                response_schema=RESPONSE_SCHEMA,
-                timeout_seconds=30,
-                is_enabled=True,
-                price=None,
+                request=EndpointCreateRequest(
+                    key="dup-key",
+                    name="Endpoint 2",
+                    access_mode=AccessMode.FREE,
+                    request_schema=REQUEST_SCHEMA,
+                    response_schema=RESPONSE_SCHEMA,
+                    timeout_seconds=30,
+                    is_enabled=True,
+                ),
             )
 
 
@@ -241,16 +244,15 @@ async def test_create_endpoint_allows_same_key_different_service(
             session=session,
             account_id=account_id,
             service_id=service_a_id,
-            key="shared-key",
-            name="Endpoint A",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.FREE,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=None,
+            request=EndpointCreateRequest(
+                key="shared-key",
+                name="Endpoint A",
+                access_mode=AccessMode.FREE,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+            ),
         )
 
     async with db_session_factory() as session:
@@ -258,60 +260,19 @@ async def test_create_endpoint_allows_same_key_different_service(
             session=session,
             account_id=account_id,
             service_id=service_b_id,
-            key="shared-key",
-            name="Endpoint B",
-            summary=None,
-            description=None,
-            access_mode=AccessMode.FREE,
-            request_schema=REQUEST_SCHEMA,
-            response_schema=RESPONSE_SCHEMA,
-            timeout_seconds=30,
-            is_enabled=True,
-            price=None,
+            request=EndpointCreateRequest(
+                key="shared-key",
+                name="Endpoint B",
+                access_mode=AccessMode.FREE,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                timeout_seconds=30,
+                is_enabled=True,
+            ),
         )
 
     assert endpoint_b.key == "shared-key"
     assert endpoint_b.service_id == service_b_id
-
-
-@pytest.mark.parametrize(
-    ("key", "name", "timeout_seconds", "access_mode", "price"),
-    [
-        ("Bad_Key", "Name", 30, AccessMode.FREE, None),
-        ("valid-key", "  ", 30, AccessMode.FREE, None),
-        ("valid-key", "Name", 0, AccessMode.FREE, None),
-        ("valid-key", "Name", 3601, AccessMode.FREE, None),
-        ("valid-key", "Name", 30, AccessMode.FREE, FixedPrice(amount_minor=100, currency="USD")),
-    ],
-)
-async def test_create_endpoint_rejects_invalid_input(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    key: str,
-    name: str,
-    timeout_seconds: int,
-    access_mode: AccessMode,
-    price: FixedPrice | None,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await create_endpoint(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                key=key,
-                name=name,
-                summary=None,
-                description=None,
-                access_mode=access_mode,
-                request_schema=REQUEST_SCHEMA,
-                response_schema=RESPONSE_SCHEMA,
-                timeout_seconds=timeout_seconds,
-                is_enabled=True,
-                price=price,
-            )
 
 
 async def test_create_endpoint_rejects_active_service(
@@ -331,16 +292,15 @@ async def test_create_endpoint_rejects_active_service(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                key="new-endpoint",
-                name="New Endpoint",
-                summary=None,
-                description=None,
-                access_mode=AccessMode.FREE,
-                request_schema=REQUEST_SCHEMA,
-                response_schema=RESPONSE_SCHEMA,
-                timeout_seconds=30,
-                is_enabled=True,
-                price=None,
+                request=EndpointCreateRequest(
+                    key="new-endpoint",
+                    name="New Endpoint",
+                    access_mode=AccessMode.FREE,
+                    request_schema=REQUEST_SCHEMA,
+                    response_schema=RESPONSE_SCHEMA,
+                    timeout_seconds=30,
+                    is_enabled=True,
+                ),
             )
 
 
@@ -360,152 +320,15 @@ async def test_create_endpoint_rejects_other_accounts_service(
                 session=session,
                 account_id=account_id,
                 service_id=service_id,
-                key="new-endpoint",
-                name="New Endpoint",
-                summary=None,
-                description=None,
-                access_mode=AccessMode.FREE,
-                request_schema=REQUEST_SCHEMA,
-                response_schema=RESPONSE_SCHEMA,
-                timeout_seconds=30,
-                is_enabled=True,
-                price=None,
-            )
-
-
-async def test_get_endpoint_raises_not_found_for_missing_id(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-
-    async with db_session_factory() as session:
-        with pytest.raises(NotFoundError):
-            await get_endpoint(session=session, account_id=account_id, endpoint_id=999_999)
-
-
-async def test_get_endpoint_raises_not_found_for_other_accounts_endpoint(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    other_account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=other_account_id,
-        slug="service",
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(NotFoundError):
-            await get_endpoint(session=session, account_id=account_id, endpoint_id=endpoint_id)
-
-
-async def test_update_endpoint_rejects_empty_updates(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={},
-            )
-
-
-async def test_update_endpoint_rejects_unknown_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match="unknown update fields: bar, foo"):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={"foo": "x", "bar": "y", "key": "new-key"},
-            )
-
-
-@pytest.mark.parametrize(
-    "field",
-    ["name", "access_mode", "request_schema", "response_schema", "timeout_seconds", "is_enabled"],
-)
-async def test_update_endpoint_rejects_null_required_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    field: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={field: None},
-            )
-
-
-@pytest.mark.parametrize(
-    ("field", "value", "message"),
-    [
-        ("name", 42, "name must be a string"),
-        ("summary", 42, "summary must be a string"),
-        ("description", 42, "description must be a string"),
-        ("access_mode", "free", "access_mode must be a valid access mode"),
-        ("request_schema", "schema", "request_schema must be an object"),
-        ("response_schema", "schema", "response_schema must be an object"),
-        ("timeout_seconds", True, "timeout_seconds must be an integer"),
-        ("is_enabled", "yes", "is_enabled must be a boolean"),
-    ],
-)
-async def test_update_endpoint_rejects_wrong_typed_field(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    field: str,
-    value: object,
-    message: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match=message):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={field: value},
+                request=EndpointCreateRequest(
+                    key="new-endpoint",
+                    name="New Endpoint",
+                    access_mode=AccessMode.FREE,
+                    request_schema=REQUEST_SCHEMA,
+                    response_schema=RESPONSE_SCHEMA,
+                    timeout_seconds=30,
+                    is_enabled=True,
+                ),
             )
 
 
@@ -531,7 +354,7 @@ async def test_update_endpoint_clears_summary_and_description(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"summary": None, "description": None},
+            changes=EndpointUpdateRequest(summary=None, description=None),
         )
 
     async with db_session_factory() as session:
@@ -564,7 +387,9 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"name": "  New Name  ", "summary": "  New Summary  ", "timeout_seconds": 45},
+            changes=EndpointUpdateRequest(
+                name="  New Name  ", summary="  New Summary  ", timeout_seconds=45
+            ),
         )
 
     async with db_session_factory() as session:
@@ -598,7 +423,7 @@ async def test_update_endpoint_draft_sets_price_on_unpriced_paid_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": FixedPrice(amount_minor=250, currency="USD")},
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=250, currency="USD")),
         )
 
     async with db_session_factory() as session:
@@ -641,7 +466,7 @@ async def test_update_endpoint_draft_replaces_price_in_place(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": FixedPrice(amount_minor=999, currency="GBP")},
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=999, currency="GBP")),
         )
 
     async with db_session_factory() as session:
@@ -686,7 +511,7 @@ async def test_update_endpoint_draft_retains_price_when_pricing_is_omitted(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"timeout_seconds": 60},
+            changes=EndpointUpdateRequest(timeout_seconds=60),
         )
 
     async with db_session_factory() as session:
@@ -722,7 +547,7 @@ async def test_update_endpoint_draft_clears_price_with_explicit_null(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": None},
+            changes=EndpointUpdateRequest(pricing=None),
         )
 
     async with db_session_factory() as session:
@@ -752,7 +577,7 @@ async def test_update_endpoint_draft_free_to_paid_without_price_creates_no_row(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"access_mode": AccessMode.PAID},
+            changes=EndpointUpdateRequest(access_mode=AccessMode.PAID),
         )
 
     async with db_session_factory() as session:
@@ -785,10 +610,10 @@ async def test_update_endpoint_draft_free_to_paid_with_price_creates_row(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={
-                "access_mode": AccessMode.PAID,
-                "pricing": FixedPrice(amount_minor=250, currency="USD"),
-            },
+            changes=EndpointUpdateRequest(
+                access_mode=AccessMode.PAID,
+                pricing=FixedPrice(amount_minor=250, currency="USD"),
+            ),
         )
 
     async with db_session_factory() as session:
@@ -821,7 +646,7 @@ async def test_update_endpoint_draft_paid_to_free_deletes_existing_price(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"access_mode": AccessMode.FREE},
+            changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
         )
 
     async with db_session_factory() as session:
@@ -855,7 +680,7 @@ async def test_update_endpoint_draft_rejects_price_on_free_endpoint(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"pricing": FixedPrice(amount_minor=250, currency="USD")},
+                changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=250, currency="USD")),
             )
 
 
@@ -880,39 +705,13 @@ async def test_update_endpoint_draft_free_endpoint_accepts_explicit_null_price(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": None},
+            changes=EndpointUpdateRequest(pricing=None),
         )
 
     async with db_session_factory() as session:
         persisted_pricing = await session.get(EndpointPrice, endpoint_id)
 
     assert persisted_pricing is None
-
-
-async def test_update_endpoint_rejects_wrong_typed_pricing_value(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(
-        db_session_factory,
-        service_id=service_id,
-        access_mode=AccessMode.PAID,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await update_endpoint(
-                session=session,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                updates={"pricing": {"amount_minor": 1}},
-            )
 
 
 async def test_update_endpoint_active_rejects_clearing_paid_price_without_mutating_state(
@@ -944,7 +743,7 @@ async def test_update_endpoint_active_rejects_clearing_paid_price_without_mutati
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"pricing": None},
+                changes=EndpointUpdateRequest(pricing=None),
             )
         await session.commit()
 
@@ -979,7 +778,7 @@ async def test_update_endpoint_active_rejects_free_to_paid_without_price(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"access_mode": AccessMode.PAID},
+                changes=EndpointUpdateRequest(access_mode=AccessMode.PAID),
             )
 
 
@@ -1005,10 +804,10 @@ async def test_update_endpoint_active_free_to_paid_with_price_creates_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={
-                "access_mode": AccessMode.PAID,
-                "pricing": FixedPrice(amount_minor=250, currency="USD"),
-            },
+            changes=EndpointUpdateRequest(
+                access_mode=AccessMode.PAID,
+                pricing=FixedPrice(amount_minor=250, currency="USD"),
+            ),
         )
 
     async with db_session_factory() as session:
@@ -1052,7 +851,7 @@ async def test_update_endpoint_active_price_replacement_creates_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"pricing": FixedPrice(amount_minor=999, currency="GBP")},
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=999, currency="GBP")),
         )
 
     async with db_session_factory() as session:
@@ -1092,7 +891,7 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"timeout_seconds": 60},
+            changes=EndpointUpdateRequest(timeout_seconds=60),
         )
 
     async with db_session_factory() as session:
@@ -1126,7 +925,7 @@ async def test_update_endpoint_active_name_only_update_creates_zero_revisions(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"name": "Renamed Endpoint"},
+            changes=EndpointUpdateRequest(name="Renamed Endpoint"),
         )
 
     async with db_session_factory() as session:
@@ -1162,7 +961,7 @@ async def test_update_endpoint_active_paid_endpoint_without_pricing_rejects_mate
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": 60},
+                changes=EndpointUpdateRequest(timeout_seconds=60),
             )
 
 
@@ -1195,7 +994,7 @@ async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutati
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": 60},
+                changes=EndpointUpdateRequest(timeout_seconds=60),
             )
         await session.commit()
 
@@ -1233,7 +1032,7 @@ async def test_update_endpoint_suspended_service_blocks_material_update(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"timeout_seconds": 60},
+                changes=EndpointUpdateRequest(timeout_seconds=60),
             )
 
 
@@ -1260,7 +1059,7 @@ async def test_update_endpoint_suspended_service_allows_name_only_update(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            updates={"name": "Renamed While Suspended"},
+            changes=EndpointUpdateRequest(name="Renamed While Suspended"),
         )
 
     async with db_session_factory() as session:
@@ -1289,8 +1088,375 @@ async def test_update_endpoint_rejects_other_accounts_endpoint(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                updates={"name": "New Name"},
+                changes=EndpointUpdateRequest(name="New Name"),
             )
+
+
+async def test_update_endpoint_draft_identical_values_leave_updated_at_unchanged(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        name="Translate",
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(name="Translate", timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_active_identical_material_value_is_a_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        seeded_service = await session.get(Service, service_id)
+        assert seeded_endpoint is not None
+        assert seeded_service is not None
+        seeded_updated_at = seeded_endpoint.updated_at
+        seeded_token = seeded_service.current_change_token
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_service = await session.get(Service, service_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted_endpoint is not None
+    assert persisted_service is not None
+    assert persisted_endpoint.updated_at == seeded_updated_at
+    assert persisted_service.current_change_token == seeded_token
+    assert revision_count == 1
+
+
+async def test_update_endpoint_normalized_value_matching_stored_value_is_a_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        name="Same",
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(name="  Same  "),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.name == "Same"
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_active_unchanged_material_field_creates_no_revision(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        name="Original Name",
+        timeout_seconds=30,
+    )
+
+    async with db_session_factory() as session:
+        seeded_service = await session.get(Service, service_id)
+        assert seeded_service is not None
+        seeded_token = seeded_service.current_change_token
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(name="Renamed Endpoint", timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_service = await session.get(Service, service_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted_endpoint is not None
+    assert persisted_service is not None
+    assert persisted_endpoint.name == "Renamed Endpoint"
+    assert revision_count == 1
+    assert persisted_service.current_change_token == seeded_token
+
+
+async def test_update_endpoint_identical_pricing_leaves_price_row_untouched(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        amount_minor=500,
+        currency="USD",
+    )
+
+    async with db_session_factory() as session:
+        seeded_pricing = await session.get(EndpointPrice, endpoint_id)
+        seeded_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded_pricing is not None
+        assert seeded_endpoint is not None
+        seeded_pricing_updated_at = seeded_pricing.updated_at
+        seeded_endpoint_updated_at = seeded_endpoint.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(pricing=FixedPrice(amount_minor=500, currency="USD")),
+        )
+
+    async with db_session_factory() as session:
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        persisted_endpoint = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted_pricing is not None
+    assert persisted_endpoint is not None
+    assert persisted_pricing.updated_at == seeded_pricing_updated_at
+    assert persisted_endpoint.updated_at == seeded_endpoint_updated_at
+
+
+async def test_update_endpoint_null_pricing_on_unpriced_paid_endpoint_is_a_no_op(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(
+        db_session_factory,
+        provider_account_id=account_id,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(pricing=None),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted is not None
+    assert persisted_pricing is None
+    assert persisted.updated_at == seeded_updated_at
+
+
+async def test_update_endpoint_active_paid_to_free_without_price_row_revises_for_mode_change(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+        revision_count = await session.scalar(
+            select(func.count())
+            .select_from(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id),
+        )
+
+    assert persisted is not None
+    assert persisted.access_mode is AccessMode.FREE
+    assert persisted_pricing is None
+    # access_mode is itself material, so the revision comes from the mode change
+    # alone: no pricing change was recorded because there was no price row.
+    assert revision_count == 2
+
+
+async def test_update_endpoint_active_paid_to_free_deletes_price_when_pricing_omitted(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        persisted_pricing = await session.get(EndpointPrice, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.access_mode is AccessMode.FREE
+    assert persisted_pricing is None
+
+
+async def test_update_endpoint_suspended_service_allows_no_op_update(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        timeout_seconds=30,
+    )
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    async with db_session_factory() as session:
+        seeded = await session.get(ServiceEndpoint, endpoint_id)
+        assert seeded is not None
+        seeded_updated_at = seeded.updated_at
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=30),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == seeded_updated_at
 
 
 async def test_upsert_upstream_creates_row_for_draft_endpoint(
@@ -1315,17 +1481,19 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
             settings=_upstream_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
-            base_url="http://127.0.0.1:9000",
-            path="  /translate  ",
-            http_method="POST",
-            config=UPSTREAM_CONFIG,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9000"),
+                path="  /translate  ",
+                http_method="POST",
+                config=UPSTREAM_CONFIG,
+            ),
         )
 
     async with db_session_factory() as session:
         persisted = await session.get(ProviderUpstream, endpoint_id)
 
     assert persisted is not None
-    assert persisted.base_url == "http://127.0.0.1:9000"
+    assert persisted.base_url == "http://127.0.0.1:9000/"
     assert persisted.path == "/translate"
     assert persisted.http_method == "POST"
     assert persisted.config == UPSTREAM_CONFIG
@@ -1349,10 +1517,12 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
             settings=_upstream_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
-            base_url="http://127.0.0.1:9000",
-            path="/translate",
-            http_method="POST",
-            config=UPSTREAM_CONFIG,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9000"),
+                path="/translate",
+                http_method="POST",
+                config=UPSTREAM_CONFIG,
+            ),
         )
 
     async with db_session_factory() as session:
@@ -1366,10 +1536,12 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
             settings=_upstream_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
-            base_url="http://127.0.0.1:9100",
-            path="/summarize",
-            http_method="PUT",
-            config={"headers": {}},
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9100"),
+                path="/summarize",
+                http_method="PUT",
+                config={"headers": {}},
+            ),
         )
 
     async with db_session_factory() as session:
@@ -1382,11 +1554,93 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
 
     assert upstream_count == 1
     assert persisted is not None
-    assert persisted.base_url == "http://127.0.0.1:9100"
+    assert persisted.base_url == "http://127.0.0.1:9100/"
     assert persisted.path == "/summarize"
     assert persisted.http_method == "PUT"
     assert persisted.config == {"headers": {}}
     assert persisted.updated_at > first_updated_at
+
+
+async def test_upsert_upstream_ignores_identical_state_without_touching_updated_at(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        base_url="http://127.0.0.1:9000/",
+        path="/translate",
+        http_method="POST",
+        config=dict(UPSTREAM_CONFIG),
+    )
+
+    async with db_session_factory() as session:
+        before = await session.get(ProviderUpstream, endpoint_id)
+        assert before is not None
+        before_updated_at = before.updated_at
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9000"),
+                path=" /translate ",
+                http_method="POST",
+                config=UPSTREAM_CONFIG,
+            ),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+
+    assert persisted is not None
+    assert persisted.updated_at == before_updated_at
+
+
+async def test_upsert_upstream_identical_state_on_active_service_returns_normally(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        base_url="http://127.0.0.1:9000/",
+        path="/translate",
+        http_method="POST",
+        config=dict(UPSTREAM_CONFIG),
+    )
+
+    async with db_session_factory() as session:
+        await upsert_upstream(
+            session=session,
+            settings=_upstream_settings(),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl("http://127.0.0.1:9000"),
+                path="/translate",
+                http_method="POST",
+                config=UPSTREAM_CONFIG,
+            ),
+        )
 
 
 async def test_upsert_upstream_rejects_active_service(
@@ -1409,10 +1663,12 @@ async def test_upsert_upstream_rejects_active_service(
                 settings=_upstream_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                base_url="http://127.0.0.1:9000",
-                path="/translate",
-                http_method="POST",
-                config={},
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl("http://127.0.0.1:9000"),
+                    path="/translate",
+                    http_method="POST",
+                    config={},
+                ),
             )
 
 
@@ -1428,10 +1684,12 @@ async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
                 settings=_upstream_settings(),
                 account_id=account_id,
                 endpoint_id=999_999,
-                base_url="http://127.0.0.1:9000",
-                path="/translate",
-                http_method="POST",
-                config={},
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl("http://127.0.0.1:9000"),
+                    path="/translate",
+                    http_method="POST",
+                    config={},
+                ),
             )
 
 
@@ -1455,10 +1713,12 @@ async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
                 settings=_upstream_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                base_url="http://127.0.0.1:9000",
-                path="/translate",
-                http_method="POST",
-                config={},
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl("http://127.0.0.1:9000"),
+                    path="/translate",
+                    http_method="POST",
+                    config={},
+                ),
             )
 
 
@@ -1481,10 +1741,12 @@ async def test_upsert_upstream_rejects_unsafe_target(
                 settings=_upstream_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                base_url="https://127.0.0.1:9000",
-                path="/translate",
-                http_method="POST",
-                config={},
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl("https://127.0.0.1:9000"),
+                    path="/translate",
+                    http_method="POST",
+                    config={},
+                ),
             )
 
     async with db_session_factory() as session:
@@ -1505,52 +1767,10 @@ async def test_upsert_upstream_validates_input_before_resolving_endpoint(
                 settings=_upstream_settings(),
                 account_id=account_id,
                 endpoint_id=999_999,
-                base_url="https://127.0.0.1:9000",
-                path="/translate",
-                http_method="POST",
-                config={},
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl("https://127.0.0.1:9000"),
+                    path="/translate",
+                    http_method="POST",
+                    config={},
+                ),
             )
-
-
-@pytest.mark.parametrize(
-    ("path", "http_method"),
-    [
-        ("translate", "POST"),
-        ("/translate", "post"),
-        ("/translate", "GET"),
-        ("/translate", "DELETE"),
-        ("/translate", "HEAD"),
-        ("/translate", "FETCH"),
-    ],
-)
-async def test_upsert_upstream_rejects_invalid_path_or_method(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    path: str,
-    http_method: str,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await upsert_upstream(
-                session=session,
-                settings=_upstream_settings(),
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                base_url="http://127.0.0.1:9000",
-                path=path,
-                http_method=http_method,
-                config={},
-            )
-
-    async with db_session_factory() as session:
-        persisted = await session.get(ProviderUpstream, endpoint_id)
-
-    assert persisted is None

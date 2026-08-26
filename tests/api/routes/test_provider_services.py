@@ -440,7 +440,31 @@ async def test_patch_provider_service_rejects_explicit_null_for_name(
     )
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "name cannot be null"}
+    first_error = response.json()["detail"][0]
+    assert first_error["loc"] == ["body", "name"]
+    assert "cannot be null" in first_error["msg"]
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_service_rejects_unknown_field(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/services/{service_id}",
+        headers=_auth_headers(account_id),
+        json={"name": "Renamed", "unknown_field": "x"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "unknown_field"
 
 
 @pytest.mark.asyncio
@@ -633,7 +657,35 @@ async def test_patch_provider_endpoint_rejects_explicit_null_for_name(
     )
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "name cannot be null"}
+    first_error = response.json()["detail"][0]
+    assert first_error["loc"] == ["body", "name"]
+    assert "cannot be null" in first_error["msg"]
+
+
+@pytest.mark.asyncio
+async def test_patch_provider_endpoint_rejects_unknown_field(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"name": "Renamed", "unknown_field": "x"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"][-1] == "unknown_field"
 
 
 @pytest.mark.asyncio
@@ -772,7 +824,7 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
     assert response.status_code == 422
     error = response.json()["detail"][0]
     assert error["loc"] == ["body", "http_method"]
-    assert "must be one of: PATCH, POST, PUT" in error["msg"]
+    assert error["msg"] == "Input should be 'POST', 'PUT' or 'PATCH'"
 
 
 @pytest.mark.asyncio
