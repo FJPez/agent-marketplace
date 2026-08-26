@@ -131,3 +131,39 @@ async def test_run_check_commits_the_checker_outcome_itself(
     assert persisted_checks[0].summary == "probe passed"
     assert persisted_checks[0].details == {"latency_ms": 42}
     assert persisted_checks[0].checked_at == check.checked_at
+
+
+class RaisingChecker:
+    async def run(self, *, service_id: int) -> ServiceHealthOutcome:
+        _ = service_id
+        msg = "probe timed out"
+        raise RuntimeError(msg)
+
+
+async def test_run_check_persists_sanitized_failure_when_checker_raises(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    service_id: int,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with db_session_factory() as session:
+        with caplog.at_level("ERROR"):
+            check = await ServiceHealthService(session).run_check(
+                service_id=service_id,
+                check_name=PUBLISH_READINESS_CHECK_NAME,
+                checker=RaisingChecker(),
+            )
+
+    async with db_session_factory() as session:
+        result = await session.scalars(
+            select(ServiceHealthCheck).where(ServiceHealthCheck.service_id == service_id),
+        )
+        persisted_checks = list(result.all())
+
+    assert len(persisted_checks) == 1
+    assert persisted_checks[0].id == check.id
+    assert persisted_checks[0].status is ServiceHealthStatus.FAIL
+    assert persisted_checks[0].summary == "health check failed"
+    assert persisted_checks[0].details == {"error_type": "RuntimeError"}
+    # The checker's internal error text must not leak into the stored row.
+    assert "probe timed out" not in (persisted_checks[0].summary or "")
+    assert any("service health check failed" in message for message in caplog.messages)
