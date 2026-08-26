@@ -3,6 +3,21 @@
 Helpers here carry real logic: the ownership filter, the not-found raise, the
 eager-load contract, and the locking protocol. This is not a repository: no
 one-line query wrappers around SQLAlchemy belong in this module.
+
+Pick the loader by what the use case reads and returns:
+
+- ``lock_owned_service``: the locked service row alone, for mutations that
+  only need ``id``/``lifecycle`` (endpoint creation).
+- ``load_owned_service`` / ``load_owned_service_for_update``: the full graph
+  (tags, endpoints, prices, upstreams). Service-returning operations use it
+  because the graph IS their response; contract snapshots need it too.
+  A leaner response body for those operations was considered and deferred.
+- ``lock_owned_service_by_endpoint`` then ``load_owned_endpoint``: the
+  service-level lock followed by the target endpoint with its price and
+  upstream, for endpoint-scoped mutations.
+
+Mutations lock first and load second with ``populate_existing`` so the
+loaded state is what the lock protects.
 """
 
 from sqlalchemy import select
