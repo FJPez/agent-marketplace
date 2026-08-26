@@ -20,7 +20,8 @@ from app.core.request_schema_validation import validate_request_payload
 from app.db.models import Quote, Service, ServiceEndpoint
 from app.schemas.quote import QuoteCreateRequest
 from app.schemas.service_ref import PublicServiceRef
-from app.services.moderation_service import ModerationService, ServiceUnavailableError
+from app.services import moderation
+from app.services.moderation import ServiceUnavailableError
 
 logger = get_logger(__name__)
 
@@ -56,7 +57,7 @@ async def create_quote(
         raise NotFoundError("service not found")
 
     try:
-        await ModerationService(session).ensure_service_available(service.id)
+        await moderation.ensure_service_available(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         # Suspended and delisted services must stay indistinguishable from missing ones publicly.
         raise NotFoundError("service not found") from exc
@@ -146,7 +147,7 @@ async def validate_quote(
         raise QuoteStaleError("quote no longer matches current service state")
 
     try:
-        await ModerationService(session).ensure_service_available(service.id)
+        await moderation.ensure_service_available(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         raise QuoteStaleError("quote no longer matches current service state") from exc
 

@@ -23,10 +23,6 @@ from app.services.invoke_service import (
     InvokeNotFoundError,
     InvokeUnavailableError,
 )
-from app.services.moderation_service import (
-    InvalidModerationTransitionError,
-    ModeratedServiceNotFoundError,
-)
 from app.services.payout_service import PayoutConflictError
 
 Handler = Callable[[Request, Exception], Awaitable[Response]]
@@ -38,12 +34,10 @@ STATUS_CODES: dict[type[Exception], int] = {
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     NotFoundError: status.HTTP_404_NOT_FOUND,
     InvokeNotFoundError: status.HTTP_404_NOT_FOUND,
-    ModeratedServiceNotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     InvalidStateError: status.HTTP_409_CONFLICT,
     InvokeConflictError: status.HTTP_409_CONFLICT,
     InvokeUnavailableError: status.HTTP_409_CONFLICT,
-    InvalidModerationTransitionError: status.HTTP_409_CONFLICT,
     PayoutConflictError: status.HTTP_409_CONFLICT,
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,

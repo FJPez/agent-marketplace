@@ -7,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import InvalidInputError, InvalidStateError
 from app.db.models.service import Service
-from app.services import revisions, service_access
-from app.services.moderation_service import ModerationService, ServiceUnavailableError
+from app.services import moderation, revisions, service_access
+from app.services.moderation import ServiceUnavailableError
 from app.services.publish_readiness import validate_service_for_publish
 from app.services.service_health_service import (
     PUBLISH_READINESS_CHECK_NAME,
@@ -32,7 +32,7 @@ async def publish_service(
         raise InvalidStateError("service is not publishable outside draft")
 
     try:
-        await ModerationService(session).ensure_service_publishable(service.id)
+        await moderation.ensure_service_publishable(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         raise InvalidStateError(f"service is {exc.state.value}") from exc
 

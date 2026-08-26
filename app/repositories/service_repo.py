@@ -27,14 +27,6 @@ class ServiceRepository:
         statement = _service_with_relations().where(Service.id == service_id)
         return await self._session.scalar(statement)
 
-    async def get_by_id_for_update(self, *, service_id: int) -> Service | None:
-        locked_service_id = await self._session.scalar(
-            select(Service.id).where(Service.id == service_id).with_for_update(),
-        )
-        if locked_service_id is None:
-            return None
-        return await self.get_by_id(service_id=service_id)
-
     async def get_public(self, *, service_id_or_slug: str) -> Service | None:
         statement = _service_with_relations().where(
             Service.lifecycle == ServiceLifecycle.ACTIVE,

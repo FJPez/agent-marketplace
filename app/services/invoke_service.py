@@ -28,8 +28,8 @@ from app.integrations.provider_gateway.client import (
 from app.integrations.provider_gateway.signing import HmacAuthConfig, get_hmac_auth_config
 from app.repositories.invocation_repo import InvocationRepository
 from app.repositories.service_repo import ServiceRepository
-from app.services import quotes
-from app.services.moderation_service import ModerationService, ServiceUnavailableError
+from app.services import moderation, quotes
+from app.services.moderation import ServiceUnavailableError
 from app.services.quotes import QuoteExpiredError, QuoteMismatchError, QuoteStaleError
 
 if TYPE_CHECKING:
@@ -86,7 +86,6 @@ class InvokeService:
         self._session = session
         self._http_client = http_client
         self._service_repo = ServiceRepository(session)
-        self._moderation_service = ModerationService(session)
         self._invocation_repo = InvocationRepository(session)
 
     async def resolve_target(
@@ -102,7 +101,7 @@ class InvokeService:
         if service is None:
             raise InvokeNotFoundError("service not found")
         try:
-            await self._moderation_service.ensure_service_available(service.id)
+            await moderation.ensure_service_available(session=self._session, service_id=service.id)
         except ServiceUnavailableError as exc:
             raise InvokeNotFoundError("service not found") from exc
 
