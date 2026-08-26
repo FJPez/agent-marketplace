@@ -79,7 +79,7 @@ class FakeModerationService:
     def __init__(self, *, unavailable: bool = False) -> None:
         self.unavailable = unavailable
 
-    async def ensure_service_listed(self, service_id: int) -> None:
+    async def ensure_service_available(self, service_id: int) -> None:
         if self.unavailable:
             raise ServiceUnavailableError(
                 service_id=service_id,

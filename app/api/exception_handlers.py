@@ -15,7 +15,6 @@ from app.core.errors import (
     UnauthenticatedError,
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
-from app.services.discovery_service import DiscoveryNotFoundError
 from app.services.health_service import ReadinessCheckError
 from app.services.invoke_service import (
     InvokeBadGatewayError,
@@ -45,7 +44,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     UnauthenticatedError: status.HTTP_401_UNAUTHORIZED,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     NotFoundError: status.HTTP_404_NOT_FOUND,
-    DiscoveryNotFoundError: status.HTTP_404_NOT_FOUND,
     QuoteNotFoundError: status.HTTP_404_NOT_FOUND,
     InvokeNotFoundError: status.HTTP_404_NOT_FOUND,
     ProviderServiceNotFoundError: status.HTTP_404_NOT_FOUND,

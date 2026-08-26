@@ -1,18 +1,32 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.db.session import get_db_session
+from app.api.deps.database import SessionDep
 from app.schemas.discovery import (
     PublicServiceDetail,
     PublicServiceListItem,
     PublicServicePricingResponse,
+    PublicServiceRef,
     PublicServiceSchemaResponse,
+    parse_public_service_ref,
 )
-from app.services.discovery_service import DiscoveryService
+from app.services import discovery
 
 router = APIRouter(tags=["discovery"])
+
+
+def require_public_service_ref(service_id_or_slug: str) -> PublicServiceRef:
+    try:
+        return parse_public_service_ref(service_id_or_slug)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="service identifier must be a service id or a service slug",
+        ) from exc
+
+
+ServiceRefPath = Annotated[PublicServiceRef, Depends(require_public_service_ref)]
 
 
 @router.get(
@@ -24,11 +38,8 @@ router = APIRouter(tags=["discovery"])
     ),
     responses={200: {"description": "Public service list returned successfully."}},
 )
-async def list_services(
-    session: Annotated[AsyncSession, Depends(get_db_session)],
-) -> list[PublicServiceListItem]:
-    service = DiscoveryService(session)
-    services = await service.list_services()
+async def list_services(session: SessionDep) -> list[PublicServiceListItem]:
+    services = await discovery.list_services(session=session)
     return [PublicServiceListItem.from_model(item) for item in services]
 
 
@@ -42,14 +53,14 @@ async def list_services(
     responses={
         200: {"description": "Public service detail returned successfully."},
         404: {"description": "No public service matched the supplied identifier."},
+        422: {"description": "The supplied identifier was neither a service id nor a slug."},
     },
 )
 async def get_service_detail(
-    service_id_or_slug: str,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    service_ref: ServiceRefPath,
+    session: SessionDep,
 ) -> PublicServiceDetail:
-    service = DiscoveryService(session)
-    found = await service.get_service(service_id_or_slug=service_id_or_slug)
+    found = await discovery.get_service(session=session, service_ref=service_ref)
     return PublicServiceDetail.from_model(found)
 
 
@@ -64,14 +75,14 @@ async def get_service_detail(
     responses={
         200: {"description": "Public service schemas returned successfully."},
         404: {"description": "No public service matched the supplied identifier."},
+        422: {"description": "The supplied identifier was neither a service id nor a slug."},
     },
 )
 async def get_service_schema(
-    service_id_or_slug: str,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    service_ref: ServiceRefPath,
+    session: SessionDep,
 ) -> PublicServiceSchemaResponse:
-    service = DiscoveryService(session)
-    found = await service.get_service(service_id_or_slug=service_id_or_slug)
+    found = await discovery.get_service(session=session, service_ref=service_ref)
     return PublicServiceSchemaResponse.from_model(found)
 
 
@@ -83,12 +94,12 @@ async def get_service_schema(
     responses={
         200: {"description": "Public service pricing returned successfully."},
         404: {"description": "No public service matched the supplied identifier."},
+        422: {"description": "The supplied identifier was neither a service id nor a slug."},
     },
 )
 async def get_service_pricing(
-    service_id_or_slug: str,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    service_ref: ServiceRefPath,
+    session: SessionDep,
 ) -> PublicServicePricingResponse:
-    service = DiscoveryService(session)
-    found = await service.get_service(service_id_or_slug=service_id_or_slug)
+    found = await discovery.get_service(session=session, service_ref=service_ref)
     return PublicServicePricingResponse.from_model(found)

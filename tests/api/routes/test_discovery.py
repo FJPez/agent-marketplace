@@ -349,3 +349,17 @@ async def test_suspended_service_reappears_after_restore(
     visible_response = await async_client.get("/v1/services")
     assert visible_response.status_code == 200
     assert any(item["slug"] == "restore-visible" for item in visible_response.json())
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["Not-A-Slug", "not a slug", "under_score", "9999999999999999999999"],
+)
+@pytest.mark.asyncio
+async def test_get_service_detail_rejects_malformed_identifier(
+    async_client: AsyncClient,
+    identifier: str,
+) -> None:
+    response = await async_client.get(f"/v1/services/{identifier}")
+
+    assert response.status_code == 422
