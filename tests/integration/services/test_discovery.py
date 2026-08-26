@@ -14,7 +14,7 @@ from tests.fixtures.domain import (
 from app.core.enums import ServiceLifecycle
 from app.core.errors import NotFoundError
 from app.db.models import Service
-from app.schemas.discovery import PublicServiceRef
+from app.schemas.service_ref import PublicServiceRef
 from app.services import discovery
 
 pytestmark = [
