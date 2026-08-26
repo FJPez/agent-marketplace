@@ -1,5 +1,3 @@
-from datetime import UTC, datetime
-
 from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,18 +23,6 @@ class ServiceRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_owned(
-        self,
-        *,
-        service_id: int,
-        provider_account_id: int,
-    ) -> Service | None:
-        statement = _service_with_relations().where(
-            Service.id == service_id,
-            Service.provider_account_id == provider_account_id,
-        )
-        return await self._session.scalar(statement)
-
     async def get_by_id(self, *, service_id: int) -> Service | None:
         statement = _service_with_relations().where(Service.id == service_id)
         return await self._session.scalar(statement)
@@ -58,29 +44,3 @@ class ServiceRepository:
         else:
             statement = statement.where(Service.slug == service_id_or_slug)
         return await self._session.scalar(statement)
-
-    async def get_owned_for_update(
-        self,
-        *,
-        service_id: int,
-        provider_account_id: int,
-    ) -> Service | None:
-        locked_service_id = await self._session.scalar(
-            select(Service.id)
-            .where(
-                Service.id == service_id,
-                Service.provider_account_id == provider_account_id,
-            )
-            .with_for_update(),
-        )
-        if locked_service_id is None:
-            return None
-        return await self.get_owned(
-            service_id=service_id,
-            provider_account_id=provider_account_id,
-        )
-
-    def set_lifecycle(self, service: Service, *, lifecycle: ServiceLifecycle) -> Service:
-        service.lifecycle = lifecycle
-        service.updated_at = datetime.now(UTC)
-        return service

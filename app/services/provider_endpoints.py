@@ -18,9 +18,9 @@ from app.schemas.service import (
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
 )
-from app.services import service_access
+from app.services import revisions, service_access
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
-from app.services.revision_service import RevisionService, UpdateImpact
+from app.services.revisions import UpdateImpact
 
 
 async def create_endpoint(
@@ -142,7 +142,7 @@ async def update_endpoint(
     else:
         has_resulting_price = current_price is not None
 
-    impact = RevisionService.classify_endpoint_update(effective_changes)
+    impact = revisions.classify_endpoint_update(effective_changes)
     await _ensure_endpoint_update_allowed(
         session=session,
         service=service,
@@ -191,7 +191,7 @@ async def update_endpoint(
             account_id=account_id,
             service_id=service.id,
         )
-        await RevisionService(session).create_revision(graph)
+        await revisions.create_revision(session=session, service=graph)
 
     await session.commit()
     return endpoint

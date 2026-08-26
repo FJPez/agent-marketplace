@@ -4,6 +4,7 @@ import pytest
 from pydantic import HttpUrl
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import selectinload
 from tests.fixtures.domain import (
     create_endpoint_price_record,
     create_endpoint_record,
@@ -12,15 +13,16 @@ from tests.fixtures.domain import (
     create_upstream_record,
 )
 
-from app.core.actor import ActorContext
 from app.core.config import Settings
 from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
-from app.db.models import Service, ServiceRevision
-from app.repositories.service_repo import ServiceRepository
-from app.repositories.service_revision_repo import ServiceRevisionRepository
+from app.core.errors import InvalidStateError
+from app.db.models import Service, ServiceEndpoint, ServiceRevision
 from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
-from app.services import provider_endpoints, service_access
-from app.services.publish_service import PublishService
+from app.services import provider_endpoints, publishing, revisions, service_access
+
+# Bounded wait proving the concurrent mutation is still blocked on publish's
+# row lock rather than racing ahead of publish's single commit.
+LOCK_WAIT_TIMEOUT_SECONDS = 0.5
 
 
 def _upstream_settings() -> Settings:
@@ -81,6 +83,20 @@ async def _seed_fixed_price(
     )
 
 
+async def _load_service_graph(
+    session: AsyncSession,
+    *,
+    service_id: int,
+) -> Service | None:
+    return await session.scalar(
+        select(Service)
+        .options(
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
+        )
+        .where(Service.id == service_id),
+    )
+
+
 async def _seed_upstream(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -113,29 +129,25 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
         service_id=service_id,
     )
 
-    original_next_revision_number = ServiceRevisionRepository.next_revision_number
-    first_revision_lookup = asyncio.Event()
-    release_first_revision_lookup = asyncio.Event()
-    next_revision_lookup_calls = 0
+    original_create_revision = revisions.create_revision
+    first_revision_created = asyncio.Event()
+    release_first_revision = asyncio.Event()
+    create_revision_calls = 0
 
-    async def delayed_next_revision_number(
-        self: ServiceRevisionRepository,
+    async def delayed_create_revision(
         *,
-        service_id: int,
-    ) -> int:
-        nonlocal next_revision_lookup_calls
-        revision_number = await original_next_revision_number(self, service_id=service_id)
-        next_revision_lookup_calls += 1
-        if next_revision_lookup_calls == 1:
-            first_revision_lookup.set()
-            await release_first_revision_lookup.wait()
-        return revision_number
+        session: AsyncSession,
+        service: Service,
+    ) -> ServiceRevision:
+        nonlocal create_revision_calls
+        revision = await original_create_revision(session=session, service=service)
+        create_revision_calls += 1
+        if create_revision_calls == 1:
+            first_revision_created.set()
+            await release_first_revision.wait()
+        return revision
 
-    monkeypatch.setattr(
-        ServiceRevisionRepository,
-        "next_revision_number",
-        delayed_next_revision_number,
-    )
+    monkeypatch.setattr(revisions, "create_revision", delayed_create_revision)
 
     async def update_timeout(timeout_seconds: int) -> None:
         async with db_session_factory() as session:
@@ -147,9 +159,9 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
             )
 
     first_update = asyncio.create_task(update_timeout(45))
-    await first_revision_lookup.wait()
+    await first_revision_created.wait()
     second_update = asyncio.create_task(update_timeout(60))
-    release_first_revision_lookup.set()
+    release_first_revision.set()
     await asyncio.gather(first_update, second_update)
 
     async with db_session_factory() as session:
@@ -158,16 +170,25 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
             .select_from(ServiceRevision)
             .where(ServiceRevision.service_id == service_id),
         )
-        revisions = await ServiceRevisionRepository(session).list_by_service_id(
-            service_id=service_id,
+        persisted_revisions = list(
+            (
+                await session.scalars(
+                    select(ServiceRevision)
+                    .where(ServiceRevision.service_id == service_id)
+                    .order_by(
+                        ServiceRevision.revision_number.desc(),
+                        ServiceRevision.id.desc(),
+                    ),
+                )
+            ).all()
         )
 
     assert revision_count == 2
-    assert [revision.revision_number for revision in revisions] == [2, 1]
+    assert [revision.revision_number for revision in persisted_revisions] == [2, 1]
 
 
 @pytest.mark.asyncio
-async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
+async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the_lock(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -190,23 +211,22 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
     publish_has_lock = asyncio.Event()
     mutation_lookup_started = asyncio.Event()
     release_publish = asyncio.Event()
-    original_get_owned_for_update = ServiceRepository.get_owned_for_update
+    original_load_owned_service_for_update = service_access.load_owned_service_for_update
     original_lock_owned_service_by_endpoint = service_access.lock_owned_service_by_endpoint
 
-    async def delayed_get_owned_for_update(
-        self: ServiceRepository,
+    async def delayed_load_owned_service_for_update(
         *,
+        session: AsyncSession,
+        account_id: int,
         service_id: int,
-        provider_account_id: int,
-    ) -> Service | None:
-        service = await original_get_owned_for_update(
-            self,
+    ) -> Service:
+        service = await original_load_owned_service_for_update(
+            session=session,
+            account_id=account_id,
             service_id=service_id,
-            provider_account_id=provider_account_id,
         )
-        if service is not None and service.id == service_id:
-            publish_has_lock.set()
-            await release_publish.wait()
+        publish_has_lock.set()
+        await release_publish.wait()
         return service
 
     async def signalling_lock_owned_service_by_endpoint(
@@ -223,9 +243,9 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
         )
 
     monkeypatch.setattr(
-        ServiceRepository,
-        "get_owned_for_update",
-        delayed_get_owned_for_update,
+        service_access,
+        "load_owned_service_for_update",
+        delayed_load_owned_service_for_update,
     )
     monkeypatch.setattr(
         service_access,
@@ -233,30 +253,33 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
         signalling_lock_owned_service_by_endpoint,
     )
 
-    async def publish_service() -> None:
+    async def publish() -> None:
         async with db_session_factory() as session:
-            service = PublishService(session)
-            await service.publish_service(
-                ActorContext(account_id=provider_account_id),
+            await publishing.publish_service(
+                session=session,
+                account_id=provider_account_id,
                 service_id=service_id,
             )
 
     async def mutate_upstream() -> None:
         await publish_has_lock.wait()
         async with db_session_factory() as session:
-            await provider_endpoints.upsert_upstream(
-                session=session,
-                settings=_upstream_settings(),
-                account_id=provider_account_id,
-                endpoint_id=endpoint_id,
-                request=EndpointUpstreamRequest(
-                    base_url=HttpUrl("http://127.0.0.1:9000"),
-                    path="/mutated",
-                    http_method="POST",
-                ),
-            )
+            # Publish holds the service row lock, so this waits for publish's
+            # single commit and then finds an already-active service.
+            with pytest.raises(InvalidStateError, match="service is not mutable outside draft"):
+                await provider_endpoints.upsert_upstream(
+                    session=session,
+                    settings=_upstream_settings(),
+                    account_id=provider_account_id,
+                    endpoint_id=endpoint_id,
+                    request=EndpointUpstreamRequest(
+                        base_url=HttpUrl("http://127.0.0.1:9000"),
+                        path="/mutated",
+                        http_method="POST",
+                    ),
+                )
 
-    publish_task = asyncio.create_task(publish_service())
+    publish_task = asyncio.create_task(publish())
     await publish_has_lock.wait()
     mutate_task = asyncio.create_task(mutate_upstream())
     await mutation_lookup_started.wait()
@@ -265,12 +288,110 @@ async def test_publish_serializes_with_concurrent_draft_upstream_mutation(
     await mutate_task
 
     async with db_session_factory() as session:
-        service = await ServiceRepository(session).get_owned(
-            service_id=service_id,
-            provider_account_id=provider_account_id,
-        )
+        service = await _load_service_graph(session, service_id=service_id)
 
     assert service is not None
     assert service.lifecycle is ServiceLifecycle.ACTIVE
     assert service.endpoints[0].upstream is not None
-    assert service.endpoints[0].upstream.path == "/mutated"
+    assert service.endpoints[0].upstream.path == "/invoke"
+
+
+@pytest.mark.asyncio
+async def test_publish_holds_its_lock_until_the_single_commit(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = migrated_database
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="publish-single-transaction-service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.FREE,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+
+    # Publish pauses between recording its readiness verdict and flipping the
+    # lifecycle - the window in which it used to have already committed and
+    # released the service row lock.
+    original_create_revision = revisions.create_revision
+    publish_reached_revision = asyncio.Event()
+    release_publish = asyncio.Event()
+    original_lock_owned_service_by_endpoint = service_access.lock_owned_service_by_endpoint
+    mutation_lock_started = asyncio.Event()
+
+    async def delayed_create_revision(
+        *,
+        session: AsyncSession,
+        service: Service,
+    ) -> ServiceRevision:
+        publish_reached_revision.set()
+        await release_publish.wait()
+        return await original_create_revision(session=session, service=service)
+
+    async def signalling_lock_owned_service_by_endpoint(
+        *,
+        session: AsyncSession,
+        account_id: int,
+        endpoint_id: int,
+    ) -> int:
+        mutation_lock_started.set()
+        return await original_lock_owned_service_by_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+        )
+
+    monkeypatch.setattr(revisions, "create_revision", delayed_create_revision)
+    monkeypatch.setattr(
+        service_access,
+        "lock_owned_service_by_endpoint",
+        signalling_lock_owned_service_by_endpoint,
+    )
+
+    async def publish() -> None:
+        async with db_session_factory() as session:
+            await publishing.publish_service(
+                session=session,
+                account_id=provider_account_id,
+                service_id=service_id,
+            )
+
+    async def mutate_timeout() -> None:
+        async with db_session_factory() as session:
+            await provider_endpoints.update_endpoint(
+                session=session,
+                account_id=provider_account_id,
+                endpoint_id=endpoint_id,
+                changes=EndpointUpdateRequest(timeout_seconds=45),
+            )
+
+    publish_task = asyncio.create_task(publish())
+    await publish_reached_revision.wait()
+    mutate_task = asyncio.create_task(mutate_timeout())
+    await mutation_lock_started.wait()
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(mutate_task), timeout=LOCK_WAIT_TIMEOUT_SECONDS)
+
+    assert not mutate_task.done()
+    assert not publish_task.done()
+
+    release_publish.set()
+    await publish_task
+    await mutate_task
+
+    async with db_session_factory() as session:
+        service = await _load_service_graph(session, service_id=service_id)
+
+    assert service is not None
+    assert service.lifecycle is ServiceLifecycle.ACTIVE
+    assert service.current_revision_id is not None
+    assert service.current_change_token is not None
+    assert service.endpoints[0].timeout_seconds == 45

@@ -17,8 +17,7 @@ from app.schemas.service import (
     ServiceTagsUpdateRequest,
     ServiceUpdateRequest,
 )
-from app.services import provider_drafts, provider_endpoints
-from app.services.publish_service import PublishService
+from app.services import provider_drafts, provider_endpoints, publishing
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
 
@@ -207,8 +206,11 @@ async def publish_provider_service(
     actor: CurrentActor,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> ServiceResponse:
-    service = PublishService(session)
-    published = await service.publish_service(actor, service_id=service_id)
+    published = await publishing.publish_service(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+    )
     return ServiceResponse.from_model(published)
 
 

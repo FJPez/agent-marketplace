@@ -21,10 +21,14 @@ if TYPE_CHECKING:
 class FakeSession:
     def __init__(self) -> None:
         self.commits = 0
+        self.flushes = 0
         self.refreshed: list[object] = []
 
     async def commit(self) -> None:
         self.commits += 1
+
+    async def flush(self) -> None:
+        self.flushes += 1
 
     async def refresh(self, instance: object) -> None:
         self.refreshed.append(instance)
@@ -117,8 +121,9 @@ async def test_record_check_persists_supplied_outcome() -> None:
     assert check.status is ServiceHealthStatus.FAIL
     assert check.summary == "upstream unavailable"
     assert check.details == {"status_code": 503}
-    assert session.commits == 1
-    assert session.refreshed == [check]
+    assert session.flushes == 1
+    assert session.commits == 0
+    assert session.refreshed == []
 
 
 @pytest.mark.asyncio

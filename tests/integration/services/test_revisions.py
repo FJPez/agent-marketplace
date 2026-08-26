@@ -1,12 +1,16 @@
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.enums import AccessMode
-from app.db.models import Account, Service, ServiceEndpoint
-from app.repositories.service_repo import ServiceRepository
-from app.repositories.service_revision_repo import ServiceRevisionRepository
-from app.services.revision_service import RevisionService
+from app.db.models import Account, Service, ServiceEndpoint, ServiceRevision
+from app.services import revisions
+
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.usefixtures("migrated_database"),
+]
 
 
 async def _create_provider_account(
@@ -20,13 +24,9 @@ async def _create_provider_account(
     return account.id
 
 
-@pytest.mark.asyncio
-async def test_service_revision_repository_persists_snapshot_and_updates_current_token(
-    migrated_database: None,
+async def test_create_revision_persists_snapshot_and_updates_current_token(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
-
     async with db_session_factory.begin() as session:
         provider_account_id = await _create_provider_account(
             session,
@@ -58,9 +58,8 @@ async def test_service_revision_repository_persists_snapshot_and_updates_current
         set_committed_value(endpoint, "price", None)
         set_committed_value(service, "endpoints", [endpoint])
 
-        revision_service = RevisionService(session)
-        first_revision = await revision_service.create_revision(service)
-        second_revision = await revision_service.create_revision(service)
+        first_revision = await revisions.create_revision(session=session, service=service)
+        second_revision = await revisions.create_revision(session=session, service=service)
 
         await session.flush()
 
@@ -71,16 +70,22 @@ async def test_service_revision_repository_persists_snapshot_and_updates_current
         assert service.current_change_token == second_revision.change_token
 
     async with db_session_factory() as session:
-        repo = ServiceRevisionRepository(session)
-        revisions = await repo.list_by_service_id(service_id=service.id)
-        service_repo = ServiceRepository(session)
-        reloaded_service = await service_repo.get_owned(
-            service_id=service.id,
-            provider_account_id=provider_account_id,
+        persisted_revisions = list(
+            (
+                await session.scalars(
+                    select(ServiceRevision)
+                    .where(ServiceRevision.service_id == service.id)
+                    .order_by(
+                        ServiceRevision.revision_number.desc(),
+                        ServiceRevision.id.desc(),
+                    ),
+                )
+            ).all()
         )
+        reloaded_service = await session.get(Service, service.id)
 
-    assert [revision.revision_number for revision in revisions] == [2, 1]
-    assert revisions[0].snapshot == {
+    assert [revision.revision_number for revision in persisted_revisions] == [2, 1]
+    assert persisted_revisions[0].snapshot == {
         "service": {"id": service.id, "slug": "translation-service"},
         "endpoints": [
             {
@@ -100,5 +105,5 @@ async def test_service_revision_repository_persists_snapshot_and_updates_current
         ],
     }
     assert reloaded_service is not None
-    assert reloaded_service.current_revision_id == revisions[0].id
-    assert reloaded_service.current_change_token == revisions[0].change_token
+    assert reloaded_service.current_revision_id == persisted_revisions[0].id
+    assert reloaded_service.current_change_token == persisted_revisions[0].change_token

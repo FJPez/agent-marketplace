@@ -2,10 +2,10 @@ from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
-from app.services.revision_service import (
-    RevisionService,
+from app.services.revisions import (
     UpdateImpact,
     build_contract_snapshot,
+    classify_endpoint_update,
 )
 
 
@@ -55,7 +55,7 @@ def _service() -> Service:
 
 
 def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
-    impact = RevisionService.classify_endpoint_update(
+    impact = classify_endpoint_update(
         {"request_schema": {"type": "object"}},
     )
 
@@ -63,7 +63,7 @@ def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
 
 
 def test_classify_endpoint_update_marks_pricing_as_material() -> None:
-    impact = RevisionService.classify_endpoint_update(
+    impact = classify_endpoint_update(
         {"pricing": {"amount_minor": 100, "currency": "USD"}},
     )
 
@@ -71,16 +71,8 @@ def test_classify_endpoint_update_marks_pricing_as_material() -> None:
 
 
 def test_classify_endpoint_update_marks_descriptive_fields_as_non_material() -> None:
-    impact = RevisionService.classify_endpoint_update(
+    impact = classify_endpoint_update(
         {"summary": "Updated summary", "description": "Updated description"},
-    )
-
-    assert impact is UpdateImpact.NON_MATERIAL
-
-
-def test_classify_service_update_treats_current_patchable_fields_as_non_material() -> None:
-    impact = RevisionService.classify_service_update(
-        {"name": "Updated name", "summary": "Updated summary"},
     )
 
     assert impact is UpdateImpact.NON_MATERIAL

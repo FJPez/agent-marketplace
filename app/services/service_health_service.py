@@ -88,8 +88,7 @@ class ServiceHealthService:
             details=outcome.details,
             checked_at=outcome.checked_at,
         )
-        await self._session.commit()
-        await self._session.refresh(check)
+        await self._session.flush()
         return check
 
     async def run_check(
@@ -112,11 +111,14 @@ class ServiceHealthService:
                 details={"error_type": exc.__class__.__name__},
             )
 
-        return await self.record_check(
+        check = await self.record_check(
             service_id=service_id,
             check_name=check_name,
             outcome=outcome,
         )
+        await self._session.commit()
+        await self._session.refresh(check)
+        return check
 
     async def get_latest_check(
         self,
