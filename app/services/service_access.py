@@ -1,24 +1,4 @@
-"""Shared owned-access loaders for the provider service graph.
-
-Helpers here carry real logic: the ownership filter, the not-found raise, the
-eager-load contract, and the locking protocol. This is not a repository: no
-one-line query wrappers around SQLAlchemy belong in this module.
-
-Pick the loader by what the use case reads and returns:
-
-- ``lock_owned_service``: the locked service row alone, for mutations that
-  only need ``id``/``lifecycle`` (endpoint creation).
-- ``load_owned_service`` / ``load_owned_service_for_update``: the full graph
-  (tags, endpoints, prices, upstreams). Service-returning operations use it
-  because the graph IS their response; contract snapshots need it too.
-  A leaner response body for those operations was considered and deferred.
-- ``lock_owned_service_by_endpoint`` then ``load_owned_endpoint``: the
-  service-level lock followed by the target endpoint with its price and
-  upstream, for endpoint-scoped mutations.
-
-Mutations lock first and load second with ``populate_existing`` so the
-loaded state is what the lock protects.
-"""
+"""Shared owned-access loaders for the provider service graph."""
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +22,8 @@ async def load_owned_service(
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
+        # Rows already in the identity map may predate a lock wait; refresh
+        # them so callers see the state the lock now protects.
         .execution_options(populate_existing=True)
         .where(
             Service.id == service_id,
@@ -81,6 +63,8 @@ async def load_owned_service_for_update(
     account_id: int,
     service_id: int,
 ) -> Service:
+    # Lock before loading the graph so the eager-loaded rows reflect the
+    # state after any concurrent mutation has committed.
     await lock_owned_service(
         session=session,
         account_id=account_id,
