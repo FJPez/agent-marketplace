@@ -1,4 +1,3 @@
-from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
@@ -143,10 +142,11 @@ async def update_endpoint(
     else:
         has_resulting_price = current_price is not None
 
+    impact = RevisionService.classify_endpoint_update(effective_changes)
     await _ensure_endpoint_update_allowed(
         session=session,
         service=service,
-        changed_fields=effective_changes,
+        impact=impact,
     )
 
     _ensure_active_paid_endpoint_priced(
@@ -182,10 +182,7 @@ async def update_endpoint(
             existing_price.currency = resulting_price.currency
             existing_price.updated_at = now
 
-    if (
-        service.lifecycle is ServiceLifecycle.ACTIVE
-        and RevisionService.classify_endpoint_update(effective_changes) is UpdateImpact.MATERIAL
-    ):
+    if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.MATERIAL:
         # The contract snapshot covers every endpoint and its price, so the full
         # graph is loaded here and only on the material path - the update itself
         # needs the target endpoint alone.
@@ -265,12 +262,12 @@ async def _ensure_endpoint_update_allowed(
     *,
     session: AsyncSession,
     service: Service,
-    changed_fields: Collection[str],
+    impact: UpdateImpact,
 ) -> None:
     if service.lifecycle is ServiceLifecycle.DRAFT:
         return
     if service.lifecycle is ServiceLifecycle.ACTIVE:
-        if RevisionService.classify_endpoint_update(changed_fields) is not UpdateImpact.MATERIAL:
+        if impact is not UpdateImpact.MATERIAL:
             return
         try:
             await ModerationService(session).ensure_service_publishable(service.id)
