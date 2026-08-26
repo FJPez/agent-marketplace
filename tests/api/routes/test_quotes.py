@@ -156,7 +156,7 @@ async def test_create_quote_logs_correlated_quote_event(
         key="translate",
     )
 
-    with caplog.at_level(logging.INFO, logger="app.services.quote_service"):
+    with caplog.at_level(logging.INFO, logger="app.services.quotes"):
         response = await async_client.post(
             "/v1/services/quote-log-service/quote",
             headers={"X-Request-ID": "quote-req-1"},
@@ -167,7 +167,7 @@ async def test_create_quote_logs_correlated_quote_event(
     record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.quote_service"
+        if record.name == "app.services.quotes"
         and getattr(record, EVENT_FIELD, None) == "quote.created"
     )
     assert getattr(record, EVENT_FIELD) == "quote.created"
@@ -715,3 +715,23 @@ async def test_create_quote_returns_conflict_when_service_lacks_contract_binding
 
     assert response.status_code == 409
     assert response.json() == {"detail": "service contract is not quoteable"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "identifier",
+    ["Quote-Service", "quote service", "not_a_slug", "0"],
+)
+async def test_create_quote_rejects_malformed_service_identifiers(
+    async_client: AsyncClient,
+    identifier: str,
+) -> None:
+    response = await async_client.post(
+        f"/v1/services/{identifier}/quote",
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": "service identifier must be a service id or a service slug"
+    }

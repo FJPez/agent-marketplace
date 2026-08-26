@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Body, status
 
-from app.db.session import get_db_session
+from app.api.deps.database import SessionDep
+from app.api.deps.service_ref import ServiceRefPath
+from app.api.deps.settings import SettingsDep
 from app.schemas.quote import QuoteCreateRequest, QuoteResponse
-from app.services.quote_service import QuoteService
+from app.services import quotes
 
 router = APIRouter(tags=["quotes"])
 
@@ -26,10 +27,16 @@ QUOTE_ROUTE_DESCRIPTION = (
         201: {"description": "Quote created successfully."},
         404: {"description": "The requested public service or endpoint does not exist."},
         409: {"description": "The endpoint is unavailable for quoting in its current state."},
+        422: {
+            "description": (
+                "The supplied identifier was neither a service id nor a slug, or the payload "
+                "did not match the endpoint request schema."
+            )
+        },
     },
 )
 async def create_quote(
-    service_id_or_slug: str,
+    service_ref: ServiceRefPath,
     request: Annotated[
         QuoteCreateRequest,
         Body(
@@ -46,12 +53,13 @@ async def create_quote(
             }
         ),
     ],
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> QuoteResponse:
-    service = QuoteService(session)
-    quote = await service.create_quote(
-        service_id_or_slug=service_id_or_slug,
-        endpoint_key=request.endpoint_key,
-        payload=request.payload,
+    quote = await quotes.create_quote(
+        session=session,
+        settings=settings,
+        service_ref=service_ref,
+        request=request,
     )
     return QuoteResponse.from_model(quote)
