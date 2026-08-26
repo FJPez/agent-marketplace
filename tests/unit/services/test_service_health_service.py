@@ -6,7 +6,6 @@ import pytest
 from app.core.enums import ServiceHealthStatus
 from app.db.models import ServiceHealthCheck
 from app.services.service_health_service import (
-    HEALTH_CHECK_FAILURE_SUMMARY,
     PUBLISH_READINESS_CHECK_NAME,
     ServiceHealthOutcome,
     ServiceHealthService,
@@ -111,7 +110,7 @@ async def test_run_check_persists_failed_outcome_when_checker_raises() -> None:
     )
 
     assert check.status is ServiceHealthStatus.FAIL
-    assert check.summary == HEALTH_CHECK_FAILURE_SUMMARY
+    assert check.summary == "health check failed"
     assert check.details == {"error_type": "RuntimeError"}
 
 
@@ -131,6 +130,6 @@ async def test_run_check_logs_and_sanitizes_checker_exception(
             checker=FailingChecker(),
         )
 
-    assert check.summary == HEALTH_CHECK_FAILURE_SUMMARY
+    assert check.summary == "health check failed"
     assert "probe timed out" not in (check.summary or "")
     assert any("service health check failed" in message for message in caplog.messages)

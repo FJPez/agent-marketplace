@@ -11,7 +11,6 @@ from app.repositories.service_health_check_repo import ServiceHealthCheckReposit
 
 logger = get_logger(__name__)
 PUBLISH_READINESS_CHECK_NAME = "publish-readiness"
-HEALTH_CHECK_FAILURE_SUMMARY = "health check failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,7 +84,7 @@ class ServiceHealthService:
             )
             outcome = ServiceHealthOutcome(
                 status=ServiceHealthStatus.FAIL,
-                summary=HEALTH_CHECK_FAILURE_SUMMARY,
+                summary="health check failed",
                 details={"error_type": exc.__class__.__name__},
             )
 

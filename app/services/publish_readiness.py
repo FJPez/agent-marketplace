@@ -5,8 +5,6 @@ from app.core.errors import InvalidInputError
 from app.db.models.service import Service
 from app.integrations.provider_gateway.signing import get_hmac_auth_config
 
-PUBLISH_READINESS_PASS_SUMMARY = "service is publish-ready"
-
 
 def validate_service_for_publish(service: Service) -> None:
     if not service.endpoints:

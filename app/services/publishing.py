@@ -9,10 +9,7 @@ from app.core.errors import InvalidInputError, InvalidStateError
 from app.db.models.service import Service
 from app.services import revisions, service_access
 from app.services.moderation_service import ModerationService, ServiceUnavailableError
-from app.services.publish_readiness import (
-    PUBLISH_READINESS_PASS_SUMMARY,
-    validate_service_for_publish,
-)
+from app.services.publish_readiness import validate_service_for_publish
 from app.services.service_health_service import (
     PUBLISH_READINESS_CHECK_NAME,
     ServiceHealthOutcome,
@@ -62,7 +59,7 @@ async def publish_service(
         check_name=PUBLISH_READINESS_CHECK_NAME,
         outcome=ServiceHealthOutcome(
             status=ServiceHealthStatus.PASS,
-            summary=PUBLISH_READINESS_PASS_SUMMARY,
+            summary="service is publish-ready",
             details={
                 "enabled_endpoint_count": len(
                     [endpoint for endpoint in service.endpoints if endpoint.is_enabled],
