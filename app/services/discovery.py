@@ -16,15 +16,15 @@ async def list_services(*, session: AsyncSession) -> list[Service]:
     """Return active, listed services that expose at least one enabled endpoint."""
     statement = (
         select(Service)
-        .options(
-            selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
+        .options(selectinload(Service.tags))
+        .where(
+            Service.lifecycle == ServiceLifecycle.ACTIVE,
+            Service.endpoints.any(ServiceEndpoint.is_enabled.is_(True)),
         )
-        .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
         .order_by(desc(Service.created_at), desc(Service.id))
     )
     result = await session.scalars(statement)
-    visible_services = [service for service in result.all() if _has_public_endpoints(service)]
+    visible_services = list(result.all())
     if not visible_services:
         return []
 
@@ -44,13 +44,14 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
         )
         .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
     )
-    if service_ref.id is not None:
-        statement = statement.where(Service.id == service_ref.id)
-    else:
-        statement = statement.where(Service.slug == service_ref.slug)
+    statement = statement.where(
+        Service.id == service_ref.id
+        if service_ref.id is not None
+        else Service.slug == service_ref.slug
+    )
 
     service = await session.scalar(statement)
-    if service is None or not _has_public_endpoints(service):
+    if service is None or not any(endpoint.is_enabled for endpoint in service.endpoints):
         raise NotFoundError("service not found")
 
     try:
@@ -59,7 +60,3 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
         # Suspended and delisted services must stay indistinguishable from missing ones publicly.
         raise NotFoundError("service not found") from exc
     return service
-
-
-def _has_public_endpoints(service: Service) -> bool:
-    return any(endpoint.is_enabled for endpoint in service.endpoints)

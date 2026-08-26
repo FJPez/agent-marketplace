@@ -218,7 +218,7 @@ async def test_get_service_rejects_hidden_services(
             )
 
 
-async def test_discovery_reads_load_pricing_but_not_upstream(
+async def test_discovery_reads_load_only_what_their_responses_render(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
@@ -232,7 +232,7 @@ async def test_discovery_reads_load_pricing_but_not_upstream(
 
     async with db_session_factory() as session:
         listed_service = (await discovery.list_services(session=session))[0]
-        listed_unloaded = inspect(listed_service.endpoints[0]).unloaded
+        listed_unloaded = inspect(listed_service).unloaded
 
     async with db_session_factory() as session:
         detail_service = await discovery.get_service(
@@ -241,7 +241,7 @@ async def test_discovery_reads_load_pricing_but_not_upstream(
         )
         detail_unloaded = inspect(detail_service.endpoints[0]).unloaded
 
-    assert "upstream" in listed_unloaded
-    assert "price" not in listed_unloaded
+    assert "endpoints" in listed_unloaded
+    assert "tags" not in listed_unloaded
     assert "upstream" in detail_unloaded
     assert "price" not in detail_unloaded

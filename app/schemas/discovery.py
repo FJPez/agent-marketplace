@@ -130,7 +130,7 @@ class PublicServiceDetail(PublicServiceListItem):
     def from_model(cls, service: Service) -> Self:
         list_item = PublicServiceListItem.from_model(service)
         return cls(
-            **dict(list_item),
+            **list_item.model_dump(),
             endpoints=[
                 PublicEndpointSummary.from_model(endpoint)
                 for endpoint in service.endpoints
