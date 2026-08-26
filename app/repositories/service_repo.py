@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -36,15 +36,6 @@ class ServiceRepository:
             Service.provider_account_id == provider_account_id,
         )
         return await self._session.scalar(statement)
-
-    async def list_public(self) -> list[Service]:
-        statement = (
-            _service_with_relations()
-            .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
-            .order_by(desc(Service.created_at), desc(Service.id))
-        )
-        result = await self._session.scalars(statement)
-        return list(result.all())
 
     async def get_by_id(self, *, service_id: int) -> Service | None:
         statement = _service_with_relations().where(Service.id == service_id)

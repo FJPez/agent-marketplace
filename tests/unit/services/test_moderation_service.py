@@ -378,42 +378,6 @@ async def test_ensure_service_publishable_allows_delisted_service() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_service_listed_blocks_suspended_service() -> None:
-    history = [
-        _record(
-            service_id=42,
-            actor_account_id=7,
-            action=ModerationActionType.SUSPEND.value,
-            reason="spam",
-        ),
-    ]
-    service, _ = _service(history=history)
-
-    with pytest.raises(ServiceUnavailableError) as exc_info:
-        await service.ensure_service_listed(42)
-
-    assert exc_info.value.state is ModerationServiceState.SUSPENDED
-
-
-@pytest.mark.asyncio
-async def test_ensure_service_listed_blocks_delisted_service() -> None:
-    history = [
-        _record(
-            service_id=42,
-            actor_account_id=None,
-            action=ModerationActionType.DELIST.value,
-            reason="policy violation",
-        ),
-    ]
-    service, _ = _service(history=history)
-
-    with pytest.raises(ServiceUnavailableError) as exc_info:
-        await service.ensure_service_listed(42)
-
-    assert exc_info.value.state is ModerationServiceState.DELISTED
-
-
-@pytest.mark.asyncio
 async def test_ensure_service_available_allows_clear_service() -> None:
     service, _ = _service()
 

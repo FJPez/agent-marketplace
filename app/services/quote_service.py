@@ -125,7 +125,7 @@ class QuoteService:
         if service is None:
             raise QuoteStaleError("quote no longer matches current service state")
         try:
-            await self._moderation_service.ensure_service_listed(service.id)
+            await self._moderation_service.ensure_service_available(service.id)
         except ServiceUnavailableError as exc:
             raise QuoteStaleError("quote no longer matches current service state") from exc
         if service.current_revision_id is None or service.current_change_token is None:
@@ -156,7 +156,7 @@ class QuoteService:
 
     async def _ensure_service_is_listed(self, service_id: int) -> None:
         try:
-            await self._moderation_service.ensure_service_listed(service_id)
+            await self._moderation_service.ensure_service_available(service_id)
         except ServiceUnavailableError as exc:
             raise QuoteNotFoundError("service not found") from exc
 

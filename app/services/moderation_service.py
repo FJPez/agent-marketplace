@@ -172,9 +172,6 @@ class ModerationService:
         if state is ModerationServiceState.SUSPENDED:
             raise ServiceUnavailableError(service_id=service_id, state=state)
 
-    async def ensure_service_listed(self, service_id: int) -> None:
-        await self.ensure_service_available(service_id)
-
     async def list_actions(self, *, service_id: int) -> list[ModerationAction]:
         return await self._moderation_action_repo.list_for_service(service_id)
 
@@ -216,11 +213,6 @@ class ModerationService:
         await self._session.commit()
         await self._session.refresh(record)
         return record
-
-    async def _require_service(self, service_id: int) -> None:
-        service = await self._service_repo.get_by_id(service_id=service_id)
-        if service is None:
-            raise ModeratedServiceNotFoundError("service not found")
 
 
 def _is_valid_transition(

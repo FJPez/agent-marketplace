@@ -107,7 +107,7 @@ class InvokeService:
         if service is None:
             raise InvokeNotFoundError("service not found")
         try:
-            await self._moderation_service.ensure_service_listed(service.id)
+            await self._moderation_service.ensure_service_available(service.id)
         except ServiceUnavailableError as exc:
             raise InvokeNotFoundError("service not found") from exc
 
