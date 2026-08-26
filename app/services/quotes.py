@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import joinedload
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
@@ -66,7 +66,8 @@ async def create_quote(
 
     endpoint = await session.scalar(
         select(ServiceEndpoint)
-        .options(selectinload(ServiceEndpoint.price))
+        # One endpoint, one-to-one price: a join beats a second SELECT here.
+        .options(joinedload(ServiceEndpoint.price))
         .where(
             ServiceEndpoint.service_id == service.id,
             ServiceEndpoint.key == request.endpoint_key,
