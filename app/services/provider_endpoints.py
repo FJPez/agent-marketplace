@@ -1,4 +1,3 @@
-from collections.abc import Collection
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import IntegrityError
@@ -6,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
 from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation
 from app.db.models.endpoint_price import EndpointPrice
@@ -31,7 +30,7 @@ async def create_endpoint(
     service_id: int,
     request: EndpointCreateRequest,
 ) -> ServiceEndpoint:
-    service = await service_access.load_owned_service_for_update(
+    service = await service_access.lock_owned_service(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -81,22 +80,17 @@ async def update_endpoint(
     endpoint_id: int,
     changes: EndpointUpdateRequest,
 ) -> ServiceEndpoint:
-    locked_service_id = await service_access.lock_owned_service_by_endpoint(
+    await service_access.lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
     )
-    service = await service_access.load_owned_service(
+    endpoint = await service_access.load_owned_endpoint(
         session=session,
         account_id=account_id,
-        service_id=locked_service_id,
+        endpoint_id=endpoint_id,
     )
-    endpoint = next(
-        (candidate for candidate in service.endpoints if candidate.id == endpoint_id),
-        None,
-    )
-    if endpoint is None:
-        raise NotFoundError("endpoint not found")
+    service = endpoint.service
 
     # access_mode is non-clearable (the schema rejects an explicit null), so
     # None can only mean the field was omitted.
@@ -148,10 +142,11 @@ async def update_endpoint(
     else:
         has_resulting_price = current_price is not None
 
+    impact = RevisionService.classify_endpoint_update(effective_changes)
     await _ensure_endpoint_update_allowed(
         session=session,
         service=service,
-        changed_fields=effective_changes,
+        impact=impact,
     )
 
     _ensure_active_paid_endpoint_priced(
@@ -187,11 +182,16 @@ async def update_endpoint(
             existing_price.currency = resulting_price.currency
             existing_price.updated_at = now
 
-    if service.lifecycle is ServiceLifecycle.ACTIVE:
-        await RevisionService(session).create_revision_if_material_endpoint_update(
-            service,
-            update_fields=effective_changes,
+    if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.MATERIAL:
+        # The contract snapshot covers every endpoint and its price, so the full
+        # graph is loaded here and only on the material path - the update itself
+        # needs the target endpoint alone.
+        graph = await service_access.load_owned_service(
+            session=session,
+            account_id=account_id,
+            service_id=service.id,
         )
+        await RevisionService(session).create_revision(graph)
 
     await session.commit()
     return endpoint
@@ -212,22 +212,17 @@ async def upsert_upstream(
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
 
-    locked_service_id = await service_access.lock_owned_service_by_endpoint(
+    await service_access.lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
     )
-    service = await service_access.load_owned_service(
+    endpoint = await service_access.load_owned_endpoint(
         session=session,
         account_id=account_id,
-        service_id=locked_service_id,
+        endpoint_id=endpoint_id,
     )
-    endpoint = next(
-        (candidate for candidate in service.endpoints if candidate.id == endpoint_id),
-        None,
-    )
-    if endpoint is None:
-        raise NotFoundError("endpoint not found")
+    service = endpoint.service
 
     upstream = endpoint.upstream
     if (
@@ -267,12 +262,12 @@ async def _ensure_endpoint_update_allowed(
     *,
     session: AsyncSession,
     service: Service,
-    changed_fields: Collection[str],
+    impact: UpdateImpact,
 ) -> None:
     if service.lifecycle is ServiceLifecycle.DRAFT:
         return
     if service.lifecycle is ServiceLifecycle.ACTIVE:
-        if RevisionService.classify_endpoint_update(changed_fields) is not UpdateImpact.MATERIAL:
+        if impact is not UpdateImpact.MATERIAL:
             return
         try:
             await ModerationService(session).ensure_service_publishable(service.id)

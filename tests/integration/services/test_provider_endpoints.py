@@ -19,6 +19,7 @@ from app.db.models import EndpointPrice, ProviderUpstream, Service, ServiceEndpo
 from app.schemas.pricing import FixedPrice
 from app.schemas.service import (
     EndpointCreateRequest,
+    EndpointResponse,
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
 )
@@ -905,6 +906,126 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
     assert persisted_service is not None
     assert revision_count == 2
     assert persisted_service.current_change_token != before_token
+
+
+async def test_update_endpoint_active_material_update_snapshots_sibling_endpoints(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    updated_endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="translate",
+    )
+    sibling_endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="summarize",
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(
+        db_session_factory,
+        endpoint_id=sibling_endpoint_id,
+        amount_minor=750,
+        currency="EUR",
+    )
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=updated_endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=60),
+        )
+
+    async with db_session_factory() as session:
+        latest_revision = await session.scalar(
+            select(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id)
+            .order_by(ServiceRevision.revision_number.desc())
+            .limit(1),
+        )
+
+    assert latest_revision is not None
+    # Ordered by (key, id): "summarize" before "translate".
+    assert latest_revision.snapshot["endpoints"] == [
+        {
+            "id": sibling_endpoint_id,
+            "key": "summarize",
+            "access_mode": "paid",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "pricing": {
+                "pricing_type": "fixed_per_call",
+                "amount_minor": 750,
+                "currency": "EUR",
+            },
+            "timeout_seconds": 30,
+            "is_enabled": True,
+        },
+        {
+            "id": updated_endpoint_id,
+            "key": "translate",
+            "access_mode": "free",
+            "request_schema": {"type": "object"},
+            "response_schema": {"type": "object"},
+            "pricing": {
+                "pricing_type": "free",
+                "amount_minor": None,
+                "currency": None,
+            },
+            "timeout_seconds": 60,
+            "is_enabled": True,
+        },
+    ]
+
+
+async def test_update_endpoint_returns_endpoint_renderable_without_lazy_loading(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_endpoint_price_record(
+        db_session_factory,
+        endpoint_id=endpoint_id,
+        amount_minor=500,
+        currency="USD",
+    )
+    await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        endpoint = await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest(timeout_seconds=60),
+        )
+        response = EndpointResponse.from_model(endpoint)
+
+    assert response.id == endpoint_id
+    assert response.timeout_seconds == 60
+    assert response.has_upstream is True
+    assert response.pricing is not None
+    assert response.pricing.amount_minor == 500
+    assert response.pricing.currency == "USD"
 
 
 async def test_update_endpoint_active_name_only_update_creates_zero_revisions(
