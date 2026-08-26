@@ -1,12 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Response, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Body, Response, status
 
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
 from app.api.deps.settings import SettingsDep
-from app.db.session import get_db_session
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointResponse,
@@ -17,8 +15,7 @@ from app.schemas.service import (
     ServiceTagsUpdateRequest,
     ServiceUpdateRequest,
 )
-from app.services import provider_drafts, provider_endpoints
-from app.services.publish_service import PublishService
+from app.services import provider_drafts, provider_endpoints, publishing
 
 router = APIRouter(prefix="/provider", tags=["provider-services"])
 
@@ -205,10 +202,13 @@ async def replace_provider_service_tags(
 async def publish_provider_service(
     service_id: int,
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ServiceResponse:
-    service = PublishService(session)
-    published = await service.publish_service(actor, service_id=service_id)
+    published = await publishing.publish_service(
+        session=session,
+        account_id=actor.account_id,
+        service_id=service_id,
+    )
     return ServiceResponse.from_model(published)
 
 

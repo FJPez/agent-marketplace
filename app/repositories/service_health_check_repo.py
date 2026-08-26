@@ -1,7 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import ServiceHealthStatus
@@ -35,18 +34,3 @@ class ServiceHealthCheckRepository:
         check = ServiceHealthCheck(**check_kwargs)
         self._session.add(check)
         return check
-
-    async def get_latest_for_service_check(
-        self,
-        *,
-        service_id: int,
-        check_name: str,
-    ) -> ServiceHealthCheck | None:
-        statement = (
-            select(ServiceHealthCheck)
-            .where(ServiceHealthCheck.service_id == service_id)
-            .where(ServiceHealthCheck.check_name == check_name)
-            .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
-            .limit(1)
-        )
-        return await self._session.scalar(statement)

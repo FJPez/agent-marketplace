@@ -1195,7 +1195,7 @@ async def test_publish_service_rejects_paid_endpoint_without_pricing(
 
     assert response.status_code == 422
     assert response.json() == {
-        "detail": "paid endpoint 'translate' must define fixed_per_call pricing before publish",
+        "detail": "paid endpoint 'translate' must define a price before publish",
     }
 
 
