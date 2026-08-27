@@ -9,7 +9,8 @@ from app.core.errors import NotFoundError
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.service_ref import PublicServiceRef
-from app.services.moderation_service import ModerationService, ServiceUnavailableError
+from app.services import moderation
+from app.services.moderation import ServiceUnavailableError
 
 
 async def list_services(*, session: AsyncSession) -> list[Service]:
@@ -28,8 +29,9 @@ async def list_services(*, session: AsyncSession) -> list[Service]:
     if not visible_services:
         return []
 
-    unlisted_ids = await ModerationService(session).get_unlisted_service_ids(
-        [service.id for service in visible_services],
+    unlisted_ids = await moderation.get_unlisted_service_ids(
+        session=session,
+        service_ids=[service.id for service in visible_services],
     )
     return [service for service in visible_services if service.id not in unlisted_ids]
 
@@ -44,18 +46,17 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
         )
         .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
     )
-    statement = statement.where(
-        Service.id == service_ref.id
-        if service_ref.id is not None
-        else Service.slug == service_ref.slug
-    )
+    if isinstance(service_ref, int):
+        statement = statement.where(Service.id == service_ref)
+    else:
+        statement = statement.where(Service.slug == service_ref)
 
     service = await session.scalar(statement)
     if service is None or not any(endpoint.is_enabled for endpoint in service.endpoints):
         raise NotFoundError("service not found")
 
     try:
-        await ModerationService(session).ensure_service_available(service.id)
+        await moderation.ensure_service_available(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         # Suspended and delisted services must stay indistinguishable from missing ones publicly.
         raise NotFoundError("service not found") from exc

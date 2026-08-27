@@ -18,8 +18,8 @@ from app.schemas.service import (
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
 )
-from app.services import revisions, service_access
-from app.services.moderation_service import ModerationService, ServiceUnavailableError
+from app.services import moderation, revisions, service_access
+from app.services.moderation import ServiceUnavailableError
 from app.services.revisions import UpdateImpact
 
 
@@ -270,7 +270,7 @@ async def _ensure_endpoint_update_allowed(
         if impact is not UpdateImpact.MATERIAL:
             return
         try:
-            await ModerationService(session).ensure_service_publishable(service.id)
+            await moderation.ensure_service_publishable(session=session, service_id=service.id)
         except ServiceUnavailableError as exc:
             raise InvalidStateError(f"service is {exc.state.value}") from exc
         return

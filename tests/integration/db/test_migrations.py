@@ -110,6 +110,19 @@ def test_head_migration_points_service_provider_fk_at_accounts(
     assert provider_fk["referred_columns"] == ["id"]
 
 
+def test_head_migration_cascades_moderation_actions_from_services(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "moderation_actions"))
+    service_fk = next(fk for fk in foreign_keys if fk["constrained_columns"] == ["service_id"])
+
+    assert service_fk["referred_table"] == "services"
+    assert service_fk["options"] == {"ondelete": "CASCADE"}
+
+
 def test_head_migration_uses_bigint_for_payout_amount_minor(
     migrated_database: None,
     db_engine: AsyncEngine,
@@ -360,7 +373,7 @@ def test_endpoint_prices_migration_round_trips_legacy_pricing_rows(
         with pytest.raises(IntegrityError):
             asyncio.run(_insert_endpoint_price_without_currency(db_engine))
 
-        command.downgrade(alembic_config, "-1")
+        command.downgrade(alembic_config, "auth_wallet_binding_0016")
 
         table_names = asyncio.run(get_table_names(db_engine))
         assert "pricing_models" in table_names

@@ -1,12 +1,11 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Query, status
 
 from app.api.deps.auth import AdminActor
-from app.db.session import get_db_session
+from app.api.deps.database import SessionDep
 from app.schemas.admin import ModerationActionRequest, ModerationActionResponse
-from app.services.moderation_service import ModerationService
+from app.services import moderation
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -26,14 +25,14 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 async def suspend_service(
     service_id: int,
     request: ModerationActionRequest,
-    actor: AdminActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: AdminActor,
+    session: SessionDep,
 ) -> ModerationActionResponse:
-    service = ModerationService(session)
-    action = await service.suspend_service(
+    action = await moderation.suspend_service(
+        session=session,
         service_id=service_id,
+        actor_account_id=admin.account_id,
         reason=request.reason,
-        actor=actor,
     )
     return ModerationActionResponse.from_model(action)
 
@@ -53,14 +52,14 @@ async def suspend_service(
 async def restore_service(
     service_id: int,
     request: ModerationActionRequest,
-    actor: AdminActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: AdminActor,
+    session: SessionDep,
 ) -> ModerationActionResponse:
-    service = ModerationService(session)
-    action = await service.restore_service(
+    action = await moderation.restore_service(
+        session=session,
         service_id=service_id,
+        actor_account_id=admin.account_id,
         reason=request.reason,
-        actor=actor,
     )
     return ModerationActionResponse.from_model(action)
 
@@ -80,14 +79,14 @@ async def restore_service(
 async def delist_service(
     service_id: int,
     request: ModerationActionRequest,
-    actor: AdminActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: AdminActor,
+    session: SessionDep,
 ) -> ModerationActionResponse:
-    service = ModerationService(session)
-    action = await service.delist_service(
+    action = await moderation.delist_service(
+        session=session,
         service_id=service_id,
+        actor_account_id=admin.account_id,
         reason=request.reason,
-        actor=actor,
     )
     return ModerationActionResponse.from_model(action)
 
@@ -100,10 +99,9 @@ async def delist_service(
     responses={200: {"description": "Moderation actions returned successfully."}},
 )
 async def list_moderation_actions(
-    actor: AdminActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    admin: AdminActor,
+    session: SessionDep,
     service_id: Annotated[int, Query(gt=0)],
 ) -> list[ModerationActionResponse]:
-    service = ModerationService(session)
-    actions = await service.list_actions(service_id=service_id)
+    actions = await moderation.list_actions(session=session, service_id=service_id)
     return [ModerationActionResponse.from_model(action) for action in actions]

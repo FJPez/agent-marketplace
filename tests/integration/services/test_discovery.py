@@ -14,7 +14,6 @@ from tests.fixtures.domain import (
 from app.core.enums import ServiceLifecycle
 from app.core.errors import NotFoundError
 from app.db.models import Service
-from app.schemas.service_ref import PublicServiceRef
 from app.services import discovery
 
 pytestmark = [
@@ -160,11 +159,11 @@ async def test_get_service_resolves_by_id_and_by_slug(
     async with db_session_factory() as session:
         by_id = await discovery.get_service(
             session=session,
-            service_ref=PublicServiceRef(id=service_id),
+            service_ref=service_id,
         )
         by_slug = await discovery.get_service(
             session=session,
-            service_ref=PublicServiceRef(slug="resolvable-service"),
+            service_ref="resolvable-service",
         )
 
     assert by_id.id == service_id
@@ -209,12 +208,12 @@ async def test_get_service_rejects_hidden_services(
             with pytest.raises(NotFoundError):
                 await discovery.get_service(
                     session=session,
-                    service_ref=PublicServiceRef(id=hidden_service_id),
+                    service_ref=hidden_service_id,
                 )
         with pytest.raises(NotFoundError):
             await discovery.get_service(
                 session=session,
-                service_ref=PublicServiceRef(slug="never-created-service"),
+                service_ref="never-created-service",
             )
 
 
@@ -237,7 +236,7 @@ async def test_discovery_reads_load_only_what_their_responses_render(
     async with db_session_factory() as session:
         detail_service = await discovery.get_service(
             session=session,
-            service_ref=PublicServiceRef(id=service_id),
+            service_ref=service_id,
         )
         detail_unloaded = inspect(detail_service.endpoints[0]).unloaded
 

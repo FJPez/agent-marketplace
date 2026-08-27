@@ -732,6 +732,6 @@ async def test_create_quote_rejects_malformed_service_identifiers(
     )
 
     assert response.status_code == 422
-    assert response.json() == {
-        "detail": "service identifier must be a service id or a service slug"
-    }
+    detail = response.json()["detail"]
+    assert isinstance(detail, list)
+    assert all("service_id_or_slug" in error["loc"] for error in detail)

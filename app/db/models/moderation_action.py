@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Identity,
+    Index,
     String,
     Text,
     text,
@@ -22,11 +23,18 @@ class ModerationAction(Base):
             "action IN ('suspend', 'restore', 'delist')",
             name="action_valid",
         ),
+        Index(
+            "ix_moderation_actions_service_id_id_desc",
+            "service_id",
+            text("id DESC"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    # `service_id` remains a scalar reference until feat/provider-services lands.
-    service_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    service_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("services.id", ondelete="CASCADE"),
+    )
     actor_account_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("accounts.id", ondelete="SET NULL"),
