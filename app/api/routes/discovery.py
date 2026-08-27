@@ -1,13 +1,13 @@
 from fastapi import APIRouter
 
 from app.api.deps.database import SessionDep
-from app.api.deps.service_ref import ServiceRefPath
 from app.schemas.discovery import (
     PublicServiceDetail,
     PublicServiceListItem,
     PublicServicePricingResponse,
     PublicServiceSchemaResponse,
 )
+from app.schemas.service_ref import PublicServiceRef
 from app.services import discovery
 
 router = APIRouter(tags=["discovery"])
@@ -41,10 +41,10 @@ async def list_services(session: SessionDep) -> list[PublicServiceListItem]:
     },
 )
 async def get_service_detail(
-    service_ref: ServiceRefPath,
+    service_id_or_slug: PublicServiceRef,
     session: SessionDep,
 ) -> PublicServiceDetail:
-    found = await discovery.get_service(session=session, service_ref=service_ref)
+    found = await discovery.get_service(session=session, service_ref=service_id_or_slug)
     return PublicServiceDetail.from_model(found)
 
 
@@ -63,10 +63,10 @@ async def get_service_detail(
     },
 )
 async def get_service_schema(
-    service_ref: ServiceRefPath,
+    service_id_or_slug: PublicServiceRef,
     session: SessionDep,
 ) -> PublicServiceSchemaResponse:
-    found = await discovery.get_service(session=session, service_ref=service_ref)
+    found = await discovery.get_service(session=session, service_ref=service_id_or_slug)
     return PublicServiceSchemaResponse.from_model(found)
 
 
@@ -82,8 +82,8 @@ async def get_service_schema(
     },
 )
 async def get_service_pricing(
-    service_ref: ServiceRefPath,
+    service_id_or_slug: PublicServiceRef,
     session: SessionDep,
 ) -> PublicServicePricingResponse:
-    found = await discovery.get_service(session=session, service_ref=service_ref)
+    found = await discovery.get_service(session=session, service_ref=service_id_or_slug)
     return PublicServicePricingResponse.from_model(found)

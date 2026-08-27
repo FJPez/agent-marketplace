@@ -3,9 +3,9 @@ from typing import Annotated
 from fastapi import APIRouter, Body, status
 
 from app.api.deps.database import SessionDep
-from app.api.deps.service_ref import ServiceRefPath
 from app.api.deps.settings import SettingsDep
 from app.schemas.quote import QuoteCreateRequest, QuoteResponse
+from app.schemas.service_ref import PublicServiceRef
 from app.services import quotes
 
 router = APIRouter(tags=["quotes"])
@@ -36,7 +36,7 @@ QUOTE_ROUTE_DESCRIPTION = (
     },
 )
 async def create_quote(
-    service_ref: ServiceRefPath,
+    service_id_or_slug: PublicServiceRef,
     request: Annotated[
         QuoteCreateRequest,
         Body(
@@ -59,7 +59,7 @@ async def create_quote(
     quote = await quotes.create_quote(
         session=session,
         settings=settings,
-        service_ref=service_ref,
+        service_ref=service_id_or_slug,
         request=request,
     )
     return QuoteResponse.from_model(quote)
