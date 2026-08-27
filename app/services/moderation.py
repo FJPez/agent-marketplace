@@ -185,7 +185,7 @@ async def _record_action(
         raise NotFoundError("service not found")
 
     state = await get_service_state(session=session, service_id=service_id)
-    if not _is_valid_transition(state, action):
+    if action not in ALLOWED_ACTIONS[state]:
         msg = f"cannot {action.value} service {service_id} from {state.value}"
         raise InvalidStateError(msg)
 
@@ -198,13 +198,5 @@ async def _record_action(
         created_at=now,
     )
     session.add(record)
-    await session.flush()
     await session.commit()
     return record
-
-
-def _is_valid_transition(
-    state: ModerationServiceState,
-    action: ModerationActionType,
-) -> bool:
-    return action in ALLOWED_ACTIONS[state]

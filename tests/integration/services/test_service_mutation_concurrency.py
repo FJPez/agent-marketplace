@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from tests.fixtures.domain import (
+    create_admin_account_record,
     create_endpoint_price_record,
     create_endpoint_record,
     create_provider_account_record,
@@ -16,9 +17,9 @@ from tests.fixtures.domain import (
 from app.core.config import Settings
 from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.core.errors import InvalidStateError
-from app.db.models import Service, ServiceEndpoint, ServiceRevision
+from app.db.models import ModerationAction, Service, ServiceEndpoint, ServiceRevision
 from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
-from app.services import provider_endpoints, publishing, revisions, service_access
+from app.services import moderation, provider_endpoints, publishing, revisions, service_access
 
 # Bounded wait proving the concurrent mutation is still blocked on publish's
 # row lock rather than racing ahead of publish's single commit.
@@ -395,3 +396,95 @@ async def test_publish_holds_its_lock_until_the_single_commit(
     assert service.current_revision_id is not None
     assert service.current_change_token is not None
     assert service.endpoints[0].timeout_seconds == 45
+
+
+@pytest.mark.asyncio
+async def test_concurrent_suspends_serialise_on_the_service_row_lock(
+    migrated_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = migrated_database
+    provider_account_id = await _create_provider_account(db_session_factory)
+    admin_account_id = await create_admin_account_record(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="suspend-race-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+
+    # The first suspend pauses after reading the moderation state, holding the
+    # service row lock across the window the second suspend has to survive.
+    original_get_service_state = moderation.get_service_state
+    first_suspend_has_lock = asyncio.Event()
+    release_first_suspend = asyncio.Event()
+    state_reads = 0
+
+    async def delayed_get_service_state(
+        *,
+        session: AsyncSession,
+        service_id: int,
+    ) -> moderation.ModerationServiceState:
+        nonlocal state_reads
+        state = await original_get_service_state(session=session, service_id=service_id)
+        state_reads += 1
+        if state_reads == 1:
+            first_suspend_has_lock.set()
+            await release_first_suspend.wait()
+        return state
+
+    monkeypatch.setattr(moderation, "get_service_state", delayed_get_service_state)
+
+    async def suspend(reason: str) -> None:
+        async with db_session_factory() as session:
+            await moderation.suspend_service(
+                session=session,
+                service_id=service_id,
+                actor_account_id=admin_account_id,
+                reason=reason,
+            )
+
+    async def losing_suspend() -> None:
+        async with db_session_factory() as session:
+            with pytest.raises(
+                InvalidStateError,
+                match=f"cannot suspend service {service_id} from suspended",
+            ):
+                await moderation.suspend_service(
+                    session=session,
+                    service_id=service_id,
+                    actor_account_id=admin_account_id,
+                    reason="second",
+                )
+
+    first_task = asyncio.create_task(suspend("first"))
+    await first_suspend_has_lock.wait()
+    second_task = asyncio.create_task(losing_suspend())
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(second_task), timeout=LOCK_WAIT_TIMEOUT_SECONDS)
+
+    assert not second_task.done()
+
+    release_first_suspend.set()
+    await first_task
+    await second_task
+
+    async with db_session_factory() as session:
+        action_count = await session.scalar(
+            select(func.count())
+            .select_from(ModerationAction)
+            .where(ModerationAction.service_id == service_id),
+        )
+        persisted_actions = list(
+            (
+                await session.scalars(
+                    select(ModerationAction).where(ModerationAction.service_id == service_id),
+                )
+            ).all()
+        )
+
+    assert action_count == 1
+    assert persisted_actions[0].action == moderation.ModerationActionType.SUSPEND.value
+    assert persisted_actions[0].reason == "first"

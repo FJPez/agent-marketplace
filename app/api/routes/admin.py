@@ -25,13 +25,13 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 async def suspend_service(
     service_id: int,
     request: ModerationActionRequest,
-    actor: AdminActor,
+    admin: AdminActor,
     session: SessionDep,
 ) -> ModerationActionResponse:
     action = await moderation.suspend_service(
         session=session,
         service_id=service_id,
-        actor_account_id=actor.account_id,
+        actor_account_id=admin.account_id,
         reason=request.reason,
     )
     return ModerationActionResponse.from_model(action)
@@ -52,13 +52,13 @@ async def suspend_service(
 async def restore_service(
     service_id: int,
     request: ModerationActionRequest,
-    actor: AdminActor,
+    admin: AdminActor,
     session: SessionDep,
 ) -> ModerationActionResponse:
     action = await moderation.restore_service(
         session=session,
         service_id=service_id,
-        actor_account_id=actor.account_id,
+        actor_account_id=admin.account_id,
         reason=request.reason,
     )
     return ModerationActionResponse.from_model(action)
@@ -79,13 +79,13 @@ async def restore_service(
 async def delist_service(
     service_id: int,
     request: ModerationActionRequest,
-    actor: AdminActor,
+    admin: AdminActor,
     session: SessionDep,
 ) -> ModerationActionResponse:
     action = await moderation.delist_service(
         session=session,
         service_id=service_id,
-        actor_account_id=actor.account_id,
+        actor_account_id=admin.account_id,
         reason=request.reason,
     )
     return ModerationActionResponse.from_model(action)
@@ -99,7 +99,7 @@ async def delist_service(
     responses={200: {"description": "Moderation actions returned successfully."}},
 )
 async def list_moderation_actions(
-    actor: AdminActor,
+    admin: AdminActor,
     session: SessionDep,
     service_id: Annotated[int, Query(gt=0)],
 ) -> list[ModerationActionResponse]:
