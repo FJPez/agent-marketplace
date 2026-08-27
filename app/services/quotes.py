@@ -47,11 +47,10 @@ async def create_quote(
 ) -> Quote:
     """Price an enabled paid endpoint and bind the quote to the current service contract."""
     statement = select(Service).where(Service.lifecycle == ServiceLifecycle.ACTIVE)
-    statement = statement.where(
-        Service.id == service_ref.id
-        if service_ref.id is not None
-        else Service.slug == service_ref.slug
-    )
+    if isinstance(service_ref, int):
+        statement = statement.where(Service.id == service_ref)
+    else:
+        statement = statement.where(Service.slug == service_ref)
     service = await session.scalar(statement)
     if service is None:
         raise NotFoundError("service not found")

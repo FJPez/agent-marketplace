@@ -46,11 +46,10 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
         )
         .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
     )
-    statement = statement.where(
-        Service.id == service_ref.id
-        if service_ref.id is not None
-        else Service.slug == service_ref.slug
-    )
+    if isinstance(service_ref, int):
+        statement = statement.where(Service.id == service_ref)
+    else:
+        statement = statement.where(Service.slug == service_ref)
 
     service = await session.scalar(statement)
     if service is None or not any(endpoint.is_enabled for endpoint in service.endpoints):

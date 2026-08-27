@@ -1,36 +1,28 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.core.service_fields import SLUG_MAX_LENGTH
-from app.schemas.service_ref import SERVICE_ID_MAX, parse_public_service_ref
+from app.schemas.service_ref import SERVICE_ID_MAX, PublicServiceRef
+
+service_ref_adapter = TypeAdapter(PublicServiceRef)
 
 
-def test_parse_public_service_ref_reads_numeric_identifiers_as_ids() -> None:
-    ref = parse_public_service_ref("42")
-
-    assert ref.id == 42
-    assert ref.slug is None
+def test_public_service_ref_reads_numeric_identifiers_as_ids() -> None:
+    assert service_ref_adapter.validate_python("42") == 42
 
 
-def test_parse_public_service_ref_reads_non_numeric_identifiers_as_slugs() -> None:
-    ref = parse_public_service_ref("translation-service")
-
-    assert ref.id is None
-    assert ref.slug == "translation-service"
+def test_public_service_ref_reads_non_numeric_identifiers_as_slugs() -> None:
+    assert service_ref_adapter.validate_python("translation-service") == "translation-service"
 
 
-def test_parse_public_service_ref_accepts_maximum_length_slug() -> None:
+def test_public_service_ref_accepts_maximum_length_slug() -> None:
     longest_slug = "a" * SLUG_MAX_LENGTH
 
-    ref = parse_public_service_ref(longest_slug)
-
-    assert ref.slug == longest_slug
+    assert service_ref_adapter.validate_python(longest_slug) == longest_slug
 
 
-def test_parse_public_service_ref_accepts_maximum_service_id() -> None:
-    ref = parse_public_service_ref(str(SERVICE_ID_MAX))
-
-    assert ref.id == SERVICE_ID_MAX
+def test_public_service_ref_accepts_maximum_service_id() -> None:
+    assert service_ref_adapter.validate_python(str(SERVICE_ID_MAX)) == SERVICE_ID_MAX
 
 
 @pytest.mark.parametrize(
@@ -46,6 +38,6 @@ def test_parse_public_service_ref_accepts_maximum_service_id() -> None:
         "",
     ],
 )
-def test_parse_public_service_ref_rejects_malformed_identifiers(identifier: str) -> None:
+def test_public_service_ref_rejects_malformed_identifiers(identifier: str) -> None:
     with pytest.raises(ValidationError):
-        parse_public_service_ref(identifier)
+        service_ref_adapter.validate_python(identifier)

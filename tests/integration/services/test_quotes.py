@@ -18,7 +18,6 @@ from app.core.errors import InvalidStateError, NotFoundError
 from app.core.request_hash import hash_request_body
 from app.db.models import Quote, Service, ServiceEndpoint
 from app.schemas.quote import QuoteCreateRequest
-from app.schemas.service_ref import PublicServiceRef
 from app.services import quotes
 
 pytestmark = [
@@ -55,7 +54,7 @@ async def test_create_quote_snapshots_price_and_contract_binding(
         quote = await quotes.create_quote(
             session=session,
             settings=settings,
-            service_ref=PublicServiceRef(slug="quote-service"),
+            service_ref="quote-service",
             request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
         )
         quote_id = quote.id
@@ -104,7 +103,7 @@ async def test_create_quote_rejects_a_service_that_is_not_active(
             await quotes.create_quote(
                 session=session,
                 settings=get_settings(),
-                service_ref=PublicServiceRef(slug="draft-service"),
+                service_ref="draft-service",
                 request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
             )
 
@@ -137,7 +136,7 @@ async def test_create_quote_hides_a_suspended_service_behind_not_found(
             await quotes.create_quote(
                 session=session,
                 settings=get_settings(),
-                service_ref=PublicServiceRef(id=service_id),
+                service_ref=service_id,
                 request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
             )
 
@@ -164,7 +163,7 @@ async def test_create_quote_rejects_a_service_without_a_contract_binding(
             await quotes.create_quote(
                 session=session,
                 settings=get_settings(),
-                service_ref=PublicServiceRef(id=service_id),
+                service_ref=service_id,
                 request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
             )
 
@@ -193,7 +192,7 @@ async def test_create_quote_treats_a_disabled_endpoint_as_missing(
             await quotes.create_quote(
                 session=session,
                 settings=get_settings(),
-                service_ref=PublicServiceRef(id=service_id),
+                service_ref=service_id,
                 request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
             )
 
@@ -220,7 +219,7 @@ async def test_create_quote_rejects_a_free_endpoint(
             await quotes.create_quote(
                 session=session,
                 settings=get_settings(),
-                service_ref=PublicServiceRef(id=service_id),
+                service_ref=service_id,
                 request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
             )
 
@@ -247,7 +246,7 @@ async def test_create_quote_rejects_a_paid_endpoint_without_a_price(
             await quotes.create_quote(
                 session=session,
                 settings=get_settings(),
-                service_ref=PublicServiceRef(id=service_id),
+                service_ref=service_id,
                 request=QuoteCreateRequest(endpoint_key="translate", payload={"text": "hello"}),
             )
 
