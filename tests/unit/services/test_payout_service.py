@@ -8,14 +8,11 @@ import pytest
 from app.core.actor import ActorContext
 from app.core.enums import PayoutFailureCode, PayoutStatus
 from app.integrations.payouts.executor import PreparedPayout, SentPayout
-from app.repositories.payout_repo import PayoutSummary
 from app.services.payout_service import (
     AccountStore,
     PayoutConflictError,
     PayoutExecutionService,
     PayoutExecutionStore,
-    PayoutReportingService,
-    PayoutReportingStore,
 )
 
 if TYPE_CHECKING:
@@ -62,7 +59,6 @@ class FakeSession:
 class FakePayoutRepository:
     def __init__(self) -> None:
         self.payouts: list[FakePayout] = []
-        self.summaries: list[PayoutSummary] = []
         self.claim_treasury_lock_calls = 0
 
     def add(
@@ -115,28 +111,6 @@ class FakePayoutRepository:
 
     async def claim_treasury_lock(self) -> None:
         self.claim_treasury_lock_calls += 1
-
-    async def list_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[FakePayout]:
-        payouts = [
-            payout for payout in self.payouts if payout.provider_account_id == provider_account_id
-        ]
-        if status is not None:
-            payouts = [payout for payout in payouts if payout.status is status]
-        return list(reversed(payouts))
-
-    async def summarize_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[PayoutSummary]:
-        _ = provider_account_id, status
-        return self.summaries
 
     async def list_for_provider_request(
         self,
@@ -643,54 +617,3 @@ async def test_request_provider_payouts_marks_rows_failed_on_send_failure() -> N
     assert result.payouts[0].status is PayoutStatus.FAILED
     assert result.payouts[0].failure_code is PayoutFailureCode.EXECUTOR_ERROR
     assert result.payouts[0].prepared_raw_transaction == "0xraw9"
-
-
-@pytest.mark.asyncio
-async def test_reporting_service_lists_payouts_and_summaries() -> None:
-    session = FakeSession()
-    payout_repo = FakePayoutRepository()
-    sent = payout_repo.add(
-        provider_account_id=1,
-        service_id=2,
-        invocation_id=3,
-        payment_attempt_id=4,
-        destination_wallet="0x00000000000000000000000000000000000000aa",
-        amount_minor=450,
-        currency="USDC",
-        network="base-sepolia",
-        status=PayoutStatus.SENT,
-    )
-    ready = payout_repo.add(
-        provider_account_id=1,
-        service_id=2,
-        invocation_id=5,
-        payment_attempt_id=6,
-        destination_wallet=None,
-        amount_minor=900,
-        currency="USDC",
-        network="base-sepolia",
-        status=PayoutStatus.READY,
-        attempt_count=0,
-    )
-    payout_repo.summaries = [
-        PayoutSummary(
-            currency="USDC",
-            total_count=2,
-            ready_count=1,
-            pending_count=0,
-            sent_count=1,
-            failed_count=0,
-            total_amount_minor=1_350,
-            sent_amount_minor=450,
-        )
-    ]
-    service = PayoutReportingService(
-        cast("AsyncSession", session),
-        payout_repo=cast("PayoutReportingStore", payout_repo),
-    )
-
-    payouts = await service.get_provider_payouts(_actor())
-    summaries = await service.get_provider_payout_summaries(_actor())
-
-    assert payouts == [ready, sent]
-    assert summaries == payout_repo.summaries

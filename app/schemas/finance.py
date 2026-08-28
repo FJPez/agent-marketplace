@@ -1,10 +1,9 @@
 from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.core.enums import PayoutFailureCode, PayoutStatus
 from app.db.models import LedgerEntry, Payout
-from app.repositories.ledger_entry_repo import LedgerSummary
 from app.schemas.common import Id, Timestamp
 
 
@@ -37,21 +36,13 @@ class ProviderLedgerResponse(BaseModel):
 
 
 class ProviderEarningsTotalResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     currency: str
     charge_minor: int
     platform_fee_minor: int
     provider_earning_minor: int
     entry_count: int
-
-    @classmethod
-    def from_summary(cls, summary: LedgerSummary) -> Self:
-        return cls(
-            currency=summary.currency,
-            charge_minor=summary.charge_minor,
-            platform_fee_minor=summary.platform_fee_minor,
-            provider_earning_minor=summary.provider_earning_minor,
-            entry_count=summary.entry_count,
-        )
 
 
 class ProviderEarningsSummaryResponse(BaseModel):
@@ -93,6 +84,8 @@ class ProviderPayoutResponse(BaseModel):
 
 
 class ProviderPayoutSummaryResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     currency: str | None
     total_count: int
     ready_count: int
@@ -101,30 +94,6 @@ class ProviderPayoutSummaryResponse(BaseModel):
     failed_count: int
     total_amount_minor: int
     sent_amount_minor: int
-
-    @classmethod
-    def from_values(
-        cls,
-        *,
-        currency: str | None,
-        total_count: int,
-        ready_count: int,
-        pending_count: int,
-        sent_count: int,
-        failed_count: int,
-        total_amount_minor: int,
-        sent_amount_minor: int,
-    ) -> Self:
-        return cls(
-            currency=currency,
-            total_count=total_count,
-            ready_count=ready_count,
-            pending_count=pending_count,
-            sent_count=sent_count,
-            failed_count=failed_count,
-            total_amount_minor=total_amount_minor,
-            sent_amount_minor=sent_amount_minor,
-        )
 
 
 class ProviderPayoutListResponse(BaseModel):
