@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Identity,
@@ -29,7 +30,13 @@ else:
 
 class Invocation(Base):
     __tablename__ = "invocations"
-    __table_args__ = (UniqueConstraint("consumer_account_id", "idempotency_key"),)
+    __table_args__ = (
+        UniqueConstraint("consumer_account_id", "idempotency_key"),
+        CheckConstraint(
+            "status = 'in_progress' OR in_progress_until IS NULL",
+            name="lease_only_in_progress",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     consumer_account_id: Mapped[int] = mapped_column(
@@ -85,6 +92,10 @@ class Invocation(Base):
             native_enum=False,
             values_callable=lambda values: [value.value for value in values],
         ),
+        nullable=True,
+    )
+    in_progress_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(

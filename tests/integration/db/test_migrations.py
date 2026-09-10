@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 from alembic import command
@@ -53,6 +54,17 @@ async def get_foreign_key_specs(
         return await connection.run_sync(
             lambda sync_conn: inspect(sync_conn).get_foreign_keys(table_name),
         )
+
+
+async def get_check_constraint_names(
+    db_engine: AsyncEngine,
+    table_name: str,
+) -> set[str]:
+    async with db_engine.connect() as connection:
+        constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_check_constraints(table_name),
+        )
+    return {constraint["name"] for constraint in constraints}
 
 
 def test_head_migration_creates_expected_unified_tables(
@@ -532,5 +544,244 @@ def test_endpoint_prices_migration_round_trips_legacy_pricing_rows(
 
         command.upgrade(alembic_config, "head")
         assert asyncio.run(_read_endpoint_prices(db_engine)) == [("paid-endpoint", 500, "USD")]
+    finally:
+        command.downgrade(alembic_config, "base")
+
+
+async def _seed_invocation_context(db_engine: AsyncEngine) -> tuple[int, int, int]:
+    async with db_engine.begin() as connection:
+        provider_account_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO accounts (display_name, wallet_address)
+                    VALUES ('Lease Provider', '0x0000000000000000000000000000000000000021')
+                    RETURNING id
+                    """
+                )
+            )
+        ).scalar_one()
+        consumer_account_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO accounts (display_name, wallet_address)
+                    VALUES ('Lease Consumer', '0x0000000000000000000000000000000000000022')
+                    RETURNING id
+                    """
+                )
+            )
+        ).scalar_one()
+        service_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO services (provider_account_id, slug, name, summary, lifecycle)
+                    VALUES (
+                        :provider_account_id,
+                        'lease-service',
+                        'Lease Service',
+                        'Lease summary',
+                        'active'
+                    )
+                    RETURNING id
+                    """
+                ),
+                {"provider_account_id": provider_account_id},
+            )
+        ).scalar_one()
+        endpoint_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO service_endpoints (
+                        service_id,
+                        key,
+                        name,
+                        access_mode,
+                        request_schema,
+                        response_schema,
+                        timeout_seconds
+                    )
+                    VALUES (
+                        :service_id,
+                        'translate',
+                        'Translate',
+                        'free',
+                        CAST('{}' AS jsonb),
+                        CAST('{}' AS jsonb),
+                        30
+                    )
+                    RETURNING id
+                    """
+                ),
+                {"service_id": service_id},
+            )
+        ).scalar_one()
+    return consumer_account_id, service_id, endpoint_id
+
+
+async def _insert_invocation_with_lease(
+    db_engine: AsyncEngine,
+    *,
+    consumer_account_id: int,
+    service_id: int,
+    endpoint_id: int,
+    idempotency_key: str,
+    status: str,
+    in_progress_until: datetime | None,
+) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO invocations (
+                    consumer_account_id,
+                    service_id,
+                    endpoint_id,
+                    endpoint_key,
+                    access_mode,
+                    idempotency_key,
+                    request_hash,
+                    status,
+                    in_progress_until
+                )
+                VALUES (
+                    :consumer_account_id,
+                    :service_id,
+                    :endpoint_id,
+                    'translate',
+                    'free',
+                    :idempotency_key,
+                    :request_hash,
+                    :status,
+                    :in_progress_until
+                )
+                """
+            ),
+            {
+                "consumer_account_id": consumer_account_id,
+                "service_id": service_id,
+                "endpoint_id": endpoint_id,
+                "idempotency_key": idempotency_key,
+                "request_hash": "a" * 64,
+                "status": status,
+                "in_progress_until": in_progress_until,
+            },
+        )
+
+
+async def _delete_invocations(db_engine: AsyncEngine) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(text("DELETE FROM invocations"))
+
+
+async def _read_invocation_leases(db_engine: AsyncEngine) -> list[tuple[str, str, datetime | None]]:
+    async with db_engine.connect() as connection:
+        result = await connection.execute(
+            text(
+                """
+                SELECT idempotency_key, status, in_progress_until
+                FROM invocations
+                ORDER BY idempotency_key
+                """
+            )
+        )
+        return [(row[0], row[1], row[2]) for row in result]
+
+
+def test_head_migration_rejects_a_lease_on_a_terminal_invocation(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    consumer_account_id, service_id, endpoint_id = asyncio.run(
+        _seed_invocation_context(db_engine),
+    )
+
+    with pytest.raises(IntegrityError):
+        asyncio.run(
+            _insert_invocation_with_lease(
+                db_engine,
+                consumer_account_id=consumer_account_id,
+                service_id=service_id,
+                endpoint_id=endpoint_id,
+                idempotency_key="terminal-with-lease",
+                status="succeeded",
+                in_progress_until=datetime(2030, 1, 1, tzinfo=UTC),
+            )
+        )
+
+
+def test_head_migration_accepts_in_progress_invocations_with_and_without_a_lease(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    consumer_account_id, service_id, endpoint_id = asyncio.run(
+        _seed_invocation_context(db_engine),
+    )
+    leased_until = datetime(2030, 1, 1, tzinfo=UTC)
+
+    try:
+        asyncio.run(
+            _insert_invocation_with_lease(
+                db_engine,
+                consumer_account_id=consumer_account_id,
+                service_id=service_id,
+                endpoint_id=endpoint_id,
+                idempotency_key="in-progress-leased",
+                status="in_progress",
+                in_progress_until=leased_until,
+            )
+        )
+        asyncio.run(
+            _insert_invocation_with_lease(
+                db_engine,
+                consumer_account_id=consumer_account_id,
+                service_id=service_id,
+                endpoint_id=endpoint_id,
+                idempotency_key="in-progress-unleased",
+                status="in_progress",
+                in_progress_until=None,
+            )
+        )
+
+        assert asyncio.run(_read_invocation_leases(db_engine)) == [
+            ("in-progress-leased", "in_progress", leased_until),
+            ("in-progress-unleased", "in_progress", None),
+        ]
+    finally:
+        # The downgrade past submission_hardening_0015 narrows the status CHECK
+        # back to the terminal values, so in-progress rows cannot outlive the test.
+        asyncio.run(_delete_invocations(db_engine))
+
+
+def test_execution_lease_migration_round_trips_at_head(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    try:
+        columns = asyncio.run(get_column_specs(db_engine, "invocations"))
+        constraints = asyncio.run(get_check_constraint_names(db_engine, "invocations"))
+        assert "in_progress_until" in columns
+        assert "ck_invocations_lease_only_in_progress" in constraints
+
+        command.downgrade(alembic_config, "schema_alignment_0020")
+
+        columns = asyncio.run(get_column_specs(db_engine, "invocations"))
+        constraints = asyncio.run(get_check_constraint_names(db_engine, "invocations"))
+        assert "in_progress_until" not in columns
+        assert "ck_invocations_lease_only_in_progress" not in constraints
+
+        command.upgrade(alembic_config, "head")
+
+        columns = asyncio.run(get_column_specs(db_engine, "invocations"))
+        constraints = asyncio.run(get_check_constraint_names(db_engine, "invocations"))
+        assert "in_progress_until" in columns
+        assert "ck_invocations_lease_only_in_progress" in constraints
     finally:
         command.downgrade(alembic_config, "base")
