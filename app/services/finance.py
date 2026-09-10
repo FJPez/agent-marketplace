@@ -30,7 +30,7 @@ class LedgerSummary:
 
 @dataclass(frozen=True, slots=True)
 class PayoutSummary:
-    currency: str | None
+    currency: str
     total_count: int
     ready_count: int
     pending_count: int
