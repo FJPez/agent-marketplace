@@ -91,6 +91,7 @@ async def test_publish_service_activates_service_with_revision_and_pass_check(
     assert [check.status for check in checks] == [ServiceHealthStatus.PASS]
     assert checks[0].summary == "service is publish-ready"
     assert checks[0].details == {"enabled_endpoint_count": 1}
+    assert checks[0].checked_at == service.updated_at
 
 
 async def test_publish_service_rejects_second_publish_of_active_service(
@@ -145,6 +146,11 @@ async def test_publish_service_persists_fail_check_and_leaves_service_in_draft(
     )
 
     async with db_session_factory() as session:
+        seeded_service = await session.get(Service, service_id)
+        assert seeded_service is not None
+        seeded_updated_at = seeded_service.updated_at
+
+    async with db_session_factory() as session:
         with pytest.raises(InvalidInputError, match="must define upstream before publish"):
             await publishing.publish_service(
                 session=session,
@@ -166,6 +172,7 @@ async def test_publish_service_persists_fail_check_and_leaves_service_in_draft(
     assert service.current_revision_id is None
     assert service.current_change_token is None
     assert revision_count == 0
+    assert service.updated_at == seeded_updated_at
     assert [check.status for check in checks] == [ServiceHealthStatus.FAIL]
     assert checks[0].summary == "enabled endpoint 'translate' must define upstream before publish"
 

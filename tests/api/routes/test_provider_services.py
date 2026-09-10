@@ -19,6 +19,7 @@ from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
 from app.db.models import ApiKey, Service, ServiceHealthCheck, ServiceRevision
+from app.services.service_health import PUBLISH_READINESS_CHECK_NAME
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
@@ -1156,7 +1157,7 @@ async def test_publish_service_rejects_service_without_endpoints(
             select(ServiceHealthCheck)
             .where(
                 ServiceHealthCheck.service_id == service_id,
-                ServiceHealthCheck.check_name == "publish-readiness",
+                ServiceHealthCheck.check_name == PUBLISH_READINESS_CHECK_NAME,
             )
             .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
         )
@@ -1235,7 +1236,7 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
             select(ServiceHealthCheck)
             .where(
                 ServiceHealthCheck.service_id == service_id,
-                ServiceHealthCheck.check_name == "publish-readiness",
+                ServiceHealthCheck.check_name == PUBLISH_READINESS_CHECK_NAME,
             )
             .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
         )
@@ -1281,7 +1282,7 @@ async def test_publish_service_replaces_stale_failed_publish_readiness_with_fres
                     select(ServiceHealthCheck)
                     .where(
                         ServiceHealthCheck.service_id == service_id,
-                        ServiceHealthCheck.check_name == "publish-readiness",
+                        ServiceHealthCheck.check_name == PUBLISH_READINESS_CHECK_NAME,
                     )
                     .order_by(ServiceHealthCheck.checked_at.desc(), ServiceHealthCheck.id.desc())
                 )

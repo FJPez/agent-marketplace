@@ -35,6 +35,7 @@ from app.db.models import (
     ServiceRevision,
     ServiceTag,
 )
+from app.services.service_health import PUBLISH_READINESS_CHECK_NAME
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -247,18 +248,6 @@ class ModerationActionFactory(Protocol):
         action: str,
         actor_account_id: int | None = ...,
         reason: str = ...,
-    ) -> Awaitable[int]: ...
-
-
-class HealthCheckFactory(Protocol):
-    def __call__(
-        self,
-        *,
-        service_id: int,
-        status: ServiceHealthStatus,
-        check_name: str = ...,
-        summary: str = ...,
-        details: JsonObject | None = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -733,9 +722,9 @@ async def create_health_check_record(
     *,
     service_id: int,
     status: ServiceHealthStatus,
-    check_name: str = "publish-readiness",
+    check_name: str = PUBLISH_READINESS_CHECK_NAME,
     summary: str = "unhealthy",
-    details: dict[str, object] | None = None,
+    details: JsonObject | None = None,
 ) -> int:
     async with db_session_factory.begin() as session:
         health_check = ServiceHealthCheck(
@@ -1160,27 +1149,3 @@ def moderation_action_factory(
         )
 
     return create_moderation_action
-
-
-@pytest.fixture
-def health_check_factory(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> HealthCheckFactory:
-    async def create_health_check(
-        *,
-        service_id: int,
-        status: ServiceHealthStatus,
-        check_name: str = "publish-readiness",
-        summary: str = "unhealthy",
-        details: JsonObject | None = None,
-    ) -> int:
-        return await create_health_check_record(
-            db_session_factory,
-            service_id=service_id,
-            status=status,
-            check_name=check_name,
-            summary=summary,
-            details=details,
-        )
-
-    return create_health_check
