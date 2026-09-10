@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from sqlalchemy import case, desc, func, select, text
+from sqlalchemy import func, select, text
 
 from app.core.enums import PayoutFailureCode, PayoutStatus
 from app.db.models import Payout
@@ -13,90 +12,6 @@ if TYPE_CHECKING:
 
 
 _PAYOUT_TREASURY_LOCK_KEY = 84_532_001
-
-
-@dataclass(frozen=True, slots=True)
-class PayoutSummary:
-    currency: str | None
-    total_count: int
-    ready_count: int
-    pending_count: int
-    sent_count: int
-    failed_count: int
-    total_amount_minor: int
-    sent_amount_minor: int
-
-
-class PayoutReportingRepository:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
-
-    async def list_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[Payout]:
-        statement = select(Payout).where(Payout.provider_account_id == provider_account_id)
-        if status is not None:
-            statement = statement.where(Payout.status == status)
-        statement = statement.order_by(desc(Payout.created_at), desc(Payout.id))
-        result = await self._session.scalars(statement)
-        return list(result.all())
-
-    async def summarize_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[PayoutSummary]:
-        statement = select(
-            Payout.currency,
-            func.count(Payout.id).label("total_count"),
-            func.coalesce(
-                func.sum(case((Payout.status == PayoutStatus.READY, 1), else_=0)),
-                0,
-            ).label("ready_count"),
-            func.coalesce(
-                func.sum(case((Payout.status == PayoutStatus.PENDING, 1), else_=0)),
-                0,
-            ).label("pending_count"),
-            func.coalesce(
-                func.sum(case((Payout.status == PayoutStatus.SENT, 1), else_=0)),
-                0,
-            ).label("sent_count"),
-            func.coalesce(
-                func.sum(case((Payout.status == PayoutStatus.FAILED, 1), else_=0)),
-                0,
-            ).label("failed_count"),
-            func.coalesce(func.sum(Payout.amount_minor), 0).label("total_amount_minor"),
-            func.coalesce(
-                func.sum(
-                    case(
-                        (Payout.status == PayoutStatus.SENT, Payout.amount_minor),
-                        else_=0,
-                    )
-                ),
-                0,
-            ).label("sent_amount_minor"),
-        ).where(Payout.provider_account_id == provider_account_id)
-        if status is not None:
-            statement = statement.where(Payout.status == status)
-        statement = statement.group_by(Payout.currency).order_by(Payout.currency)
-        rows = (await self._session.execute(statement)).all()
-        return [
-            PayoutSummary(
-                currency=row.currency,
-                total_count=int(row.total_count),
-                ready_count=int(row.ready_count),
-                pending_count=int(row.pending_count),
-                sent_count=int(row.sent_count),
-                failed_count=int(row.failed_count),
-                total_amount_minor=int(row.total_amount_minor),
-                sent_amount_minor=int(row.sent_amount_minor),
-            )
-            for row in rows
-        ]
 
 
 class PayoutExecutionRepository:
@@ -222,6 +137,4 @@ class PayoutExecutionRepository:
 
 __all__ = [
     "PayoutExecutionRepository",
-    "PayoutReportingRepository",
-    "PayoutSummary",
 ]

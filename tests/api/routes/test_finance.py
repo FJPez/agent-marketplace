@@ -38,7 +38,7 @@ from app.db.models import (
 )
 from app.integrations.payouts import PreparedPayout, SentPayout
 from app.repositories.ledger_entry_repo import LedgerEntryRepository
-from app.services.ledger_service import LedgerService
+from app.services import finance
 
 
 def _auth_headers(account_id: int) -> dict[str, str]:
@@ -689,7 +689,7 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summarie
 ) -> None:
     provider_account_id, service_id = await _seed_provider_payout_data(db_session_factory)
 
-    with caplog.at_level(logging.INFO, logger="app.services.payout_service"):
+    with caplog.at_level(logging.INFO, logger="app.services.finance"):
         response = await async_client.get(
             "/v1/provider/payouts",
             headers={**_auth_headers(provider_account_id), "X-Request-ID": "payout-list-req"},
@@ -736,7 +736,7 @@ async def test_get_provider_payouts_returns_provider_scoped_records_and_summarie
     record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.payout_service"
+        if record.name == "app.services.finance"
         and getattr(record, EVENT_FIELD, None) == "payout.reporting_listed"
     )
     assert getattr(record, EVENT_FIELD) == "payout.reporting_listed"
@@ -912,11 +912,11 @@ async def test_finance_routes_do_not_leak_internal_exceptions(
     _ = migrated_database
     provider_account_id, _ = await _seed_provider_finance_data(db_session_factory)
 
-    async def explode(self: LedgerService, actor: object) -> list[object]:
-        _ = self, actor
+    async def explode(*, session: object, account_id: int) -> list[object]:
+        _ = session, account_id
         raise RuntimeError("sensitive database details")
 
-    monkeypatch.setattr(LedgerService, "get_provider_earnings", explode)
+    monkeypatch.setattr(finance, "get_provider_earnings", explode)
 
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app, raise_app_exceptions=False)

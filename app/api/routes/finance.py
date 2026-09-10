@@ -1,13 +1,12 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from app.api.deps.auth import CurrentActor, CurrentJwtActor
+from app.api.deps.database import SessionDep
 from app.api.deps.headers import ValidatedIdempotencyKey
 from app.core.enums import PayoutStatus
 from app.core.lifespan import get_app_state
-from app.db.session import get_db_session
 from app.integrations.payouts import SupportsPayoutExecutor
 from app.schemas.finance import (
     ProviderEarningsSummaryResponse,
@@ -19,8 +18,8 @@ from app.schemas.finance import (
     ProviderPayoutResponse,
     ProviderPayoutSummaryResponse,
 )
-from app.services.ledger_service import LedgerService
-from app.services.payout_service import PayoutExecutionService, PayoutReportingService
+from app.services import finance
+from app.services.payout_service import PayoutExecutionService
 
 router = APIRouter(prefix="/provider", tags=["finance"])
 
@@ -48,12 +47,11 @@ def _get_payout_executor(request: Request) -> SupportsPayoutExecutor | None:
 )
 async def get_provider_earnings(
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ProviderEarningsSummaryResponse:
-    service = LedgerService(session)
-    totals = await service.get_provider_earnings(actor)
+    totals = await finance.get_provider_earnings(session=session, account_id=actor.account_id)
     return ProviderEarningsSummaryResponse(
-        totals=[ProviderEarningsTotalResponse.from_summary(total) for total in totals],
+        totals=[ProviderEarningsTotalResponse.model_validate(total) for total in totals],
     )
 
 
@@ -66,10 +64,9 @@ async def get_provider_earnings(
 )
 async def get_provider_ledger(
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> ProviderLedgerResponse:
-    service = LedgerService(session)
-    entries = await service.get_provider_ledger(actor)
+    entries = await finance.get_provider_ledger(session=session, account_id=actor.account_id)
     return ProviderLedgerResponse(
         entries=[ProviderLedgerEntryResponse.from_model(entry) for entry in entries],
     )
@@ -87,26 +84,21 @@ async def get_provider_ledger(
 )
 async def get_provider_payouts(
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
     payout_status: Annotated[PayoutStatus | None, Query(alias="status")] = None,
 ) -> ProviderPayoutListResponse:
-    service = PayoutReportingService(session)
-    payouts = await service.get_provider_payouts(actor, status=payout_status)
-    summaries = await service.get_provider_payout_summaries(actor, status=payout_status)
+    payouts = await finance.get_provider_payouts(
+        session=session,
+        account_id=actor.account_id,
+        status=payout_status,
+    )
+    summaries = await finance.get_provider_payout_summaries(
+        session=session,
+        account_id=actor.account_id,
+        status=payout_status,
+    )
     return ProviderPayoutListResponse(
-        summaries=[
-            ProviderPayoutSummaryResponse.from_values(
-                currency=summary.currency,
-                total_count=summary.total_count,
-                ready_count=summary.ready_count,
-                pending_count=summary.pending_count,
-                sent_count=summary.sent_count,
-                failed_count=summary.failed_count,
-                total_amount_minor=summary.total_amount_minor,
-                sent_amount_minor=summary.sent_amount_minor,
-            )
-            for summary in summaries
-        ],
+        summaries=[ProviderPayoutSummaryResponse.model_validate(summary) for summary in summaries],
         payouts=[ProviderPayoutResponse.from_model(payout) for payout in payouts],
     )
 
@@ -132,7 +124,7 @@ async def get_provider_payouts(
 async def request_provider_payouts(
     actor: CurrentJwtActor,
     fastapi_request: Request,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
     idempotency_key: ValidatedIdempotencyKey,
 ) -> ProviderPayoutRequestResponse:
     service = PayoutExecutionService(

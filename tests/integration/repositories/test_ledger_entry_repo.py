@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -16,6 +16,7 @@ from app.db.models import (
     Account,
     EndpointPrice,
     Invocation,
+    LedgerEntry,
     PaymentAttempt,
     Quote,
     Service,
@@ -26,7 +27,7 @@ from app.repositories.ledger_entry_repo import LedgerEntryRepository
 
 
 @pytest.mark.asyncio
-async def test_ledger_entry_repository_persists_lists_and_summarizes_provider_entries(
+async def test_ledger_entry_repository_persists_provider_entries(
     migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -159,22 +160,20 @@ async def test_ledger_entry_repository_persists_lists_and_summarizes_provider_en
         await session.flush()
 
     async with db_session_factory() as session:
-        repo = LedgerEntryRepository(session)
-        entries = await repo.list_for_provider(provider_account_id=provider_account.id)
-        totals = await repo.summarize_for_provider(provider_account_id=provider_account.id)
+        result = await session.scalars(
+            select(LedgerEntry)
+            .where(LedgerEntry.provider_account_id == provider_account.id)
+            .order_by(LedgerEntry.id)
+        )
+        entries = list(result.all())
 
     assert [entry.entry_type for entry in entries] == [
-        LedgerEntryType.PROVIDER_EARNING,
-        LedgerEntryType.PLATFORM_FEE,
         LedgerEntryType.CHARGE,
+        LedgerEntryType.PLATFORM_FEE,
+        LedgerEntryType.PROVIDER_EARNING,
     ]
-    assert entries[0].payment_attempt_id == attempt.id
-    assert len(totals) == 1
-    assert totals[0].currency == "USD"
-    assert totals[0].charge_minor == 500
-    assert totals[0].platform_fee_minor == 50
-    assert totals[0].provider_earning_minor == 450
-    assert totals[0].entry_count == 3
+    assert [entry.amount_minor for entry in entries] == [500, 50, 450]
+    assert all(entry.payment_attempt_id == attempt.id for entry in entries)
 
 
 @pytest.mark.asyncio

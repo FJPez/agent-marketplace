@@ -18,11 +18,7 @@ from app.core.logging import (
 )
 from app.integrations.payouts import PayoutExecutionError, PreparedPayout, SupportsPayoutExecutor
 from app.repositories.account_repo import AccountRepository
-from app.repositories.payout_repo import (
-    PayoutExecutionRepository,
-    PayoutReportingRepository,
-    PayoutSummary,
-)
+from app.repositories.payout_repo import PayoutExecutionRepository
 from app.services.ledger_service import split_paid_invocation_amount
 
 if TYPE_CHECKING:
@@ -54,22 +50,6 @@ class PayoutRequestResult:
     @property
     def failed_count(self) -> int:
         return sum(1 for payout in self.payouts if payout.status is PayoutStatus.FAILED)
-
-
-class PayoutReportingStore(Protocol):
-    async def list_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[Payout]: ...
-
-    async def summarize_for_provider(
-        self,
-        *,
-        provider_account_id: int,
-        status: PayoutStatus | None = None,
-    ) -> list[PayoutSummary]: ...
 
 
 class PayoutExecutionStore(Protocol):
@@ -123,50 +103,6 @@ class PayoutExecutionStore(Protocol):
 
 class AccountStore(Protocol):
     async def get(self, account_id: int) -> Account | None: ...
-
-
-class PayoutReportingService:
-    def __init__(
-        self,
-        session: AsyncSession,
-        *,
-        payout_repo: PayoutReportingStore | None = None,
-    ) -> None:
-        self._payout_repo = payout_repo or PayoutReportingRepository(session)
-
-    async def get_provider_payouts(
-        self,
-        actor: ActorContext,
-        *,
-        status: PayoutStatus | None = None,
-    ) -> list[Payout]:
-        payouts = await self._payout_repo.list_for_provider(
-            provider_account_id=actor.account_id,
-            status=status,
-        )
-        logger.info(
-            "provider payouts listed",
-            extra=build_event_context(
-                "payout.reporting_listed",
-                **{
-                    PROVIDER_ACCOUNT_ID_FIELD: actor.account_id,
-                    PAYOUT_STATUS_FIELD: None if status is None else status.value,
-                    PAYOUT_COUNT_FIELD: len(payouts),
-                },
-            ),
-        )
-        return payouts
-
-    async def get_provider_payout_summaries(
-        self,
-        actor: ActorContext,
-        *,
-        status: PayoutStatus | None = None,
-    ) -> list[PayoutSummary]:
-        return await self._payout_repo.summarize_for_provider(
-            provider_account_id=actor.account_id,
-            status=status,
-        )
 
 
 class PayoutExecutionService:
