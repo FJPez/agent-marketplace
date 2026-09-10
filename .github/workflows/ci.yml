@@ -79,6 +79,34 @@ jobs:
       - run: uv sync --all-groups --locked
       - run: uv run pytest
 
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: agent_marketplace
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agent_marketplace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      APP_JWT_SECRET_KEY: ci-only-jwt-secret-key-with-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-groups --locked
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+
   container:
     runs-on: ubuntu-latest
     steps:
