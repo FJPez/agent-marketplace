@@ -351,6 +351,27 @@ def test_health_check_service_fk_migration_round_trips_at_head(
         command.downgrade(alembic_config, "base")
 
 
+def test_schema_alignment_migration_round_trips_drifted_column_types(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    try:
+        invocation_columns = asyncio.run(get_column_specs(db_engine, "invocations"))
+        quote_columns = asyncio.run(get_column_specs(db_engine, "quotes"))
+        assert str(invocation_columns["response_payload"]["type"]) == "JSONB"
+        assert str(quote_columns["pricing_type"]["type"]) == "VARCHAR(14)"
+
+        command.downgrade(alembic_config, "service_health_0019")
+
+        invocation_columns = asyncio.run(get_column_specs(db_engine, "invocations"))
+        quote_columns = asyncio.run(get_column_specs(db_engine, "quotes"))
+        assert str(invocation_columns["response_payload"]["type"]) == "JSON"
+        assert str(quote_columns["pricing_type"]["type"]) == "VARCHAR(50)"
+    finally:
+        command.downgrade(alembic_config, "base")
+
+
 async def _seed_legacy_pricing_state(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as connection:
         account_id = (
