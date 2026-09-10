@@ -1,7 +1,7 @@
 """create service health checks
 
 Revision ID: service_health_0003
-Revises: 0002
+Revises: modadmin_20260312_153000
 Create Date: 2026-03-12 13:00:00.000000
 """
 

@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, Identity, Index, String, Text, text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Identity,
+    Index,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,8 +28,6 @@ SERVICE_HEALTH_STATUS_ENUM = Enum(
 
 
 class ServiceHealthCheck(Base):
-    """Service health records use a scalar service_id until provider services land."""
-
     __tablename__ = "service_health_checks"
     __table_args__ = (
         Index(
@@ -31,7 +39,10 @@ class ServiceHealthCheck(Base):
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    service_id: Mapped[int] = mapped_column(BigInteger)
+    service_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("services.id", ondelete="CASCADE"),
+    )
     check_name: Mapped[str] = mapped_column(String(100))
     status: Mapped[ServiceHealthStatus] = mapped_column(SERVICE_HEALTH_STATUS_ENUM)
     summary: Mapped[str | None] = mapped_column(Text)

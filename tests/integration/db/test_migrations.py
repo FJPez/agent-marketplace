@@ -225,6 +225,132 @@ def test_head_migration_downgrades_cleanly_with_service_rows(
         command.upgrade(alembic_config, "head")
 
 
+async def _seed_service_for_health_checks(db_engine: AsyncEngine, *, slug: str) -> int:
+    async with db_engine.begin() as connection:
+        account_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO accounts (display_name, wallet_address)
+                    VALUES ('Health Provider', '0x0000000000000000000000000000000000000019')
+                    RETURNING id
+                    """
+                )
+            )
+        ).scalar_one()
+        return (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO services (provider_account_id, slug, name, summary, lifecycle)
+                    VALUES (
+                        :provider_account_id,
+                        :slug,
+                        'Health Check Service',
+                        'Health check summary',
+                        'draft'
+                    )
+                    RETURNING id
+                    """
+                ),
+                {"provider_account_id": account_id, "slug": slug},
+            )
+        ).scalar_one()
+
+
+async def _insert_health_check(db_engine: AsyncEngine, *, service_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO service_health_checks (service_id, check_name, status)
+                VALUES (:service_id, 'publish-readiness', 'pass')
+                """
+            ),
+            {"service_id": service_id},
+        )
+
+
+async def _delete_service(db_engine: AsyncEngine, *, service_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text("DELETE FROM services WHERE id = :service_id"),
+            {"service_id": service_id},
+        )
+
+
+async def _read_health_check_service_ids(db_engine: AsyncEngine) -> list[int]:
+    async with db_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT service_id FROM service_health_checks ORDER BY service_id")
+        )
+        return [row[0] for row in result]
+
+
+def test_head_migration_rejects_health_check_for_unknown_service(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    with pytest.raises(IntegrityError):
+        asyncio.run(_insert_health_check(db_engine, service_id=987654))
+
+
+def test_head_migration_cascades_health_checks_when_service_is_deleted(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    _ = migrated_database
+
+    service_id = asyncio.run(_seed_service_for_health_checks(db_engine, slug="cascade-health"))
+    asyncio.run(_insert_health_check(db_engine, service_id=service_id))
+    assert asyncio.run(_read_health_check_service_ids(db_engine)) == [service_id]
+
+    asyncio.run(_delete_service(db_engine, service_id=service_id))
+
+    assert asyncio.run(_read_health_check_service_ids(db_engine)) == []
+
+
+def test_health_check_service_fk_migration_drops_orphan_rows(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    command.downgrade(alembic_config, "base")
+    try:
+        command.upgrade(alembic_config, "moderation_actions_0018")
+        service_id = asyncio.run(_seed_service_for_health_checks(db_engine, slug="orphan-health"))
+        asyncio.run(_insert_health_check(db_engine, service_id=service_id))
+        asyncio.run(_insert_health_check(db_engine, service_id=987654))
+
+        command.upgrade(alembic_config, "head")
+
+        assert asyncio.run(_read_health_check_service_ids(db_engine)) == [service_id]
+    finally:
+        command.downgrade(alembic_config, "base")
+
+
+def test_health_check_service_fk_migration_round_trips_at_head(
+    alembic_config: Config,
+    db_engine: AsyncEngine,
+) -> None:
+    command.upgrade(alembic_config, "head")
+    try:
+        command.downgrade(alembic_config, "moderation_actions_0018")
+
+        foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "service_health_checks"))
+        assert foreign_keys == []
+
+        command.upgrade(alembic_config, "head")
+
+        foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "service_health_checks"))
+        service_fk = next(fk for fk in foreign_keys if fk["constrained_columns"] == ["service_id"])
+        assert service_fk["referred_table"] == "services"
+        assert service_fk["options"] == {"ondelete": "CASCADE"}
+    finally:
+        command.downgrade(alembic_config, "base")
+
+
 async def _seed_legacy_pricing_state(db_engine: AsyncEngine) -> None:
     async with db_engine.begin() as connection:
         account_id = (
