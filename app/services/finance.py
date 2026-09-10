@@ -1,11 +1,9 @@
 """Provider-facing ledger, earnings, and payout reporting reads."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from sqlalchemy import case, desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
 from app.core.enums import LedgerEntryType, PayoutStatus
@@ -17,9 +15,6 @@ from app.core.logging import (
     get_logger,
 )
 from app.db.models import LedgerEntry, Payout
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
