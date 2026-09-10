@@ -13,6 +13,8 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UpstreamError,
+    UpstreamTimeoutError,
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.health_service import ReadinessCheckError
@@ -42,8 +44,10 @@ STATUS_CODES: dict[type[Exception], int] = {
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvokeBadGatewayError: status.HTTP_502_BAD_GATEWAY,
+    UpstreamError: status.HTTP_502_BAD_GATEWAY,
     ReadinessCheckError: status.HTTP_503_SERVICE_UNAVAILABLE,
     InvokeGatewayTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
+    UpstreamTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
 }
 
 
