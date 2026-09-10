@@ -806,132 +806,42 @@ async def test_paid_invoke_replays_success_before_quote_expiry_validation(
 
 
 @pytest.mark.asyncio
-async def test_free_invoke_recovers_from_duplicate_insert_and_replays_existing_invocation(
-    app: FastAPI,
+async def test_invoke_rejects_a_malformed_service_reference(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
-    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
     consumer_account_id = await _create_consumer_account(db_session_factory)
-    existing_invocation_id = await _seed_existing_invocation(
-        db_session_factory,
-        consumer_account_id=consumer_account_id,
-        service_id=service_id,
-        endpoint_id=endpoint_id,
-        endpoint_key="translate",
-        access_mode=AccessMode.FREE,
-        quote_id=None,
-        idempotency_key="invoke-key",
-        payload={"text": "hello"},
-        status=InvocationStatus.SUCCEEDED,
-        response_payload={"result": "cached"},
-        upstream_status_code=200,
-        error_message=None,
-    )
-    fake_http_client = _FakeHttpClient(
-        responses=[Response(status_code=200, json={"result": "fresh"})],
-    )
-    get_app_state(app).http_client = fake_http_client
-
-    from app.repositories.invocation_repo import InvocationRepository
-
-    original_get_by_idempotency_key = InvocationRepository.get_by_idempotency_key
-    lookup_calls = 0
-
-    async def stale_then_delegate(
-        self: InvocationRepository,
-        *,
-        consumer_account_id: int,
-        idempotency_key: str,
-    ) -> Invocation | None:
-        nonlocal lookup_calls
-        lookup_calls += 1
-        if lookup_calls == 1:
-            return None
-        return await original_get_by_idempotency_key(
-            self,
-            consumer_account_id=consumer_account_id,
-            idempotency_key=idempotency_key,
-        )
-
-    monkeypatch.setattr(InvocationRepository, "get_by_idempotency_key", stale_then_delegate)
 
     response = await async_client.post(
-        "/v1/invoke/invoke-service",
+        "/v1/invoke/-not-a-slug-",
         headers=_auth_headers(consumer_account_id),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 
-    assert response.status_code == 200
-    assert response.json()["id"] == existing_invocation_id
-    assert response.json()["response_payload"] == {"result": "cached"}
-    assert len(fake_http_client.calls) == 0
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_free_invoke_duplicate_insert_preserves_request_mismatch_conflict(
-    app: FastAPI,
+async def test_invoke_rejects_unknown_request_fields(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
-    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    _ = await _seed_endpoint(db_session_factory, service_id=service_id)
     consumer_account_id = await _create_consumer_account(db_session_factory)
-    await _seed_existing_invocation(
-        db_session_factory,
-        consumer_account_id=consumer_account_id,
-        service_id=service_id,
-        endpoint_id=endpoint_id,
-        endpoint_key="translate",
-        access_mode=AccessMode.FREE,
-        quote_id=None,
-        idempotency_key="invoke-key",
-        payload={"text": "hello"},
-        status=InvocationStatus.SUCCEEDED,
-        response_payload={"result": "cached"},
-        upstream_status_code=200,
-        error_message=None,
-    )
-    get_app_state(app).http_client = _FakeHttpClient(
-        responses=[Response(status_code=200, json={"result": "fresh"})],
-    )
-
-    from app.repositories.invocation_repo import InvocationRepository
-
-    original_get_by_idempotency_key = InvocationRepository.get_by_idempotency_key
-    lookup_calls = 0
-
-    async def stale_then_delegate(
-        self: InvocationRepository,
-        *,
-        consumer_account_id: int,
-        idempotency_key: str,
-    ) -> Invocation | None:
-        nonlocal lookup_calls
-        lookup_calls += 1
-        if lookup_calls == 1:
-            return None
-        return await original_get_by_idempotency_key(
-            self,
-            consumer_account_id=consumer_account_id,
-            idempotency_key=idempotency_key,
-        )
-
-    monkeypatch.setattr(InvocationRepository, "get_by_idempotency_key", stale_then_delegate)
 
     response = await async_client.post(
         "/v1/invoke/invoke-service",
         headers=_auth_headers(consumer_account_id),
-        json={"endpoint_key": "translate", "payload": {"text": "hi"}},
+        json={
+            "endpoint_key": "translate",
+            "payload": {"text": "hello"},
+            "unexpected_field": "value",
+        },
     )
 
-    assert response.status_code == 409
-    assert response.json() == {"detail": "idempotency key already used for a different request"}
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

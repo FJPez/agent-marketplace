@@ -182,6 +182,7 @@ class InvocationFactory(Protocol):
         upstream_status_code: int | None = ...,
         error_message: str | None = ...,
         failure_reason: InvocationFailureReason | None = ...,
+        in_progress_until: datetime | None = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -562,6 +563,7 @@ async def create_invocation_record(
     upstream_status_code: int | None = 200,
     error_message: str | None = None,
     failure_reason: InvocationFailureReason | None = None,
+    in_progress_until: datetime | None = None,
 ) -> int:
     request_payload = payload or {"text": "hello"}
     async with db_session_factory.begin() as session:
@@ -587,6 +589,7 @@ async def create_invocation_record(
             upstream_status_code=upstream_status_code,
             error_message=error_message,
             failure_reason=failure_reason,
+            in_progress_until=in_progress_until,
         )
         session.add(invocation)
         await session.flush()
@@ -997,6 +1000,7 @@ def invocation_factory(
         upstream_status_code: int | None = 200,
         error_message: str | None = None,
         failure_reason: InvocationFailureReason | None = None,
+        in_progress_until: datetime | None = None,
     ) -> int:
         return await create_invocation_record(
             db_session_factory,
@@ -1014,6 +1018,7 @@ def invocation_factory(
             upstream_status_code=upstream_status_code,
             error_message=error_message,
             failure_reason=failure_reason,
+            in_progress_until=in_progress_until,
         )
 
     return create_invocation

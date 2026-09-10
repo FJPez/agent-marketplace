@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 from sqlalchemy.exc import IntegrityError
 
 from app.core.enums import PaymentAttemptStatus, PricingModelType
+from app.core.errors import ConflictError, UpstreamError
 from app.core.logging import (
     INVOCATION_ID_FIELD,
     PAYMENT_ATTEMPT_ID_FIELD,
@@ -31,11 +32,7 @@ from app.integrations.x402.payment_requirements import (
     build_payment_requirement,
 )
 from app.repositories.payment_attempt_repo import PaymentAttemptRepository
-from app.services.invoke_service import (
-    InvokeBadGatewayError,
-    InvokeConflictError,
-    InvokeService,
-)
+from app.services import invoke
 from app.services.ledger_service import LedgerService
 from app.services.payout_service import PayoutExecutionService
 
@@ -48,7 +45,7 @@ if TYPE_CHECKING:
     from app.core.config import Settings
     from app.db.models import Invocation, PaymentAttempt
     from app.integrations.provider_gateway.client import SupportsRequest
-    from app.services.invoke_service import ResolvedInvokeTarget
+    from app.services.invoke import ResolvedInvokeTarget
 
 
 @runtime_checkable
@@ -110,7 +107,7 @@ class PaymentService:
         self._x402_resource_server = x402_resource_server
         self._settings = settings
         self._attempt_repo = PaymentAttemptRepository(session)
-        self._invoke_service = InvokeService(session, http_client=http_client)
+        self._http_client = http_client
         self._ledger_service = LedgerService(session)
 
     async def handle_paid_invoke(
@@ -123,13 +120,13 @@ class PaymentService:
     ) -> PaymentRequiredChallenge | PaidInvokeSuccess:
         quote = resolved.quote
         if quote is None:
-            raise InvokeConflictError("paid invoke requires quote")
+            raise ConflictError("paid invoke requires quote")
         quote_id = quote.id
         service_id = resolved.service.id
         endpoint_key = resolved.endpoint.key
         payload = resolved.payload
         if quote.pricing_type is not PricingModelType.FIXED_PER_CALL or quote.amount_minor is None:
-            raise InvokeConflictError("payment currency is not supported")
+            raise ConflictError("payment currency is not supported")
 
         payment_requirement = self._build_requirement(
             amount_minor=quote.amount_minor,
@@ -156,11 +153,11 @@ class PaymentService:
             payment_payload=payment_payload,
         )
         if attempt.quote_id != quote_id:
-            raise InvokeConflictError("payment identifier already used")
+            raise ConflictError("payment identifier already used")
         if target_needs_reload:
-            resolved = await self._invoke_service.resolve_target(
-                actor,
-                service_id_or_slug=str(service_id),
+            resolved = await invoke.resolve_target(
+                session=self._session,
+                service_ref=service_id,
                 endpoint_key=endpoint_key,
                 payload=payload,
                 quote_id=quote_id,
@@ -186,8 +183,9 @@ class PaymentService:
         assert quote is not None
         assert quote.amount_minor is not None
         if attempt.status is PaymentAttemptStatus.CONSUMED and attempt.invocation_id is not None:
-            invocation = await self._invoke_service.get_invocation(
-                actor,
+            invocation = await invoke.get_invocation(
+                session=self._session,
+                account_id=actor.account_id,
                 invocation_id=attempt.invocation_id,
             )
             logger.info(
@@ -212,7 +210,7 @@ class PaymentService:
             return self._challenge(payment_requirement, detail="payment could not be verified")
 
         if attempt.status is PaymentAttemptStatus.SETTLE_FAILED:
-            raise InvokeBadGatewayError("payment settlement failed")
+            raise UpstreamError("payment settlement failed")
 
         if attempt.status is PaymentAttemptStatus.CHALLENGED:
             if not _payment_payload_matches_requirement(
@@ -261,7 +259,7 @@ class PaymentService:
                     attempt,
                     quote_id=quote.id,
                 )
-                raise InvokeBadGatewayError("payment settlement failed")
+                raise UpstreamError("payment settlement failed")
 
             attempt.status = PaymentAttemptStatus.SETTLED
             await self._session.commit()
@@ -270,10 +268,12 @@ class PaymentService:
             PaymentAttemptStatus.SETTLED,
             PaymentAttemptStatus.COMPENSATION_REQUIRED,
         }:
-            invocation = await self._invoke_service.execute(
-                actor,
+            invocation = await invoke.execute(
+                session=self._session,
+                account_id=actor.account_id,
                 resolved=resolved,
                 idempotency_key=attempt.idempotency_key,
+                http_client=self._http_client,
             )
             attempt.invocation_id = invocation.id
             await self._ledger_service.record_paid_invocation(
@@ -338,7 +338,7 @@ class PaymentService:
                 network_caip2=self._settings.x402_network_caip2,
             )
         except PaymentRequirementConfigError as exc:
-            raise InvokeConflictError(str(exc)) from exc
+            raise ConflictError(str(exc)) from exc
 
     def _challenge(
         self,
@@ -459,11 +459,11 @@ class PaymentService:
                 payment_payload=payment_payload,
             )
         except FacilitatorConfigError as exc:
-            raise InvokeBadGatewayError(str(exc)) from exc
+            raise UpstreamError(str(exc)) from exc
         except FacilitatorAuthError as exc:
-            raise InvokeBadGatewayError("facilitator authentication failed") from exc
+            raise UpstreamError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
-            raise InvokeBadGatewayError(str(exc)) from exc
+            raise UpstreamError(str(exc)) from exc
 
     async def _settle(
         self,
@@ -477,11 +477,11 @@ class PaymentService:
                 payment_payload=payment_payload,
             )
         except FacilitatorConfigError as exc:
-            raise InvokeBadGatewayError(str(exc)) from exc
+            raise UpstreamError(str(exc)) from exc
         except FacilitatorAuthError as exc:
-            raise InvokeBadGatewayError("facilitator authentication failed") from exc
+            raise UpstreamError("facilitator authentication failed") from exc
         except FacilitatorUnavailableError as exc:
-            raise InvokeBadGatewayError(str(exc)) from exc
+            raise UpstreamError(str(exc)) from exc
 
 
 def _is_verify_success(verify_outcome: dict[str, object]) -> bool:
@@ -507,7 +507,7 @@ def _get_payment_amount(payment_requirement: dict[str, object]) -> int:
     if isinstance(value, int):
         return value
     msg = "payment requirement is missing payment_amount"
-    raise InvokeBadGatewayError(msg)
+    raise UpstreamError(msg)
 
 
 def _payment_payload_matches_requirement(

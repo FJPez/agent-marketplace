@@ -11,7 +11,8 @@ from app.core.lifespan import get_app_state
 from app.db.session import get_db_session
 from app.integrations.provider_gateway.client import SupportsRequest
 from app.schemas.invoke import InvocationListItem, InvocationResponse, InvokeRequest
-from app.services.invoke_service import InvokeService
+from app.schemas.service_ref import PublicServiceRef
+from app.services import invoke
 from app.services.payment_service import (
     PaidInvokeSuccess,
     PaymentRequiredChallenge,
@@ -93,8 +94,8 @@ def _get_x402_resource_server(request: Request) -> SupportsX402ResourceServer:
         },
     },
 )
-async def invoke_service(
-    service_id_or_slug: str,
+async def invoke_endpoint(
+    service_id_or_slug: PublicServiceRef,
     request: Annotated[
         InvokeRequest,
         Body(
@@ -124,10 +125,10 @@ async def invoke_service(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     idempotency_key: ValidatedIdempotencyKey,
 ) -> InvocationResponse | JSONResponse:
-    invoke_service = InvokeService(session, http_client=_get_http_client(fastapi_request))
-    replayed = await invoke_service.try_successful_replay(
-        actor,
-        service_id_or_slug=service_id_or_slug,
+    replayed = await invoke.try_successful_replay(
+        session=session,
+        account_id=actor.account_id,
+        service_ref=service_id_or_slug,
         endpoint_key=request.endpoint_key,
         payload=request.payload,
         quote_id=request.quote_id,
@@ -143,19 +144,18 @@ async def invoke_service(
                 settings=get_app_state(fastapi_request.app).settings,
             )
             replay_headers = await payment_service.build_success_headers_for_invocation(replayed.id)
+            # A paid invoke without settled payment headers is not replayable as a whole.
             if not replay_headers:
                 replayed = None
             else:
                 for header_name, header_value in replay_headers.items():
                     response.headers[header_name] = header_value
         if replayed is not None:
-            if replayed.access_mode is not AccessMode.PAID:
-                return InvocationResponse.from_model(replayed)
             return InvocationResponse.from_model(replayed)
 
-    resolved = await invoke_service.resolve_target(
-        actor,
-        service_id_or_slug=service_id_or_slug,
+    resolved = await invoke.resolve_target(
+        session=session,
+        service_ref=service_id_or_slug,
         endpoint_key=request.endpoint_key,
         payload=request.payload,
         quote_id=request.quote_id,
@@ -185,10 +185,12 @@ async def invoke_service(
             response.headers[header_name] = header_value
         invocation = paid_result.invocation
     else:
-        invocation = await invoke_service.execute(
-            actor,
+        invocation = await invoke.execute(
+            session=session,
+            account_id=actor.account_id,
             resolved=resolved,
             idempotency_key=idempotency_key,
+            http_client=_get_http_client(fastapi_request),
         )
     return InvocationResponse.from_model(invocation)
 
@@ -206,11 +208,13 @@ async def invoke_service(
 async def get_invocation(
     invocation_id: int,
     actor: CurrentActor,
-    fastapi_request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> InvocationResponse:
-    service = InvokeService(session, http_client=_get_http_client(fastapi_request))
-    invocation = await service.get_invocation(actor, invocation_id=invocation_id)
+    invocation = await invoke.get_invocation(
+        session=session,
+        account_id=actor.account_id,
+        invocation_id=invocation_id,
+    )
     return InvocationResponse.from_model(invocation)
 
 
@@ -223,9 +227,7 @@ async def get_invocation(
 )
 async def list_invocations(
     actor: CurrentActor,
-    fastapi_request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> list[InvocationListItem]:
-    service = InvokeService(session, http_client=_get_http_client(fastapi_request))
-    invocations = await service.list_invocations(actor)
+    invocations = await invoke.list_invocations(session=session, account_id=actor.account_id)
     return [InvocationListItem.from_model(item) for item in invocations]

@@ -694,7 +694,7 @@ async def test_successful_paid_invoke_logs_invoke_and_ledger_events(
     invoke_record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.invoke_service"
+        if record.name == "app.services.invoke"
         and getattr(record, EVENT_FIELD, None) == "invoke.succeeded"
     )
     ledger_record = next(
@@ -829,7 +829,7 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     failure_record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.invoke_service"
+        if record.name == "app.services.invoke"
         and getattr(record, EVENT_FIELD, None) == "invoke.failed"
     )
     assert getattr(failure_record, REQUEST_ID_FIELD) == "invoke-log-failure"
