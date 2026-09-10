@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -5,25 +7,13 @@ from tests.fixtures.domain import create_provider_account_record, create_service
 
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.db.models import ServiceHealthCheck
-from app.services.service_health_service import (
-    PUBLISH_READINESS_CHECK_NAME,
-    ServiceHealthOutcome,
-    ServiceHealthService,
-)
+from app.services import service_health
+from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHealthOutcome
 
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.usefixtures("migrated_database"),
 ]
-
-
-class StubChecker:
-    def __init__(self, outcome: ServiceHealthOutcome) -> None:
-        self._outcome = outcome
-
-    async def run(self, *, service_id: int) -> ServiceHealthOutcome:
-        _ = service_id
-        return self._outcome
 
 
 @pytest.fixture
@@ -43,11 +33,12 @@ async def test_record_check_is_invisible_to_other_sessions_until_caller_commits(
 ) -> None:
     recording_session = db_session_factory()
     try:
-        health_service = ServiceHealthService(recording_session)
-        await health_service.record_check(
+        await service_health.record_check(
+            session=recording_session,
             service_id=service_id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
             outcome=ServiceHealthOutcome(status=ServiceHealthStatus.PASS),
+            checked_at=datetime(2026, 9, 10, 12, 30, tzinfo=UTC),
         )
 
         async with db_session_factory() as concurrent_session:
@@ -71,9 +62,11 @@ async def test_record_check_row_is_durable_once_the_caller_commits(
     db_session_factory: async_sessionmaker[AsyncSession],
     service_id: int,
 ) -> None:
+    checked_at = datetime(2026, 9, 10, 12, 30, tzinfo=UTC)
+
     async with db_session_factory() as session:
-        health_service = ServiceHealthService(session)
-        await health_service.record_check(
+        await service_health.record_check(
+            session=session,
             service_id=service_id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
             outcome=ServiceHealthOutcome(
@@ -81,6 +74,7 @@ async def test_record_check_row_is_durable_once_the_caller_commits(
                 summary="upstream unavailable",
                 details={"status_code": 503},
             ),
+            checked_at=checked_at,
         )
         await session.commit()
 
@@ -95,75 +89,4 @@ async def test_record_check_row_is_durable_once_the_caller_commits(
     assert persisted_checks[0].status is ServiceHealthStatus.FAIL
     assert persisted_checks[0].summary == "upstream unavailable"
     assert persisted_checks[0].details == {"status_code": 503}
-
-
-async def test_run_check_commits_the_checker_outcome_itself(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    service_id: int,
-) -> None:
-    checker = StubChecker(
-        ServiceHealthOutcome(
-            status=ServiceHealthStatus.PASS,
-            summary="probe passed",
-            details={"latency_ms": 42},
-        )
-    )
-
-    async with db_session_factory() as session:
-        check = await ServiceHealthService(session).run_check(
-            service_id=service_id,
-            check_name=PUBLISH_READINESS_CHECK_NAME,
-            checker=checker,
-        )
-
-        assert check.id is not None
-        assert check.checked_at is not None
-
-    async with db_session_factory() as session:
-        result = await session.scalars(
-            select(ServiceHealthCheck).where(ServiceHealthCheck.service_id == service_id),
-        )
-        persisted_checks = list(result.all())
-
-    assert len(persisted_checks) == 1
-    assert persisted_checks[0].id == check.id
-    assert persisted_checks[0].status is ServiceHealthStatus.PASS
-    assert persisted_checks[0].summary == "probe passed"
-    assert persisted_checks[0].details == {"latency_ms": 42}
-    assert persisted_checks[0].checked_at == check.checked_at
-
-
-class RaisingChecker:
-    async def run(self, *, service_id: int) -> ServiceHealthOutcome:
-        _ = service_id
-        msg = "probe timed out"
-        raise RuntimeError(msg)
-
-
-async def test_run_check_persists_sanitized_failure_when_checker_raises(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    service_id: int,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    async with db_session_factory() as session:
-        with caplog.at_level("ERROR"):
-            check = await ServiceHealthService(session).run_check(
-                service_id=service_id,
-                check_name=PUBLISH_READINESS_CHECK_NAME,
-                checker=RaisingChecker(),
-            )
-
-    async with db_session_factory() as session:
-        result = await session.scalars(
-            select(ServiceHealthCheck).where(ServiceHealthCheck.service_id == service_id),
-        )
-        persisted_checks = list(result.all())
-
-    assert len(persisted_checks) == 1
-    assert persisted_checks[0].id == check.id
-    assert persisted_checks[0].status is ServiceHealthStatus.FAIL
-    assert persisted_checks[0].summary == "health check failed"
-    assert persisted_checks[0].details == {"error_type": "RuntimeError"}
-    # The checker's internal error text must not leak into the stored row.
-    assert "probe timed out" not in (persisted_checks[0].summary or "")
-    assert any("service health check failed" in message for message in caplog.messages)
+    assert persisted_checks[0].checked_at == checked_at

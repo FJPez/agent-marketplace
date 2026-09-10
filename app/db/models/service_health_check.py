@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import ServiceHealthStatus
+from app.core.json_types import JsonObject
 from app.db.base import Base
 
 SERVICE_HEALTH_STATUS_ENUM = Enum(
@@ -46,7 +47,7 @@ class ServiceHealthCheck(Base):
     check_name: Mapped[str] = mapped_column(String(100))
     status: Mapped[ServiceHealthStatus] = mapped_column(SERVICE_HEALTH_STATUS_ENUM)
     summary: Mapped[str | None] = mapped_column(Text)
-    details: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    details: Mapped[JsonObject | None] = mapped_column(JSONB)
     checked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),

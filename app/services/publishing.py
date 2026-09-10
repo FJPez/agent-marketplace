@@ -7,14 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import InvalidInputError, InvalidStateError
 from app.db.models.service import Service
-from app.services import moderation, revisions, service_access
+from app.services import moderation, revisions, service_access, service_health
 from app.services.moderation import ServiceUnavailableError
 from app.services.publish_readiness import validate_service_for_publish
-from app.services.service_health_service import (
-    PUBLISH_READINESS_CHECK_NAME,
-    ServiceHealthOutcome,
-    ServiceHealthService,
-)
+from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHealthOutcome
 
 
 async def publish_service(
@@ -36,17 +32,22 @@ async def publish_service(
     except ServiceUnavailableError as exc:
         raise InvalidStateError(f"service is {exc.state.value}") from exc
 
-    health_service = ServiceHealthService(session)
+    # Stamped after the lock wait and the gates so the timestamp reflects when the
+    # row was actually mutated. One clock for the whole operation: the readiness
+    # row and the service both carry this value.
+    now = datetime.now(UTC)
     try:
         validate_service_for_publish(service)
     except InvalidInputError as exc:
-        await health_service.record_check(
+        await service_health.record_check(
+            session=session,
             service_id=service.id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
             outcome=ServiceHealthOutcome(
                 status=ServiceHealthStatus.FAIL,
                 summary=str(exc),
             ),
+            checked_at=now,
         )
         # Deliberate commit on the failure path: the FAIL row is the attempt's
         # only mutation and must stay visible after the rejection. Nothing may
@@ -54,7 +55,8 @@ async def publish_service(
         await session.commit()
         raise
 
-    await health_service.record_check(
+    await service_health.record_check(
+        session=session,
         service_id=service.id,
         check_name=PUBLISH_READINESS_CHECK_NAME,
         outcome=ServiceHealthOutcome(
@@ -66,11 +68,9 @@ async def publish_service(
                 ),
             },
         ),
+        checked_at=now,
     )
 
-    # Stamped after the lock wait so the timestamp reflects when the row was
-    # actually mutated.
-    now = datetime.now(UTC)
     if service.current_revision_id is None or service.current_change_token is None:
         await revisions.create_revision(session=session, service=service)
     service.lifecycle = ServiceLifecycle.ACTIVE
