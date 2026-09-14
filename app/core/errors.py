@@ -30,3 +30,11 @@ class InvalidInputError(Exception):
 
 class InvalidStateError(Exception):
     """Operation is not valid for the entity's current lifecycle state; translates to HTTP 409."""
+
+
+class UpstreamError(Exception):
+    """The upstream provider call failed; translates to HTTP 502."""
+
+
+class UpstreamTimeoutError(Exception):
+    """The upstream provider call timed out; translates to HTTP 504."""

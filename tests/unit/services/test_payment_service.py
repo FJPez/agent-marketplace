@@ -11,14 +11,13 @@ from x402.http import encode_payment_signature_header
 from app.core.actor import ActorContext
 from app.core.config import Settings
 from app.core.enums import AccessMode, PaymentAttemptStatus, PricingModelType, ServiceLifecycle
+from app.core.errors import UpstreamError
 from app.db.models import Quote, Service, ServiceEndpoint
 from app.integrations.provider_gateway.signing import HmacAuthConfig
 from app.integrations.x402.facilitator_client import FacilitatorAuthError
+from app.services import invoke
 from app.services import payment_service as payment_service_module
-from app.services.invoke_service import (
-    InvokeBadGatewayError,
-    ResolvedInvokeTarget,
-)
+from app.services.invoke import ResolvedInvokeTarget
 from app.services.payment_service import PaidInvokeSuccess, PaymentService
 
 if TYPE_CHECKING:
@@ -211,91 +210,55 @@ class FakePersistedPaymentAttemptRepository:
         self.stored_attempt.facilitator_reference = self.working_attempt.facilitator_reference
 
 
-class FakeInvokeService:
+class FakeInvoke:
     def __init__(
         self,
         *,
-        replayable_invocation: FakeInvocation | None = None,
         invocation_for_lookup: FakeInvocation | None = None,
         execute_exception: Exception | None = None,
     ) -> None:
-        self.replayable_invocation = replayable_invocation
         self.invocation_for_lookup = invocation_for_lookup
         self.execute_exception = execute_exception
-        self.get_replayable_invocation_calls = 0
         self.execute_calls = 0
         self.get_invocation_calls = 0
-        self.get_invocation_by_idempotency_calls = 0
+        self.executed_idempotency_keys: set[str] = set()
 
-    async def get_replayable_invocation(
-        self,
-        actor: ActorContext,
-        *,
-        idempotency_key: str,
-        request_hash: str,
-    ) -> FakeInvocation | None:
-        _ = actor
-        _ = idempotency_key
-        _ = request_hash
-        self.get_replayable_invocation_calls += 1
-        return self.replayable_invocation
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(invoke, "execute", self.execute)
+        monkeypatch.setattr(invoke, "get_invocation", self.get_invocation)
 
     async def execute(
         self,
-        actor: ActorContext,
         *,
+        session: object,
+        account_id: int,
         resolved: ResolvedInvokeTarget,
         idempotency_key: str,
+        http_client: object,
     ) -> FakeInvocation:
-        _ = actor
+        _ = session
+        _ = account_id
         _ = resolved
-        _ = idempotency_key
+        _ = http_client
         self.execute_calls += 1
+        self.executed_idempotency_keys.add(idempotency_key)
         if self.execute_exception is not None:
             raise self.execute_exception
         return FakeInvocation(id=88)
 
     async def get_invocation(
         self,
-        actor: ActorContext,
         *,
+        session: object,
+        account_id: int,
         invocation_id: int,
     ) -> FakeInvocation:
-        _ = actor
+        _ = session
+        _ = account_id
         self.get_invocation_calls += 1
         assert self.invocation_for_lookup is not None
         assert invocation_id == self.invocation_for_lookup.id
         return self.invocation_for_lookup
-
-    async def get_invocation_by_idempotency_key(
-        self,
-        actor: ActorContext,
-        *,
-        idempotency_key: str,
-    ) -> FakeInvocation | None:
-        _ = actor
-        _ = idempotency_key
-        self.get_invocation_by_idempotency_calls += 1
-        return self.invocation_for_lookup
-
-
-class FakeIdempotentInvokeService(FakeInvokeService):
-    def __init__(self) -> None:
-        super().__init__()
-        self.side_effect_idempotency_keys: set[str] = set()
-
-    async def execute(
-        self,
-        actor: ActorContext,
-        *,
-        resolved: ResolvedInvokeTarget,
-        idempotency_key: str,
-    ) -> FakeInvocation:
-        _ = actor
-        _ = resolved
-        self.execute_calls += 1
-        self.side_effect_idempotency_keys.add(idempotency_key)
-        return FakeInvocation(id=88)
 
 
 class FakeFacilitatorClient:
@@ -485,10 +448,10 @@ async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_c
         status=PaymentAttemptStatus.CONSUMED,
         settle_outcome={"ok": True, "reference": "settle-1"},
     )
-    invoke_service = FakeInvokeService(invocation_for_lookup=FakeInvocation(id=88))
+    fake_invoke = FakeInvoke(invocation_for_lookup=FakeInvocation(id=88))
+    fake_invoke.install(monkeypatch)
     service = _build_service(session, facilitator_client=facilitator_client)
     service._attempt_repo = FakePaymentAttemptRepository(existing_attempt=existing_attempt)
-    service._invoke_service = invoke_service
     monkeypatch.setattr(
         service,
         "_build_requirement",
@@ -512,7 +475,7 @@ async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_c
     assert result.response_headers == {"PAYMENT-RESPONSE": "settle-1"}
     assert facilitator_client.verify_calls == 0
     assert facilitator_client.settle_calls == 0
-    assert invoke_service.get_invocation_calls == 1
+    assert fake_invoke.get_invocation_calls == 1
     assert session.commit_calls == 0
 
 
@@ -530,9 +493,9 @@ async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facili
         status=PaymentAttemptStatus.SETTLE_FAILED,
         settle_outcome={"ok": True, "reference": "settle-1"},
     )
+    FakeInvoke().install(monkeypatch)
     service = _build_service(session, facilitator_client=facilitator_client)
     service._attempt_repo = FakePaymentAttemptRepository(existing_attempt=existing_attempt)
-    service._invoke_service = FakeInvokeService()
     monkeypatch.setattr(
         service,
         "_build_requirement",
@@ -544,7 +507,7 @@ async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facili
         },
     )
 
-    with pytest.raises(InvokeBadGatewayError, match="payment settlement failed"):
+    with pytest.raises(UpstreamError, match="payment settlement failed"):
         await service.handle_paid_invoke(
             ActorContext(account_id=12),
             resolved=_resolved_target(),
@@ -566,13 +529,13 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
         verify_outcomes=[{"ok": True, "reference": "verify-1"}],
         settle_outcomes=[{"ok": True, "reference": "settle-1"}],
     )
-    invoke_service = FakeInvokeService(
+    fake_invoke = FakeInvoke(
         invocation_for_lookup=FakeInvocation(id=77),
-        execute_exception=InvokeBadGatewayError("upstream request failed"),
+        execute_exception=UpstreamError("upstream request failed"),
     )
+    fake_invoke.install(monkeypatch)
     service = _build_service(session, facilitator_client=facilitator_client)
     service._attempt_repo = FakePaymentAttemptRepository()
-    service._invoke_service = invoke_service
     service._ledger_service = FakeLedgerService()
     monkeypatch.setattr(
         service,
@@ -585,7 +548,7 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
         },
     )
 
-    with pytest.raises(InvokeBadGatewayError, match="upstream request failed"):
+    with pytest.raises(UpstreamError, match="upstream request failed"):
         await service.handle_paid_invoke(
             ActorContext(account_id=12),
             resolved=_resolved_target(),
@@ -603,8 +566,7 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
     assert attempt.settle_outcome == {"ok": True, "reference": "settle-1"}
     assert session.commit_calls == 3
     assert service._ledger_service.record_calls == []
-    assert invoke_service.execute_calls == 1
-    assert invoke_service.get_invocation_by_idempotency_calls == 0
+    assert fake_invoke.execute_calls == 1
 
 
 @pytest.mark.asyncio
@@ -638,7 +600,7 @@ async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
         settings=Settings(),
     )
 
-    with pytest.raises(InvokeBadGatewayError, match="facilitator authentication failed"):
+    with pytest.raises(UpstreamError, match="facilitator authentication failed"):
         await service._verify(
             payment_requirement={"amount_minor": 500},
             payment_payload={"authorization": {"nonce": "payment-1"}},
@@ -665,10 +627,10 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
         verify_outcomes=[{"ok": True, "reference": "verify-1"}],
         settle_outcomes=[{"ok": True, "reference": "settle-1"}],
     )
-    invoke_service = FakeIdempotentInvokeService()
+    fake_invoke = FakeInvoke()
+    fake_invoke.install(monkeypatch)
     service = _build_service(session, facilitator_client=facilitator_client)
     service._attempt_repo = attempt_repo
-    service._invoke_service = invoke_service
     service._ledger_service = FakeLedgerService()
     monkeypatch.setattr(
         payment_service_module,
@@ -714,5 +676,5 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
     assert session.commit_calls == 5
     assert facilitator_client.verify_calls == 1
     assert facilitator_client.settle_calls == 1
-    assert invoke_service.execute_calls == 2
-    assert invoke_service.side_effect_idempotency_keys == {"invoke-key"}
+    assert fake_invoke.execute_calls == 2
+    assert fake_invoke.executed_idempotency_keys == {"invoke-key"}

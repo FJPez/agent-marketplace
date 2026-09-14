@@ -13,16 +13,11 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UpstreamError,
+    UpstreamTimeoutError,
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.health_service import ReadinessCheckError
-from app.services.invoke_service import (
-    InvokeBadGatewayError,
-    InvokeConflictError,
-    InvokeGatewayTimeoutError,
-    InvokeNotFoundError,
-    InvokeUnavailableError,
-)
 from app.services.payout_service import PayoutConflictError
 
 Handler = Callable[[Request, Exception], Awaitable[Response]]
@@ -33,17 +28,14 @@ STATUS_CODES: dict[type[Exception], int] = {
     UnauthenticatedError: status.HTTP_401_UNAUTHORIZED,
     PermissionDeniedError: status.HTTP_403_FORBIDDEN,
     NotFoundError: status.HTTP_404_NOT_FOUND,
-    InvokeNotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     InvalidStateError: status.HTTP_409_CONFLICT,
-    InvokeConflictError: status.HTTP_409_CONFLICT,
-    InvokeUnavailableError: status.HTTP_409_CONFLICT,
     PayoutConflictError: status.HTTP_409_CONFLICT,
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
-    InvokeBadGatewayError: status.HTTP_502_BAD_GATEWAY,
+    UpstreamError: status.HTTP_502_BAD_GATEWAY,
     ReadinessCheckError: status.HTTP_503_SERVICE_UNAVAILABLE,
-    InvokeGatewayTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
+    UpstreamTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
 }
 
 

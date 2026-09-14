@@ -11,6 +11,7 @@ from app.schemas.service import Slug
 
 class InvokeRequest(BaseModel):
     model_config = ConfigDict(
+        extra="forbid",
         json_schema_extra={
             "examples": [
                 {
@@ -24,7 +25,7 @@ class InvokeRequest(BaseModel):
                     "quote_id": 1,
                 },
             ]
-        }
+        },
     )
 
     endpoint_key: Slug
