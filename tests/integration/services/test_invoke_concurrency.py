@@ -22,6 +22,10 @@ pytestmark = [pytest.mark.asyncio]
 
 PAYLOAD = {"text": "hello"}
 IDEMPOTENCY_KEY = "concurrent-key"
+# Bounded so a request that never reaches its coordination point fails the test
+# instead of hanging the suite; generous because a loaded runner can stretch the
+# ~1s happy path well past ten seconds.
+WAIT_TIMEOUT_SECONDS = 30
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +63,7 @@ class GatedHttpClient:
         _ = kwargs
         self.calls.append(f"{method} {url}")
         self.started.set()
-        await self.release.wait()
+        await asyncio.wait_for(self.release.wait(), timeout=WAIT_TIMEOUT_SECONDS)
         return Response(status_code=200, json={"result": "bonjour"})
 
     async def aclose(self) -> None:
@@ -141,18 +145,24 @@ async def test_a_second_request_meeting_a_live_lease_is_rejected_without_a_secon
             http_client=http_client,
         )
     )
-    await http_client.started.wait()
+    try:
+        await asyncio.wait_for(http_client.started.wait(), timeout=WAIT_TIMEOUT_SECONDS)
 
-    with pytest.raises(ConflictError, match="request already in progress"):
-        await run_invoke(
-            db_session_factory,
-            account_id=account_id,
-            service_id=service_id,
-            http_client=http_client,
-        )
+        with pytest.raises(ConflictError, match="request already in progress"):
+            await run_invoke(
+                db_session_factory,
+                account_id=account_id,
+                service_id=service_id,
+                http_client=http_client,
+            )
 
-    http_client.release.set()
-    invocation = await first
+        http_client.release.set()
+        invocation = await asyncio.wait_for(first, timeout=WAIT_TIMEOUT_SECONDS)
+    finally:
+        # A failed assertion must not leave the held request hanging.
+        http_client.release.set()
+        if not first.done():
+            first.cancel()
 
     assert invocation.status is InvocationStatus.SUCCEEDED
     assert len(http_client.calls) == 1
@@ -176,12 +186,26 @@ async def test_two_racing_claims_forward_exactly_once(
         )
         for _ in range(2)
     ]
-    await http_client.started.wait()
-    # The claim that lost the unique constraint settles while the winner is still
-    # held inside the upstream call, so it completes first.
-    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    http_client.release.set()
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        await asyncio.wait_for(http_client.started.wait(), timeout=WAIT_TIMEOUT_SECONDS)
+        # The claim that lost the unique constraint settles while the winner is still
+        # held inside the upstream call, so it completes first.
+        await asyncio.wait(
+            tasks,
+            timeout=WAIT_TIMEOUT_SECONDS,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        http_client.release.set()
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=WAIT_TIMEOUT_SECONDS,
+        )
+    finally:
+        # A failed assertion must not leave the held request hanging.
+        http_client.release.set()
+        for task in tasks:
+            if not task.done():
+                task.cancel()
 
     succeeded = [
         result
