@@ -26,7 +26,7 @@ from app.core.errors import (
     UpstreamError,
     UpstreamTimeoutError,
 )
-from app.db.models import Invocation
+from app.db.models import Invocation, ServiceEndpoint
 from app.services import invoke
 
 pytestmark = [pytest.mark.asyncio]
@@ -139,6 +139,17 @@ async def read_invocation(
     return invocation
 
 
+async def disable_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+) -> None:
+    async with db_session_factory.begin() as session:
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert endpoint is not None
+        endpoint.is_enabled = False
+
+
 async def resolve(
     session: AsyncSession,
     *,
@@ -152,6 +163,25 @@ async def resolve(
         endpoint_key="translate",
         payload=payload,
         quote_id=quote_id,
+    )
+
+
+async def replay(
+    session: AsyncSession,
+    *,
+    target: InvokeTarget,
+    idempotency_key: str,
+    payload: object = PAYLOAD,
+    quote_id: int | None = None,
+) -> Invocation | None:
+    return await invoke.try_replay(
+        session=session,
+        account_id=target.consumer_account_id,
+        service_ref=target.service_id,
+        endpoint_key="translate",
+        payload=payload,
+        quote_id=quote_id,
+        idempotency_key=idempotency_key,
     )
 
 
@@ -289,6 +319,185 @@ async def test_resolve_target_rejects_a_quote_issued_for_another_service(
     async with db_session_factory() as session:
         with pytest.raises(ConflictError, match="quote is not valid for invoke"):
             await resolve(session, target=target, quote_id=quote_id)
+
+
+async def test_try_replay_returns_a_stored_success(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-success")
+    invocation_id = await create_invocation_record(
+        db_session_factory,
+        consumer_account_id=target.consumer_account_id,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        payload=PAYLOAD,
+        idempotency_key="replay-stored-success",
+        status=InvocationStatus.SUCCEEDED,
+        response_payload={"result": "cached"},
+    )
+
+    async with db_session_factory() as session:
+        replayed = await replay(session, target=target, idempotency_key="replay-stored-success")
+
+    assert replayed is not None
+    assert replayed.id == invocation_id
+
+
+async def test_try_replay_returns_nothing_when_no_invocation_is_stored(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-missing")
+
+    async with db_session_factory() as session:
+        replayed = await replay(session, target=target, idempotency_key="replay-nothing")
+
+    assert replayed is None
+
+
+async def test_try_replay_raises_a_stored_failure_after_the_endpoint_is_disabled(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-failure-disabled")
+    await create_invocation_record(
+        db_session_factory,
+        consumer_account_id=target.consumer_account_id,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        payload=PAYLOAD,
+        idempotency_key="replay-failure-disabled",
+        status=InvocationStatus.FAILED,
+        response_payload=None,
+        upstream_status_code=None,
+        error_message="upstream request timed out",
+        failure_reason=InvocationFailureReason.UPSTREAM_TIMEOUT,
+    )
+    await disable_endpoint(db_session_factory, endpoint_id=target.endpoint_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(UpstreamTimeoutError, match="upstream request timed out"):
+            await replay(session, target=target, idempotency_key="replay-failure-disabled")
+
+
+async def test_try_replay_raises_a_stored_failure_after_its_quote_expires(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-failure-expired-quote")
+    quote_id = await create_quote_record(
+        db_session_factory,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        payload=PAYLOAD,
+        expires_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+    await create_invocation_record(
+        db_session_factory,
+        consumer_account_id=target.consumer_account_id,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        quote_id=quote_id,
+        payload=PAYLOAD,
+        idempotency_key="replay-failure-expired-quote",
+        status=InvocationStatus.FAILED,
+        response_payload=None,
+        upstream_status_code=500,
+        error_message="upstream returned an error response",
+        failure_reason=InvocationFailureReason.UPSTREAM_RESPONSE,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(UpstreamError, match="upstream returned an error response"):
+            await replay(
+                session,
+                target=target,
+                idempotency_key="replay-failure-expired-quote",
+                quote_id=quote_id,
+            )
+
+
+async def test_try_replay_reports_a_live_lease_after_its_quote_expires(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-live-lease-expired-quote")
+    quote_id = await create_quote_record(
+        db_session_factory,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        payload=PAYLOAD,
+        expires_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+    await create_invocation_record(
+        db_session_factory,
+        consumer_account_id=target.consumer_account_id,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        quote_id=quote_id,
+        payload=PAYLOAD,
+        idempotency_key="replay-live-lease",
+        status=InvocationStatus.IN_PROGRESS,
+        upstream_status_code=None,
+        in_progress_until=datetime.now(UTC) + timedelta(seconds=60),
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(ConflictError, match="request already in progress"):
+            await replay(
+                session,
+                target=target,
+                idempotency_key="replay-live-lease",
+                quote_id=quote_id,
+            )
+
+
+async def test_try_replay_requires_recovery_after_the_service_is_delisted(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-null-lease-delisted")
+    await create_invocation_record(
+        db_session_factory,
+        consumer_account_id=target.consumer_account_id,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        payload=PAYLOAD,
+        idempotency_key="replay-null-lease",
+        status=InvocationStatus.IN_PROGRESS,
+        upstream_status_code=None,
+        in_progress_until=None,
+    )
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=target.service_id,
+        action="delist",
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(ConflictError, match="invocation outcome is unknown; recovery required"):
+            await replay(session, target=target, idempotency_key="replay-null-lease")
+
+
+async def test_try_replay_rejects_a_key_reused_for_a_different_request(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="replay-identity")
+    await create_invocation_record(
+        db_session_factory,
+        consumer_account_id=target.consumer_account_id,
+        service_id=target.service_id,
+        endpoint_id=target.endpoint_id,
+        payload={"text": "something else"},
+        idempotency_key="replay-reused-key",
+        status=InvocationStatus.FAILED,
+        response_payload=None,
+        upstream_status_code=None,
+        error_message="upstream request timed out",
+        failure_reason=InvocationFailureReason.UPSTREAM_TIMEOUT,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(
+            ConflictError,
+            match="idempotency key already used for a different request",
+        ):
+            await replay(session, target=target, idempotency_key="replay-reused-key")
 
 
 async def test_execute_persists_a_successful_invocation_and_clears_the_lease(

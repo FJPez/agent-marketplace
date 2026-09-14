@@ -159,7 +159,7 @@ async def resolve_target(
     )
 
 
-async def try_successful_replay(
+async def try_replay(
     *,
     session: AsyncSession,
     account_id: int,
@@ -169,7 +169,7 @@ async def try_successful_replay(
     quote_id: int | None,
     idempotency_key: str,
 ) -> Invocation | None:
-    """Return the stored success for a repeated request, ahead of any current-state checks."""
+    """Interpret the stored outcome of a repeated request, ahead of any current-state checks."""
     existing = await session.scalar(
         select(Invocation).where(
             Invocation.consumer_account_id == account_id,
@@ -197,9 +197,20 @@ async def try_successful_replay(
         quote_id=quote_id,
     ):
         raise ConflictError("idempotency key already used for a different request")
-    if existing.status is not InvocationStatus.SUCCEEDED:
-        return None
-    return existing
+
+    # The caller and the request are the same, so what the row already says about this
+    # invocation settles it. Current service, endpoint, and quote state describes the next
+    # execution, not this one, and must not mask a stored outcome.
+    if existing.status is InvocationStatus.SUCCEEDED:
+        return existing
+    if existing.status is InvocationStatus.FAILED:
+        _raise_stored_failure(existing)
+    now = datetime.now(UTC)
+    if existing.in_progress_until is not None and existing.in_progress_until > now:
+        raise ConflictError("request already in progress")
+    # A missing or expired lease says only that the claiming worker stopped reporting.
+    # The upstream may or may not have run, so nothing is forwarded again.
+    raise ConflictError("invocation outcome is unknown; recovery required")
 
 
 async def execute(

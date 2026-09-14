@@ -125,7 +125,7 @@ async def invoke_endpoint(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     idempotency_key: ValidatedIdempotencyKey,
 ) -> InvocationResponse | JSONResponse:
-    replayed = await invoke.try_successful_replay(
+    replayed = await invoke.try_replay(
         session=session,
         account_id=actor.account_id,
         service_ref=service_id_or_slug,
