@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import NoReturn
 
 from sqlalchemy import desc, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -270,32 +270,39 @@ async def _claim_invocation(
 ) -> Invocation | None:
     """Insert the in-progress row with its lease, or return None when a claim already exists."""
     now = datetime.now(UTC)
-    invocation = Invocation(
-        consumer_account_id=account_id,
-        service_id=resolved.service.id,
-        endpoint_id=resolved.endpoint.id,
-        endpoint_key=resolved.endpoint.key,
-        access_mode=resolved.endpoint.access_mode,
-        quote_id=None if resolved.quote is None else resolved.quote.id,
-        idempotency_key=idempotency_key,
-        request_hash=resolved.request_hash,
-        status=InvocationStatus.IN_PROGRESS,
-        in_progress_until=now
-        + timedelta(seconds=resolved.endpoint.timeout_seconds + LEASE_GRACE_SECONDS),
-        response_payload=None,
-        upstream_status_code=None,
-        error_message=None,
-        failure_reason=None,
+    # Ownership is this insert: the row and its lease become durable together, so no
+    # unclaimed in-progress row is ever visible and the unique index, not a prior read,
+    # decides which caller owns the forward. Conflicts are skipped rather than raised so
+    # the shared session never has to roll back, which would expire every loaded object.
+    claim = (
+        insert(Invocation)
+        .values(
+            consumer_account_id=account_id,
+            service_id=resolved.service.id,
+            endpoint_id=resolved.endpoint.id,
+            endpoint_key=resolved.endpoint.key,
+            access_mode=resolved.endpoint.access_mode,
+            quote_id=None if resolved.quote is None else resolved.quote.id,
+            idempotency_key=idempotency_key,
+            request_hash=resolved.request_hash,
+            status=InvocationStatus.IN_PROGRESS,
+            in_progress_until=now
+            + timedelta(seconds=resolved.endpoint.timeout_seconds + LEASE_GRACE_SECONDS),
+            response_payload=None,
+            upstream_status_code=None,
+            error_message=None,
+            failure_reason=None,
+        )
+        .on_conflict_do_nothing(index_elements=["consumer_account_id", "idempotency_key"])
+        .returning(Invocation.id)
     )
-    session.add(invocation)
-    try:
-        # Ownership is this insert: the row and its lease become durable together, so
-        # no unclaimed in-progress row is ever visible and the unique constraint, not a
-        # prior read, decides which caller owns the forward.
+    claimed_id = await session.scalar(claim)
+    if claimed_id is None:
         await session.commit()
-    except IntegrityError:
-        await session.rollback()
         return None
+    claimed = await session.scalars(select(Invocation).where(Invocation.id == claimed_id))
+    invocation = claimed.one()
+    await session.commit()
     return invocation
 
 
