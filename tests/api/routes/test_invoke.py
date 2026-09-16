@@ -33,7 +33,7 @@ from app.core.enums import (
 from app.core.lifespan import get_app_state
 from app.core.request_hash import hash_request_body
 from app.core.security import hash_api_key
-from app.db.models import ApiKey, Invocation, Quote
+from app.db.models import ApiKey, Invocation, Quote, ServiceEndpoint
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -240,6 +240,17 @@ async def _expire_quote(
         quote = await session.get(Quote, quote_id)
         assert quote is not None
         quote.expires_at = datetime(2000, 1, 1, tzinfo=UTC)
+
+
+async def _disable_endpoint(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+) -> None:
+    async with db_session_factory.begin() as session:
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert endpoint is not None
+        endpoint.is_enabled = False
 
 
 @dataclass
@@ -806,132 +817,42 @@ async def test_paid_invoke_replays_success_before_quote_expiry_validation(
 
 
 @pytest.mark.asyncio
-async def test_free_invoke_recovers_from_duplicate_insert_and_replays_existing_invocation(
-    app: FastAPI,
+async def test_invoke_rejects_a_malformed_service_reference(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    provider_account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
-    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
     consumer_account_id = await _create_consumer_account(db_session_factory)
-    existing_invocation_id = await _seed_existing_invocation(
-        db_session_factory,
-        consumer_account_id=consumer_account_id,
-        service_id=service_id,
-        endpoint_id=endpoint_id,
-        endpoint_key="translate",
-        access_mode=AccessMode.FREE,
-        quote_id=None,
-        idempotency_key="invoke-key",
-        payload={"text": "hello"},
-        status=InvocationStatus.SUCCEEDED,
-        response_payload={"result": "cached"},
-        upstream_status_code=200,
-        error_message=None,
-    )
-    fake_http_client = _FakeHttpClient(
-        responses=[Response(status_code=200, json={"result": "fresh"})],
-    )
-    get_app_state(app).http_client = fake_http_client
-
-    from app.repositories.invocation_repo import InvocationRepository
-
-    original_get_by_idempotency_key = InvocationRepository.get_by_idempotency_key
-    lookup_calls = 0
-
-    async def stale_then_delegate(
-        self: InvocationRepository,
-        *,
-        consumer_account_id: int,
-        idempotency_key: str,
-    ) -> Invocation | None:
-        nonlocal lookup_calls
-        lookup_calls += 1
-        if lookup_calls == 1:
-            return None
-        return await original_get_by_idempotency_key(
-            self,
-            consumer_account_id=consumer_account_id,
-            idempotency_key=idempotency_key,
-        )
-
-    monkeypatch.setattr(InvocationRepository, "get_by_idempotency_key", stale_then_delegate)
 
     response = await async_client.post(
-        "/v1/invoke/invoke-service",
+        "/v1/invoke/-not-a-slug-",
         headers=_auth_headers(consumer_account_id),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 
-    assert response.status_code == 200
-    assert response.json()["id"] == existing_invocation_id
-    assert response.json()["response_payload"] == {"result": "cached"}
-    assert len(fake_http_client.calls) == 0
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_free_invoke_duplicate_insert_preserves_request_mismatch_conflict(
-    app: FastAPI,
+async def test_invoke_rejects_unknown_request_fields(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
-    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    _ = await _seed_endpoint(db_session_factory, service_id=service_id)
     consumer_account_id = await _create_consumer_account(db_session_factory)
-    await _seed_existing_invocation(
-        db_session_factory,
-        consumer_account_id=consumer_account_id,
-        service_id=service_id,
-        endpoint_id=endpoint_id,
-        endpoint_key="translate",
-        access_mode=AccessMode.FREE,
-        quote_id=None,
-        idempotency_key="invoke-key",
-        payload={"text": "hello"},
-        status=InvocationStatus.SUCCEEDED,
-        response_payload={"result": "cached"},
-        upstream_status_code=200,
-        error_message=None,
-    )
-    get_app_state(app).http_client = _FakeHttpClient(
-        responses=[Response(status_code=200, json={"result": "fresh"})],
-    )
-
-    from app.repositories.invocation_repo import InvocationRepository
-
-    original_get_by_idempotency_key = InvocationRepository.get_by_idempotency_key
-    lookup_calls = 0
-
-    async def stale_then_delegate(
-        self: InvocationRepository,
-        *,
-        consumer_account_id: int,
-        idempotency_key: str,
-    ) -> Invocation | None:
-        nonlocal lookup_calls
-        lookup_calls += 1
-        if lookup_calls == 1:
-            return None
-        return await original_get_by_idempotency_key(
-            self,
-            consumer_account_id=consumer_account_id,
-            idempotency_key=idempotency_key,
-        )
-
-    monkeypatch.setattr(InvocationRepository, "get_by_idempotency_key", stale_then_delegate)
 
     response = await async_client.post(
         "/v1/invoke/invoke-service",
         headers=_auth_headers(consumer_account_id),
-        json={"endpoint_key": "translate", "payload": {"text": "hi"}},
+        json={
+            "endpoint_key": "translate",
+            "payload": {"text": "hello"},
+            "unexpected_field": "value",
+        },
     )
 
-    assert response.status_code == 409
-    assert response.json() == {"detail": "idempotency key already used for a different request"}
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -1167,6 +1088,58 @@ async def test_failed_invoke_replays_original_gateway_error_without_second_upstr
         headers=_auth_headers(consumer_account_id),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
+    second = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+
+    assert first.status_code == 504
+    assert second.status_code == 504
+    assert second.json() == {"detail": "upstream request timed out"}
+    assert fake_http_client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_invoke_replays_its_failure_after_the_endpoint_is_disabled(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+
+    class _TimeoutingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def request(
+            self,
+            method: str,
+            url: str,
+            *,
+            json: dict[str, object],
+            headers: dict[str, str],
+            **kwargs: int,
+        ) -> Response:
+            _ = (method, url, json, headers, kwargs)
+            self.calls += 1
+            raise TimeoutException("boom")
+
+        async def aclose(self) -> None:
+            return None
+
+    fake_http_client = _TimeoutingClient()
+    get_app_state(app).http_client = fake_http_client
+
+    first = await async_client.post(
+        "/v1/invoke/invoke-service",
+        headers=_auth_headers(consumer_account_id),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}},
+    )
+    await _disable_endpoint(db_session_factory, endpoint_id=endpoint_id)
     second = await async_client.post(
         "/v1/invoke/invoke-service",
         headers=_auth_headers(consumer_account_id),

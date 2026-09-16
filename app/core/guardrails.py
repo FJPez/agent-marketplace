@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.errors import UnauthenticatedError
+from app.core.http_headers import IDEMPOTENCY_KEY_HEADER
 from app.core.invoke_submission_backend import (
     InvokeSubmissionBackend,
     MemoryInvokeSubmissionBackend,
@@ -26,7 +27,6 @@ RequestHandler = Callable[[Request], Awaitable[Response]]
 _INVOKE_PATH_PREFIX = "/v1/invoke/"
 _QUOTE_PATH_SUFFIX = "/quote"
 _V1_PATH_PREFIX = "/v1/"
-_IDEMPOTENCY_HEADER = "Idempotency-Key"
 RouteLimitScope = Literal["global", "invoke", "quote"]
 
 
@@ -152,7 +152,7 @@ class InvokeGuardrails:
     ) -> tuple[str | None, str]:
         if request_fingerprint is None:
             request_fingerprint = sha256(b"").hexdigest()
-        idempotency_key = request.headers.get(_IDEMPOTENCY_HEADER)
+        idempotency_key = request.headers.get(IDEMPOTENCY_KEY_HEADER)
         if not idempotency_key:
             return None, request_fingerprint
 
