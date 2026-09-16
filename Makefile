@@ -6,7 +6,7 @@ COMPOSE ?= docker compose
 DOCKER_HOST ?= 127.0.0.1
 DOCKER_PORT ?= 18000
 
-.PHONY: sync run test lint lint-fix format typecheck migrate migrate-check seed bootstrap-admin demo-upstream demo-api demo-client demo-provider docker-build docker-run docker-stop docker-smoke
+.PHONY: sync run test test-unit test-serial lint lint-fix format typecheck migrate migrate-check seed bootstrap-admin demo-upstream demo-api demo-client demo-provider docker-build docker-run docker-stop docker-smoke
 
 sync:
 	uv sync
@@ -15,7 +15,13 @@ run:
 	uv run uvicorn app.main:app --reload --host $(HOST) --port $(PORT)
 
 test:
-	uv run pytest
+	uv run pytest -n 2
+
+test-unit:
+	uv run pytest tests/unit
+
+test-serial:
+	uv run pytest -n 0
 
 lint:
 	uv run ruff check .

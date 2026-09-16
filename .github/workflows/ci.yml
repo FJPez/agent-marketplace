@@ -77,7 +77,7 @@ jobs:
           python-version-file: ".python-version"
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --all-groups --locked
-      - run: uv run pytest
+      - run: uv run pytest -n 2
 
   migrations:
     runs-on: ubuntu-latest
