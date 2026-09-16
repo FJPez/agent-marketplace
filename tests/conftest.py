@@ -37,7 +37,7 @@ from tests.integration.db.support import (
 )
 
 from app.core.config import Settings, get_settings
-from app.db.session import create_engine, create_session_factory
+from app.db.session import create_session_factory
 from app.main import create_app
 
 pytest_plugins = (
@@ -119,9 +119,12 @@ def test_redis_url() -> Generator[str, None, None]:
         asyncio.run(_flush_redis_database(redis_url))
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def db_engine(db_settings: Settings) -> Generator[AsyncEngine, None, None]:
-    engine = create_engine(db_settings)
+    # NullPool is SQLAlchemy's documented choice for an async engine shared across
+    # event loops: pytest-asyncio gives each test its own loop, so a pooled asyncpg
+    # connection would be handed to a later test still bound to a dead loop.
+    engine = create_async_engine(db_settings.database_url, poolclass=NullPool)
     try:
         yield engine
     finally:
@@ -150,9 +153,9 @@ def migrated_database(alembic_config: Config) -> None:
 
 
 @pytest.fixture
-def clean_database(migrated_database: None, db_settings: Settings) -> None:
+def clean_database(migrated_database: None, db_engine: AsyncEngine) -> None:
     _ = migrated_database
-    asyncio.run(truncate_all_tables(require_test_database_url(db_settings.database_url)))
+    asyncio.run(truncate_all_tables(db_engine))
 
 
 @pytest.fixture(scope="session")

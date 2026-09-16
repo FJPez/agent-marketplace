@@ -9,7 +9,6 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
-from sqlalchemy.pool import NullPool
 
 import app.db.models  # noqa: F401
 from app.core.config import Settings
@@ -128,7 +127,9 @@ async def recreate_test_database(database_url: str) -> None:
         await connection.execute(text(f'CREATE DATABASE "{database_name}"'))
 
 
-async def truncate_all_tables(database_url: str) -> None:
+async def truncate_all_tables(engine: AsyncEngine) -> None:
+    require_test_database_url(engine.url.render_as_string(hide_password=False))
+
     # CASCADE makes ordering irrelevant, and sorting would warn about the
     # services <-> service_revisions foreign key cycle on every call.
     table_names = [name for name in Base.metadata.tables if name != ALEMBIC_VERSION_TABLE]
@@ -136,16 +137,12 @@ async def truncate_all_tables(database_url: str) -> None:
         return
 
     targets = ", ".join(f'"{table_name}"' for table_name in table_names)
-    engine = create_async_engine(require_test_database_url(database_url), poolclass=NullPool)
-    try:
-        async with engine.begin() as connection:
-            # A connection leaked by an earlier test still holds locks on these tables,
-            # and TRUNCATE takes ACCESS EXCLUSIVE: time out so the leak fails loudly
-            # here instead of hanging the whole run.
-            await connection.execute(text("SET lock_timeout = '5s'"))
-            await connection.execute(text(f"TRUNCATE {targets} RESTART IDENTITY CASCADE"))
-    finally:
-        await engine.dispose()
+    async with engine.begin() as connection:
+        # A connection leaked by an earlier test still holds locks on these tables,
+        # and TRUNCATE takes ACCESS EXCLUSIVE: time out so the leak fails loudly
+        # here instead of hanging the whole run.
+        await connection.execute(text("SET lock_timeout = '5s'"))
+        await connection.execute(text(f"TRUNCATE {targets} RESTART IDENTITY CASCADE"))
 
 
 async def drop_test_database(database_url: str) -> None:
