@@ -183,16 +183,17 @@ async def try_replay(
     if existing is None:
         return None
 
-    stored_slug = await session.scalar(
-        select(Service.slug).where(Service.id == existing.service_id),
-    )
-    if stored_slug is None:
-        return None
     if isinstance(service_ref, int):
         if existing.service_id != service_ref:
             raise ConflictError("idempotency key already used for a different request")
-    elif stored_slug != service_ref:
-        raise ConflictError("idempotency key already used for a different request")
+    else:
+        stored_slug = await session.scalar(
+            select(Service.slug).where(Service.id == existing.service_id),
+        )
+        if stored_slug is None:
+            return None
+        if stored_slug != service_ref:
+            raise ConflictError("idempotency key already used for a different request")
 
     if existing.request_hash != _build_request_hash(
         service_id=existing.service_id,
@@ -243,8 +244,6 @@ async def execute(
 
     try:
         invocation = await _forward_and_record(
-            session=session,
-            account_id=account_id,
             resolved=resolved,
             invocation=claimed,
             http_client=http_client,
@@ -252,8 +251,32 @@ async def execute(
     except (UpstreamError, UpstreamTimeoutError):
         # The terminal failure the helper recorded is durable even though the call raises.
         await session.commit()
+        logger.error(
+            "invoke failed",
+            extra=build_event_context(
+                "invoke.failed",
+                **{
+                    ACCOUNT_ID_FIELD: account_id,
+                    INVOCATION_ID_FIELD: claimed.id,
+                    SERVICE_ID_FIELD: resolved.service.id,
+                },
+            ),
+        )
         raise
     await session.commit()
+    # The outcome is durable before it is announced, so no log claims a success the
+    # database never kept.
+    logger.info(
+        "invoke succeeded",
+        extra=build_event_context(
+            "invoke.succeeded",
+            **{
+                ACCOUNT_ID_FIELD: account_id,
+                INVOCATION_ID_FIELD: invocation.id,
+                SERVICE_ID_FIELD: resolved.service.id,
+            },
+        ),
+    )
     return invocation
 
 
@@ -372,15 +395,13 @@ async def _resolve_claimed_invocation(
 
 async def _forward_and_record(
     *,
-    session: AsyncSession,
-    account_id: int,
     resolved: ResolvedInvokeTarget,
     invocation: Invocation,
     http_client: SupportsRequest,
 ) -> Invocation:
-    """Forward the claimed invocation upstream with no transaction open, then record it.
+    """Call the provider and apply the terminal state to the supplied invocation.
 
-    The caller owns the transaction and commits the terminal state, success or failure.
+    The caller persists that state, success or failure.
     """
     upstream = resolved.endpoint.upstream
     if upstream is None:
@@ -410,17 +431,6 @@ async def _forward_and_record(
         invocation.error_message = failure.message
         invocation.upstream_status_code = failure.upstream_status_code
         invocation.in_progress_until = None
-        logger.error(
-            "invoke failed",
-            extra=build_event_context(
-                "invoke.failed",
-                **{
-                    ACCOUNT_ID_FIELD: account_id,
-                    INVOCATION_ID_FIELD: invocation.id,
-                    SERVICE_ID_FIELD: resolved.service.id,
-                },
-            ),
-        )
         raise failure.error from exc
 
     invocation.status = InvocationStatus.SUCCEEDED
@@ -429,17 +439,6 @@ async def _forward_and_record(
     invocation.error_message = None
     invocation.failure_reason = None
     invocation.in_progress_until = None
-    logger.info(
-        "invoke succeeded",
-        extra=build_event_context(
-            "invoke.succeeded",
-            **{
-                ACCOUNT_ID_FIELD: account_id,
-                INVOCATION_ID_FIELD: invocation.id,
-                SERVICE_ID_FIELD: resolved.service.id,
-            },
-        ),
-    )
     return invocation
 
 
