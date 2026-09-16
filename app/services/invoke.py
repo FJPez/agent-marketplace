@@ -205,16 +205,7 @@ async def try_replay(
     # The caller and the request are the same, so what the row already says about this
     # invocation settles it. Current service, endpoint, and quote state describes the next
     # execution, not this one, and must not mask a stored outcome.
-    if existing.status is InvocationStatus.SUCCEEDED:
-        return existing
-    if existing.status is InvocationStatus.FAILED:
-        _raise_stored_failure(existing)
-    now = datetime.now(UTC)
-    if existing.in_progress_until is not None and existing.in_progress_until > now:
-        raise ConflictError("request already in progress")
-    # A missing or expired lease says only that the claiming worker stopped reporting.
-    # The upstream may or may not have run, so nothing is forwarded again.
-    raise ConflictError("invocation outcome is unknown; recovery required")
+    return interpret_stored_outcome(existing, now=datetime.now(UTC))
 
 
 async def execute(
@@ -232,20 +223,38 @@ async def execute(
         resolved=resolved,
         idempotency_key=idempotency_key,
     )
+    # Ownership becomes durable here, before the provider is contacted, and the forward
+    # below then runs with no transaction open.
+    await session.commit()
+
     if claimed is None:
-        return await _resolve_claimed_invocation(
+        try:
+            existing = await _resolve_claimed_invocation(
+                session=session,
+                account_id=account_id,
+                idempotency_key=idempotency_key,
+                request_hash=resolved.request_hash,
+            )
+        except (NotFoundError, ConflictError, UpstreamError, UpstreamTimeoutError):
+            await session.rollback()
+            raise
+        await session.commit()
+        return existing
+
+    try:
+        invocation = await _forward_and_record(
             session=session,
             account_id=account_id,
-            idempotency_key=idempotency_key,
-            request_hash=resolved.request_hash,
+            resolved=resolved,
+            invocation=claimed,
+            http_client=http_client,
         )
-    return await _forward_and_record(
-        session=session,
-        account_id=account_id,
-        resolved=resolved,
-        invocation=claimed,
-        http_client=http_client,
-    )
+    except (UpstreamError, UpstreamTimeoutError):
+        # The terminal failure the helper recorded is durable even though the call raises.
+        await session.commit()
+        raise
+    await session.commit()
+    return invocation
 
 
 async def get_invocation(
@@ -276,6 +285,19 @@ async def list_invocations(*, session: AsyncSession, account_id: int) -> list[In
     return list(result.all())
 
 
+def interpret_stored_outcome(invocation: Invocation, *, now: datetime) -> Invocation:
+    """Answer a repeated request from the invocation row alone, never forwarding it again."""
+    if invocation.status is InvocationStatus.SUCCEEDED:
+        return invocation
+    if invocation.status is InvocationStatus.FAILED:
+        _raise_stored_failure(invocation)
+    if invocation.in_progress_until is not None and invocation.in_progress_until > now:
+        raise ConflictError("request already in progress")
+    # A missing or expired lease says only that the claiming worker stopped reporting.
+    # The upstream may or may not have run, so nothing is forwarded again.
+    raise ConflictError("invocation outcome is unknown; recovery required")
+
+
 async def _claim_invocation(
     *,
     session: AsyncSession,
@@ -283,7 +305,10 @@ async def _claim_invocation(
     resolved: ResolvedInvokeTarget,
     idempotency_key: str,
 ) -> Invocation | None:
-    """Insert the in-progress row with its lease, or return None when a claim already exists."""
+    """Insert the in-progress row with its lease, or return None when a claim already exists.
+
+    The caller owns the transaction and commits the claim.
+    """
     now = datetime.now(UTC)
     # Ownership is this insert: the row and its lease become durable together, so no
     # unclaimed in-progress row is ever visible and the unique index, not a prior read,
@@ -309,16 +334,11 @@ async def _claim_invocation(
             failure_reason=None,
         )
         .on_conflict_do_nothing(index_elements=["consumer_account_id", "idempotency_key"])
-        .returning(Invocation.id)
+        # RETURNING the mapped entity hands back the persistent instance itself, so the
+        # forward can mutate the claimed row without a second read.
+        .returning(Invocation)
     )
-    claimed_id = await session.scalar(claim)
-    if claimed_id is None:
-        await session.commit()
-        return None
-    claimed = await session.scalars(select(Invocation).where(Invocation.id == claimed_id))
-    invocation = claimed.one()
-    await session.commit()
-    return invocation
+    return await session.scalar(claim)
 
 
 async def _resolve_claimed_invocation(
@@ -328,7 +348,10 @@ async def _resolve_claimed_invocation(
     idempotency_key: str,
     request_hash: str,
 ) -> Invocation:
-    """Replay or reject a request whose invocation another attempt already claimed."""
+    """Replay or reject a request whose invocation another attempt already claimed.
+
+    The caller owns the transaction and ends the locked read.
+    """
     existing = await session.scalar(
         select(Invocation)
         .where(
@@ -340,26 +363,11 @@ async def _resolve_claimed_invocation(
         .execution_options(populate_existing=True)
         .with_for_update(),
     )
-    now = datetime.now(UTC)
     if existing is None:
-        await session.rollback()
         raise NotFoundError("invocation not found")
     if existing.request_hash != request_hash:
-        await session.rollback()
         raise ConflictError("idempotency key already used for a different request")
-    if existing.status is InvocationStatus.SUCCEEDED:
-        await session.commit()
-        return existing
-    if existing.status is InvocationStatus.FAILED:
-        await session.commit()
-        _raise_stored_failure(existing)
-    if existing.in_progress_until is not None and existing.in_progress_until > now:
-        await session.rollback()
-        raise ConflictError("request already in progress")
-    # A missing or expired lease says only that the claiming worker stopped reporting.
-    # The upstream may or may not have run, so nothing is forwarded again.
-    await session.rollback()
-    raise ConflictError("invocation outcome is unknown; recovery required")
+    return interpret_stored_outcome(existing, now=datetime.now(UTC))
 
 
 async def _forward_and_record(
@@ -370,7 +378,10 @@ async def _forward_and_record(
     invocation: Invocation,
     http_client: SupportsRequest,
 ) -> Invocation:
-    """Forward the claimed invocation upstream with no transaction open, then record it."""
+    """Forward the claimed invocation upstream with no transaction open, then record it.
+
+    The caller owns the transaction and commits the terminal state, success or failure.
+    """
     upstream = resolved.endpoint.upstream
     if upstream is None:
         raise InvalidStateError("service endpoint is not invokable")
@@ -399,7 +410,6 @@ async def _forward_and_record(
         invocation.error_message = failure.message
         invocation.upstream_status_code = failure.upstream_status_code
         invocation.in_progress_until = None
-        await session.commit()
         logger.error(
             "invoke failed",
             extra=build_event_context(
@@ -419,7 +429,6 @@ async def _forward_and_record(
     invocation.error_message = None
     invocation.failure_reason = None
     invocation.in_progress_until = None
-    await session.commit()
     logger.info(
         "invoke succeeded",
         extra=build_event_context(
