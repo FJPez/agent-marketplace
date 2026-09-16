@@ -1,28 +1,13 @@
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Header
+from pydantic import StringConstraints
 
-IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
-PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE"
-_MAX_IDEMPOTENCY_KEY_LENGTH = 255
+from app.core.http_headers import IDEMPOTENCY_KEY_HEADER
 
-
-def require_idempotency_key(
-    idempotency_key: Annotated[str, Header(alias=IDEMPOTENCY_KEY_HEADER)],
-) -> str:
-    normalized_key = idempotency_key.strip()
-    if not normalized_key:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Idempotency-Key header must not be blank",
-        )
-    if len(normalized_key) > _MAX_IDEMPOTENCY_KEY_LENGTH:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="Idempotency-Key header must be at most 255 characters",
-        )
-    return normalized_key
-
-
-ValidatedIdempotencyKey = Annotated[str, Depends(require_idempotency_key)]
-PaymentSignatureHeader = Annotated[str | None, Header(alias=PAYMENT_SIGNATURE_HEADER)]
+ValidatedIdempotencyKey = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
+    Header(alias=IDEMPOTENCY_KEY_HEADER),
+]
+PaymentSignatureHeader = Annotated[str | None, Header(alias="PAYMENT-SIGNATURE")]

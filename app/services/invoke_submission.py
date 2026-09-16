@@ -26,9 +26,6 @@ class InvokeSuccess:
     response_headers: dict[str, str]
 
 
-type InvokeOutcome = InvokeSuccess | PaymentRequiredChallenge
-
-
 async def submit(
     *,
     session: AsyncSession,
@@ -41,7 +38,7 @@ async def submit(
     facilitator_client: SupportsFacilitatorClient,
     x402_resource_server: SupportsX402ResourceServer,
     settings: Settings,
-) -> InvokeOutcome:
+) -> InvokeSuccess | PaymentRequiredChallenge:
     payments = PaymentService(
         session,
         http_client=http_client,

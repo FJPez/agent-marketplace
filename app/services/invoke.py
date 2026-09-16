@@ -235,14 +235,50 @@ async def execute(
         await session.commit()
         return replayed
 
+    upstream = resolved.endpoint.upstream
+    if upstream is None:
+        raise InvalidStateError("service endpoint is not invokable")
+
+    gateway_client = ProviderGatewayClient(http_client)
     try:
-        invocation = await _forward_and_record(
-            resolved=resolved,
-            invocation=claimed,
-            http_client=http_client,
+        gateway_result = await gateway_client.invoke(
+            base_url=upstream.base_url,
+            path=upstream.path,
+            http_method=upstream.http_method,
+            payload=resolved.payload,
+            request_hash=resolved.request_hash,
+            invocation_id=claimed.id,
+            timeout_seconds=resolved.endpoint.timeout_seconds,
+            auth=resolved.auth,
         )
-    except (UpstreamError, UpstreamTimeoutError):
-        # The terminal failure the helper recorded is durable even though the call raises.
+    except (
+        ProviderGatewayTargetError,
+        ProviderGatewayTimeoutError,
+        ProviderGatewayTransportError,
+        ProviderGatewayResponseError,
+    ) as exc:
+        if isinstance(exc, ProviderGatewayTimeoutError):
+            failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
+            message = "upstream request timed out"
+            failed_status_code: int | None = None
+            error: UpstreamError | UpstreamTimeoutError = UpstreamTimeoutError(message)
+        elif isinstance(exc, ProviderGatewayResponseError):
+            failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
+            message = str(exc)
+            failed_status_code = exc.upstream_status_code
+            error = UpstreamError(message)
+        else:
+            # An unsafe target and a transport error both mean the upstream never answered.
+            failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
+            message = str(exc)
+            failed_status_code = None
+            error = UpstreamError(message)
+
+        claimed.status = InvocationStatus.FAILED
+        claimed.failure_reason = failure_reason
+        claimed.error_message = message
+        claimed.upstream_status_code = failed_status_code
+        claimed.in_progress_until = None
         await session.commit()
         logger.error(
             "invoke failed",
@@ -255,7 +291,14 @@ async def execute(
                 },
             ),
         )
-        raise
+        raise error from exc
+
+    claimed.status = InvocationStatus.SUCCEEDED
+    claimed.response_payload = to_json_value(gateway_result.payload)
+    claimed.upstream_status_code = gateway_result.status_code
+    claimed.error_message = None
+    claimed.failure_reason = None
+    claimed.in_progress_until = None
     await session.commit()
     # The outcome is durable before it is announced, so no log claims a success the
     # database never kept.
@@ -265,12 +308,12 @@ async def execute(
             "invoke.succeeded",
             **{
                 ACCOUNT_ID_FIELD: account_id,
-                INVOCATION_ID_FIELD: invocation.id,
+                INVOCATION_ID_FIELD: claimed.id,
                 SERVICE_ID_FIELD: resolved.service.id,
             },
         ),
     )
-    return invocation
+    return claimed
 
 
 async def get_invocation(
@@ -357,64 +400,6 @@ async def _claim_invocation(
         .returning(Invocation)
     )
     return await session.scalar(claim)
-
-
-async def _forward_and_record(
-    *,
-    resolved: ResolvedInvokeTarget,
-    invocation: Invocation,
-    http_client: SupportsRequest,
-) -> Invocation:
-    """Call the provider and apply the terminal state to the supplied invocation.
-
-    The caller persists that state, success or failure.
-    """
-    upstream = resolved.endpoint.upstream
-    if upstream is None:
-        raise InvalidStateError("service endpoint is not invokable")
-
-    gateway_client = ProviderGatewayClient(http_client)
-    try:
-        gateway_result = await gateway_client.invoke(
-            base_url=upstream.base_url,
-            path=upstream.path,
-            http_method=upstream.http_method,
-            payload=resolved.payload,
-            request_hash=resolved.request_hash,
-            invocation_id=invocation.id,
-            timeout_seconds=resolved.endpoint.timeout_seconds,
-            auth=resolved.auth,
-        )
-    except ProviderGatewayTimeoutError as exc:
-        invocation.status = InvocationStatus.FAILED
-        invocation.failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
-        invocation.error_message = "upstream request timed out"
-        invocation.upstream_status_code = None
-        invocation.in_progress_until = None
-        raise UpstreamTimeoutError("upstream request timed out") from exc
-    except ProviderGatewayResponseError as exc:
-        invocation.status = InvocationStatus.FAILED
-        invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
-        invocation.error_message = str(exc)
-        invocation.upstream_status_code = exc.upstream_status_code
-        invocation.in_progress_until = None
-        raise UpstreamError(str(exc)) from exc
-    except (ProviderGatewayTargetError, ProviderGatewayTransportError) as exc:
-        # An unsafe target and a transport error both mean the upstream never answered.
-        invocation.status = InvocationStatus.FAILED
-        invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
-        invocation.error_message = str(exc)
-        invocation.upstream_status_code = None
-        invocation.in_progress_until = None
-        raise UpstreamError(str(exc)) from exc
-
-    invocation.status = InvocationStatus.SUCCEEDED
-    invocation.response_payload = to_json_value(gateway_result.payload)
-    invocation.upstream_status_code = gateway_result.status_code
-    invocation.error_message = None
-    invocation.failure_reason = None
-    invocation.in_progress_until = None
-    return invocation
 
 
 def _build_request_hash(

@@ -32,7 +32,7 @@ from app.core.enums import (
 )
 from app.db.models import Invocation, LedgerEntry, PaymentAttempt, Payout
 from app.schemas.invoke import InvokeRequest
-from app.services.invoke_submission import InvokeOutcome, InvokeSuccess, submit
+from app.services.invoke_submission import InvokeSuccess, submit
 from app.services.payment_service import PaymentRequiredChallenge
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("migrated_database")]
@@ -221,7 +221,7 @@ async def run_submit(
     quote_id: int | None = None,
     payment_signature: str | None = None,
     idempotency_key: str = IDEMPOTENCY_KEY,
-) -> InvokeOutcome:
+) -> InvokeSuccess | PaymentRequiredChallenge:
     async with db_session_factory() as session:
         return await submit(
             session=session,
