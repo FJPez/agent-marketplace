@@ -909,7 +909,6 @@ async def test_finance_routes_do_not_leak_internal_exceptions(
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     provider_account_id, _ = await _seed_provider_finance_data(db_session_factory)
 
     async def explode(*, session: object, account_id: int) -> list[object]:

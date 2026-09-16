@@ -61,7 +61,6 @@ def _build_alembic_config(database_url: str) -> Config:
 
 @pytest.fixture(scope="session")
 def base_database_url(base_test_env: None) -> str:
-    _ = base_test_env
     return os.environ.get("APP_DATABASE_URL") or Settings().database_url
 
 
@@ -70,7 +69,6 @@ def use_dedicated_test_database(
     base_test_env: None,
     base_database_url: str,
 ) -> Generator[None, None, None]:
-    _ = base_test_env
     original_database_url = os.environ.get("APP_DATABASE_URL")
     test_database_url = get_test_database_url(base_database_url)
     get_settings.cache_clear()
@@ -95,7 +93,6 @@ def use_dedicated_test_database(
 
 @pytest.fixture(scope="session")
 def db_settings(use_dedicated_test_database: None) -> Settings:
-    _ = use_dedicated_test_database
     return Settings(database_url=require_test_database_url(Settings().database_url))
 
 
@@ -139,7 +136,6 @@ def db_session_factory(
     clean_database: None,
     db_engine: AsyncEngine,
 ) -> async_sessionmaker[AsyncSession]:
-    _ = clean_database
     return create_session_factory(db_engine)
 
 
@@ -157,7 +153,6 @@ def migrated_database(alembic_config: Config) -> None:
 
 @pytest.fixture
 def clean_database(migrated_database: None, db_engine: AsyncEngine) -> None:
-    _ = migrated_database
     asyncio.run(truncate_all_tables(db_engine))
 
 
@@ -166,7 +161,6 @@ def migration_database(
     use_dedicated_test_database: None,
     base_database_url: str,
 ) -> Generator[MigrationDatabase, None, None]:
-    _ = use_dedicated_test_database
     database_url = require_test_database_url(
         get_test_database_url(base_database_url, suffix=MIGRATION_DATABASE_SUFFIX),
     )
@@ -182,8 +176,6 @@ def migration_database(
 
 @pytest.fixture
 def app(use_dedicated_test_database: None, base_test_env: None) -> FastAPI:
-    _ = use_dedicated_test_database
-    _ = base_test_env
     get_settings.cache_clear()
     return create_app()
 
@@ -193,7 +185,6 @@ def client(
     app: FastAPI,
     clean_database: None,
 ) -> Generator[TestClient, None, None]:
-    _ = clean_database
     with TestClient(app) as test_client:
         yield test_client
     get_settings.cache_clear()
@@ -204,7 +195,6 @@ async def async_client(
     app: FastAPI,
     clean_database: None,
 ) -> AsyncIterator[AsyncClient]:
-    _ = clean_database
     async with app.router.lifespan_context(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(

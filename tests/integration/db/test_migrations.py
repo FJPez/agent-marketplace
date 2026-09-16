@@ -71,8 +71,6 @@ def test_head_migration_creates_expected_unified_tables(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     table_names = asyncio.run(get_table_names(db_engine))
 
     assert DOMAIN_TABLES.issubset(table_names)
@@ -84,8 +82,6 @@ def test_head_migration_expands_accounts_table(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     columns = asyncio.run(get_column_specs(db_engine, "accounts"))
 
     assert {
@@ -111,8 +107,6 @@ def test_head_migration_points_service_provider_fk_at_accounts(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "services"))
     provider_fk = next(
         fk for fk in foreign_keys if fk["constrained_columns"] == ["provider_account_id"]
@@ -126,8 +120,6 @@ def test_head_migration_cascades_moderation_actions_from_services(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "moderation_actions"))
     service_fk = next(fk for fk in foreign_keys if fk["constrained_columns"] == ["service_id"])
 
@@ -139,8 +131,6 @@ def test_head_migration_uses_bigint_for_payout_amount_minor(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     columns = asyncio.run(get_column_specs(db_engine, "payouts"))
 
     assert type(columns["amount_minor"]["type"]).__name__.upper() == "BIGINT"
@@ -150,8 +140,6 @@ def test_head_migration_adds_request_payout_columns(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     columns = asyncio.run(get_column_specs(db_engine, "payouts"))
 
     assert columns["destination_wallet"]["nullable"] is True
@@ -170,8 +158,6 @@ def test_head_migration_adds_payment_attempt_lifecycle_columns(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
-
     columns = asyncio.run(get_column_specs(db_engine, "payment_attempts"))
 
     assert {"status", "updated_at"}.issubset(columns)
@@ -304,8 +290,6 @@ def test_head_migration_rejects_health_check_for_unknown_service(
     clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = clean_database
-
     with pytest.raises(IntegrityError):
         asyncio.run(_insert_health_check(db_engine, service_id=987654))
 
@@ -314,8 +298,6 @@ def test_head_migration_cascades_health_checks_when_service_is_deleted(
     clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = clean_database
-
     service_id = asyncio.run(_seed_service_for_health_checks(db_engine, slug="cascade-health"))
     asyncio.run(_insert_health_check(db_engine, service_id=service_id))
     assert asyncio.run(_read_health_check_service_ids(db_engine)) == [service_id]
@@ -696,8 +678,6 @@ def test_head_migration_rejects_a_lease_on_a_terminal_invocation(
     clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = clean_database
-
     consumer_account_id, service_id, endpoint_id = asyncio.run(
         _seed_invocation_context(db_engine),
     )
@@ -720,8 +700,6 @@ def test_head_migration_accepts_in_progress_invocations_with_and_without_a_lease
     clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = clean_database
-
     consumer_account_id, service_id, endpoint_id = asyncio.run(
         _seed_invocation_context(db_engine),
     )

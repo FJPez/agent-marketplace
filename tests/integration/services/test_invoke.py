@@ -49,9 +49,6 @@ class FakeHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response:
-        _ = json
-        _ = headers
-        _ = kwargs
         self.calls.append(f"{method} {url}")
         if not self.outcomes:
             raise AssertionError("no fake outcome configured")

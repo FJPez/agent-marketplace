@@ -57,9 +57,6 @@ class FakeHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response:
-        _ = json
-        _ = headers
-        _ = kwargs
         self.calls.append(f"{method} {url}")
         if not self.responses:
             raise AssertionError("no fake upstream response configured")
@@ -81,8 +78,6 @@ class FakeFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         self.calls.append("verify")
         raise AssertionError("the facilitator must not be called")
 
@@ -92,8 +87,6 @@ class FakeFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         self.calls.append("settle")
         raise AssertionError("the facilitator must not be called")
 

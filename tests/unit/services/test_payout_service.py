@@ -119,7 +119,6 @@ class FakePayoutRepository:
         request_idempotency_key: str,
         for_update: bool = False,
     ) -> list[FakePayout]:
-        _ = for_update
         payouts = [
             payout
             for payout in self.payouts
@@ -162,7 +161,6 @@ class FakeAccountRepository:
         self.wallet_address = wallet_address
 
     async def get(self, account_id: int) -> object | None:
-        _ = account_id
         if self.wallet_address is None:
             return None
         return type("AccountStub", (), {"wallet_address": self.wallet_address})()

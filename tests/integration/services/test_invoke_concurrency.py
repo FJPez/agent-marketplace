@@ -44,9 +44,6 @@ class GatedHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response:
-        _ = json
-        _ = headers
-        _ = kwargs
         self.calls.append(f"{method} {url}")
         self.started.set()
         await asyncio.wait_for(self.release.wait(), timeout=WAIT_TIMEOUT_SECONDS)

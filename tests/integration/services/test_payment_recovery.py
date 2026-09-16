@@ -53,9 +53,6 @@ class FakeHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response:
-        _ = json
-        _ = headers
-        _ = kwargs
         self.calls.append(f"{method} {url}")
         raise AssertionError("the upstream must not be called again after a settled attempt")
 
@@ -73,8 +70,6 @@ class FakeFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         self.calls.append("verify")
         raise AssertionError("a settled attempt must not be verified again")
 
@@ -84,8 +79,6 @@ class FakeFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         self.calls.append("settle")
         raise AssertionError("a settled attempt must not be settled again")
 

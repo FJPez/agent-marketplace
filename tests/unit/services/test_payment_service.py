@@ -97,7 +97,6 @@ class FakePaymentAttemptRepository:
         self.added_attempt: FakeAttempt | None = None
 
     async def get_by_payment_identifier(self, *, payment_identifier: str) -> FakeAttempt | None:
-        _ = payment_identifier
         return self.existing_attempt
 
     async def get_by_invocation_id(self, *, invocation_id: int) -> FakeAttempt | None:
@@ -123,11 +122,6 @@ class FakePaymentAttemptRepository:
         settle_outcome: dict[str, object] | None,
         facilitator_reference: str | None,
     ) -> FakeAttempt:
-        _ = consumer_account_id
-        _ = idempotency_key
-        _ = payment_identifier
-        _ = payment_requirement
-        _ = payment_payload
         self.add_calls += 1
         attempt = FakeAttempt(
             id=41,
@@ -150,7 +144,6 @@ class FakePersistedPaymentAttemptRepository:
         self.stored_attempt: FakeAttempt | None = None
 
     async def get_by_payment_identifier(self, *, payment_identifier: str) -> FakeAttempt | None:
-        _ = payment_identifier
         return self.stored_attempt
 
     async def get_by_invocation_id(self, *, invocation_id: int) -> FakeAttempt | None:
@@ -173,10 +166,6 @@ class FakePersistedPaymentAttemptRepository:
         settle_outcome: dict[str, object] | None,
         facilitator_reference: str | None,
     ) -> FakeAttempt:
-        _ = consumer_account_id
-        _ = payment_identifier
-        _ = payment_requirement
-        _ = payment_payload
         self.add_calls += 1
         self.working_attempt = FakeAttempt(
             id=41,
@@ -236,10 +225,6 @@ class FakeInvoke:
         idempotency_key: str,
         http_client: object,
     ) -> FakeInvocation:
-        _ = session
-        _ = account_id
-        _ = resolved
-        _ = http_client
         self.execute_calls += 1
         self.executed_idempotency_keys.add(idempotency_key)
         if self.execute_exception is not None:
@@ -253,8 +238,6 @@ class FakeInvoke:
         account_id: int,
         invocation_id: int,
     ) -> FakeInvocation:
-        _ = session
-        _ = account_id
         self.get_invocation_calls += 1
         assert self.invocation_for_lookup is not None
         assert invocation_id == self.invocation_for_lookup.id
@@ -285,8 +268,6 @@ class FakeFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         self.verify_calls += 1
         return self.verify_outcomes.pop(0)
 
@@ -296,8 +277,6 @@ class FakeFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         self.settle_calls += 1
         return self.settle_outcomes.pop(0)
 
@@ -308,7 +287,6 @@ class FakeX402ResourceServer:
         *,
         payment_requirement: dict[str, object],
     ) -> dict[str, str]:
-        _ = payment_requirement
         return {}
 
     def build_payment_response_headers(
@@ -329,11 +307,6 @@ class FakeHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> object:
-        _ = method
-        _ = url
-        _ = json
-        _ = headers
-        _ = kwargs
         msg = "http client should not be used in payment unit tests"
         raise AssertionError(msg)
 
@@ -576,8 +549,6 @@ async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
             payment_requirement: dict[str, object],
             payment_payload: dict[str, object],
         ) -> dict[str, object]:
-            _ = payment_requirement
-            _ = payment_payload
             raise FacilitatorAuthError("facilitator authentication failed")
 
         async def settle(
@@ -586,8 +557,6 @@ async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
             payment_requirement: dict[str, object],
             payment_payload: dict[str, object],
         ) -> dict[str, object]:
-            _ = payment_requirement
-            _ = payment_payload
             raise AssertionError("settle should not be called")
 
     service = PaymentService(
@@ -610,11 +579,9 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakePayoutExecutionService:
-        def __init__(self, session: object) -> None:
-            _ = session
+        def __init__(self, session: object) -> None: ...
 
-        async def record_ready_payout(self, **kwargs: object) -> None:
-            _ = kwargs
+        async def record_ready_payout(self, **kwargs: object) -> None: ...
 
     attempt_repo = FakePersistedPaymentAttemptRepository()
     session = FakeCommitSequenceSession(

@@ -30,8 +30,6 @@ async def test_payment_attempt_repository_persists_and_loads_by_identifier(
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
 ) -> None:
-    _ = db_session_factory
-
     provider_account_id = await provider_account_factory(display_name="Provider")
     consumer_account_id = await consumer_account_factory(display_name="Consumer")
     service_id = await service_factory(

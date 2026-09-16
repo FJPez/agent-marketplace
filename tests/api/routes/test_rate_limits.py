@@ -12,7 +12,6 @@ async def rate_limited_client(
     monkeypatch: pytest.MonkeyPatch,
     clean_database: None,
 ) -> AsyncIterator[AsyncClient]:
-    _ = clean_database
     monkeypatch.setenv("APP_API_RATE_LIMIT", "1/minute")
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
     monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "10/minute")

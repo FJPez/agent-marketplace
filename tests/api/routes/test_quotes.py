@@ -254,7 +254,6 @@ async def test_create_quote_rate_limits_repeated_requests(
     endpoint_price_factory: EndpointPriceFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     monkeypatch.setenv("APP_API_RATE_LIMIT", "10/minute")
     monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "1/minute")
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
@@ -307,7 +306,6 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     monkeypatch.setenv("APP_API_RATE_LIMIT", "10/minute")
     monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "1/minute")
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
