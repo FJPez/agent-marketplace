@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, status
 
 IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+PAYMENT_SIGNATURE_HEADER = "PAYMENT-SIGNATURE"
 _MAX_IDEMPOTENCY_KEY_LENGTH = 255
 
 
@@ -24,3 +25,4 @@ def require_idempotency_key(
 
 
 ValidatedIdempotencyKey = Annotated[str, Depends(require_idempotency_key)]
+PaymentSignatureHeader = Annotated[str | None, Header(alias=PAYMENT_SIGNATURE_HEADER)]

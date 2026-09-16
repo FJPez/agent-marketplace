@@ -216,7 +216,7 @@ async def test_a_settled_attempt_whose_invocation_already_succeeded_finishes_wit
             ActorContext(account_id=consumer_account_id),
             resolved=resolved,
             idempotency_key=IDEMPOTENCY_KEY,
-            request_headers={"PAYMENT-SIGNATURE": payment_header()},
+            payment_signature=payment_header(),
         )
 
     assert isinstance(result, PaidInvokeSuccess)

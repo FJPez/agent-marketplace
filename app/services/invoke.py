@@ -9,7 +9,11 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.core.enums import InvocationFailureReason, InvocationStatus, ServiceLifecycle
+from app.core.enums import (
+    InvocationFailureReason,
+    InvocationStatus,
+    ServiceLifecycle,
+)
 from app.core.errors import (
     ConflictError,
     InvalidStateError,

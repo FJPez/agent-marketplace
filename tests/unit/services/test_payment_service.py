@@ -467,7 +467,7 @@ async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_c
         ActorContext(account_id=12),
         resolved=_resolved_target(),
         idempotency_key="invoke-key",
-        request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+        payment_signature=_payment_header(payment_identifier="payment-1"),
     )
 
     assert isinstance(result, PaidInvokeSuccess)
@@ -512,7 +512,7 @@ async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facili
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+            payment_signature=_payment_header(payment_identifier="payment-1"),
         )
 
     assert facilitator_client.verify_calls == 0
@@ -553,9 +553,7 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            request_headers={
-                "PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-compensate")
-            },
+            payment_signature=_payment_header(payment_identifier="payment-compensate"),
         )
 
     attempt = service._attempt_repo.added_attempt
@@ -653,7 +651,7 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+            payment_signature=_payment_header(payment_identifier="payment-1"),
         )
 
     assert attempt_repo.stored_attempt is not None
@@ -665,7 +663,7 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
         ActorContext(account_id=12),
         resolved=_resolved_target(),
         idempotency_key="invoke-key",
-        request_headers={"PAYMENT-SIGNATURE": _payment_header(payment_identifier="payment-1")},
+        payment_signature=_payment_header(payment_identifier="payment-1"),
     )
 
     assert isinstance(result, PaidInvokeSuccess)

@@ -1,60 +1,19 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Response, status
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps.auth import CurrentActor
-from app.api.deps.headers import ValidatedIdempotencyKey
-from app.core.enums import AccessMode
-from app.core.lifespan import get_app_state
-from app.db.session import get_db_session
-from app.integrations.provider_gateway.client import SupportsRequest
+from app.api.deps.database import SessionDep
+from app.api.deps.gateway import FacilitatorClientDep, HttpClientDep, X402ResourceServerDep
+from app.api.deps.headers import PaymentSignatureHeader, ValidatedIdempotencyKey
+from app.api.deps.settings import SettingsDep
 from app.schemas.invoke import InvocationListItem, InvocationResponse, InvokeRequest
 from app.schemas.service_ref import PublicServiceRef
-from app.services import invoke
-from app.services.payment_service import (
-    PaidInvokeSuccess,
-    PaymentRequiredChallenge,
-    PaymentService,
-    SupportsFacilitatorClient,
-    SupportsX402ResourceServer,
-)
+from app.services import invoke, invoke_submission
+from app.services.payment_service import PaymentRequiredChallenge
 
 router = APIRouter(tags=["invoke"])
-
-
-def _get_http_client(request: Request) -> SupportsRequest:
-    http_client = get_app_state(request.app).http_client
-    if http_client is None or not isinstance(http_client, SupportsRequest):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="http client is not initialized",
-        )
-    return http_client
-
-
-def _get_facilitator_client(request: Request) -> SupportsFacilitatorClient:
-    facilitator_client = get_app_state(request.app).facilitator_client
-    if facilitator_client is None or not isinstance(facilitator_client, SupportsFacilitatorClient):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="facilitator client is not initialized",
-        )
-    return facilitator_client
-
-
-def _get_x402_resource_server(request: Request) -> SupportsX402ResourceServer:
-    x402_resource_server = get_app_state(request.app).x402_resource_server
-    if x402_resource_server is None or not isinstance(
-        x402_resource_server,
-        SupportsX402ResourceServer,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="x402 resource server is not initialized",
-        )
-    return x402_resource_server
 
 
 @router.post(
@@ -120,79 +79,36 @@ async def invoke_endpoint(
         ),
     ],
     actor: CurrentActor,
-    fastapi_request: Request,
     response: Response,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
     idempotency_key: ValidatedIdempotencyKey,
+    http_client: HttpClientDep,
+    facilitator_client: FacilitatorClientDep,
+    x402_resource_server: X402ResourceServerDep,
+    settings: SettingsDep,
+    payment_signature: PaymentSignatureHeader = None,
 ) -> InvocationResponse | JSONResponse:
-    replayed = await invoke.try_replay(
+    outcome = await invoke_submission.submit(
         session=session,
-        account_id=actor.account_id,
+        actor=actor,
         service_ref=service_id_or_slug,
-        endpoint_key=request.endpoint_key,
-        payload=request.payload,
-        quote_id=request.quote_id,
+        request=request,
         idempotency_key=idempotency_key,
+        payment_signature=payment_signature,
+        http_client=http_client,
+        facilitator_client=facilitator_client,
+        x402_resource_server=x402_resource_server,
+        settings=settings,
     )
-    if replayed is not None:
-        if replayed.access_mode is AccessMode.PAID:
-            payment_service = PaymentService(
-                session,
-                http_client=_get_http_client(fastapi_request),
-                facilitator_client=_get_facilitator_client(fastapi_request),
-                x402_resource_server=_get_x402_resource_server(fastapi_request),
-                settings=get_app_state(fastapi_request.app).settings,
-            )
-            replay_headers = await payment_service.build_success_headers_for_invocation(replayed.id)
-            # A paid invoke without settled payment headers is not replayable as a whole.
-            if not replay_headers:
-                replayed = None
-            else:
-                for header_name, header_value in replay_headers.items():
-                    response.headers[header_name] = header_value
-        if replayed is not None:
-            return InvocationResponse.from_model(replayed)
-
-    resolved = await invoke.resolve_target(
-        session=session,
-        service_ref=service_id_or_slug,
-        endpoint_key=request.endpoint_key,
-        payload=request.payload,
-        quote_id=request.quote_id,
-    )
-    if resolved.endpoint.access_mode is AccessMode.PAID:
-        payment_service = PaymentService(
-            session,
-            http_client=_get_http_client(fastapi_request),
-            facilitator_client=_get_facilitator_client(fastapi_request),
-            x402_resource_server=_get_x402_resource_server(fastapi_request),
-            settings=get_app_state(fastapi_request.app).settings,
+    if isinstance(outcome, PaymentRequiredChallenge):
+        return JSONResponse(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            content=outcome.body,
+            headers=outcome.headers,
         )
-        paid_result = await payment_service.handle_paid_invoke(
-            actor,
-            resolved=resolved,
-            idempotency_key=idempotency_key,
-            request_headers=dict(fastapi_request.headers),
-        )
-        if isinstance(paid_result, PaymentRequiredChallenge):
-            return JSONResponse(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                content=paid_result.body,
-                headers=paid_result.headers,
-            )
-        assert isinstance(paid_result, PaidInvokeSuccess)
-        for header_name, header_value in paid_result.response_headers.items():
-            response.headers[header_name] = header_value
-        invocation = paid_result.invocation
-    else:
-        invocation = await invoke.execute(
-            session=session,
-            account_id=actor.account_id,
-            resolved=resolved,
-            idempotency_key=idempotency_key,
-            http_client=_get_http_client(fastapi_request),
-        )
-    return InvocationResponse.from_model(invocation)
+    for header_name, header_value in outcome.response_headers.items():
+        response.headers[header_name] = header_value
+    return InvocationResponse.from_model(outcome.invocation)
 
 
 @router.get(
@@ -208,7 +124,7 @@ async def invoke_endpoint(
 async def get_invocation(
     invocation_id: int,
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> InvocationResponse:
     invocation = await invoke.get_invocation(
         session=session,
@@ -227,7 +143,7 @@ async def get_invocation(
 )
 async def list_invocations(
     actor: CurrentActor,
-    session: Annotated[AsyncSession, Depends(get_db_session)],
+    session: SessionDep,
 ) -> list[InvocationListItem]:
     invocations = await invoke.list_invocations(session=session, account_id=actor.account_id)
     return [InvocationListItem.from_model(item) for item in invocations]

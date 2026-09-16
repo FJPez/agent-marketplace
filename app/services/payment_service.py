@@ -116,7 +116,7 @@ class PaymentService:
         *,
         resolved: ResolvedInvokeTarget,
         idempotency_key: str,
-        request_headers: dict[str, str],
+        payment_signature: str | None,
     ) -> PaymentRequiredChallenge | PaidInvokeSuccess:
         quote = resolved.quote
         if quote is None:
@@ -132,14 +132,11 @@ class PaymentService:
             amount_minor=quote.amount_minor,
             currency=quote.currency,
         )
-        payment_header = request_headers.get("PAYMENT-SIGNATURE") or request_headers.get(
-            "payment-signature"
-        )
-        if payment_header is None:
+        if payment_signature is None:
             return self._challenge(payment_requirement, detail="payment required")
 
         try:
-            payment_payload = parse_payment_header(payment_header)
+            payment_payload = parse_payment_header(payment_signature)
             payment_identifier = extract_payment_identifier(payment_payload)
         except InvalidPaymentPayloadError:
             return self._challenge(payment_requirement, detail="payment required")
