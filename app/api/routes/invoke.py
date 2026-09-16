@@ -106,9 +106,8 @@ async def invoke_endpoint(
             content=outcome.body,
             headers=outcome.headers,
         )
-    for header_name, header_value in outcome.response_headers.items():
-        response.headers[header_name] = header_value
-    return InvocationResponse.from_model(outcome.invocation)
+    response.headers.update(outcome.response_headers)
+    return InvocationResponse.model_validate(outcome.invocation)
 
 
 @router.get(
@@ -131,7 +130,7 @@ async def get_invocation(
         account_id=actor.account_id,
         invocation_id=invocation_id,
     )
-    return InvocationResponse.from_model(invocation)
+    return InvocationResponse.model_validate(invocation)
 
 
 @router.get(
@@ -146,4 +145,4 @@ async def list_invocations(
     session: SessionDep,
 ) -> list[InvocationListItem]:
     invocations = await invoke.list_invocations(session=session, account_id=actor.account_id)
-    return [InvocationListItem.from_model(item) for item in invocations]
+    return [InvocationListItem.model_validate(item) for item in invocations]

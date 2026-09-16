@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import NoReturn
 
 from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert
@@ -52,13 +51,6 @@ logger = get_logger(__name__)
 # is never mistaken for one that died.
 LEASE_GRACE_SECONDS = 30
 
-GatewayFailureError = (
-    ProviderGatewayTargetError
-    | ProviderGatewayTimeoutError
-    | ProviderGatewayTransportError
-    | ProviderGatewayResponseError
-)
-
 
 @dataclass(frozen=True, slots=True)
 class ResolvedInvokeTarget:
@@ -70,14 +62,6 @@ class ResolvedInvokeTarget:
     payload: object
 
 
-@dataclass(frozen=True, slots=True)
-class GatewayFailure:
-    failure_reason: InvocationFailureReason
-    message: str
-    upstream_status_code: int | None
-    error: UpstreamError | UpstreamTimeoutError
-
-
 async def resolve_target(
     *,
     session: AsyncSession,
@@ -87,11 +71,10 @@ async def resolve_target(
     quote_id: int | None,
 ) -> ResolvedInvokeTarget:
     """Resolve an invokable endpoint and bind the request to its optional quote."""
-    statement = select(Service).where(Service.lifecycle == ServiceLifecycle.ACTIVE)
-    if isinstance(service_ref, int):
-        statement = statement.where(Service.id == service_ref)
-    else:
-        statement = statement.where(Service.slug == service_ref)
+    statement = select(Service).where(
+        Service.lifecycle == ServiceLifecycle.ACTIVE,
+        Service.id == service_ref if isinstance(service_ref, int) else Service.slug == service_ref,
+    )
     service = await session.scalar(statement)
     if service is None:
         raise NotFoundError("service not found")
@@ -206,7 +189,7 @@ async def try_replay(
     # The caller and the request are the same, so what the row already says about this
     # invocation settles it. Current service, endpoint, and quote state describes the next
     # execution, not this one, and must not mask a stored outcome.
-    return interpret_stored_outcome(existing, now=datetime.now(UTC))
+    return _replay_stored_invocation(existing, now=datetime.now(UTC))
 
 
 async def execute(
@@ -230,17 +213,27 @@ async def execute(
 
     if claimed is None:
         try:
-            existing = await _resolve_claimed_invocation(
-                session=session,
-                account_id=account_id,
-                idempotency_key=idempotency_key,
-                request_hash=resolved.request_hash,
+            existing = await session.scalar(
+                select(Invocation)
+                .where(
+                    Invocation.consumer_account_id == account_id,
+                    Invocation.idempotency_key == idempotency_key,
+                )
+                # The row may already sit in this session from the replay lookup, and the
+                # locked read has to see what the other worker committed since then.
+                .execution_options(populate_existing=True)
+                .with_for_update(),
             )
+            if existing is None:
+                raise NotFoundError("invocation not found")
+            if existing.request_hash != resolved.request_hash:
+                raise ConflictError("idempotency key already used for a different request")
+            replayed = _replay_stored_invocation(existing, now=datetime.now(UTC))
         except (NotFoundError, ConflictError, UpstreamError, UpstreamTimeoutError):
             await session.rollback()
             raise
         await session.commit()
-        return existing
+        return replayed
 
     try:
         invocation = await _forward_and_record(
@@ -308,12 +301,14 @@ async def list_invocations(*, session: AsyncSession, account_id: int) -> list[In
     return list(result.all())
 
 
-def interpret_stored_outcome(invocation: Invocation, *, now: datetime) -> Invocation:
+def _replay_stored_invocation(invocation: Invocation, *, now: datetime) -> Invocation:
     """Answer a repeated request from the invocation row alone, never forwarding it again."""
     if invocation.status is InvocationStatus.SUCCEEDED:
         return invocation
     if invocation.status is InvocationStatus.FAILED:
-        _raise_stored_failure(invocation)
+        if invocation.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
+            raise UpstreamTimeoutError("upstream request timed out")
+        raise UpstreamError(invocation.error_message or "upstream request failed")
     if invocation.in_progress_until is not None and invocation.in_progress_until > now:
         raise ConflictError("request already in progress")
     # A missing or expired lease says only that the claiming worker stopped reporting.
@@ -364,35 +359,6 @@ async def _claim_invocation(
     return await session.scalar(claim)
 
 
-async def _resolve_claimed_invocation(
-    *,
-    session: AsyncSession,
-    account_id: int,
-    idempotency_key: str,
-    request_hash: str,
-) -> Invocation:
-    """Replay or reject a request whose invocation another attempt already claimed.
-
-    The caller owns the transaction and ends the locked read.
-    """
-    existing = await session.scalar(
-        select(Invocation)
-        .where(
-            Invocation.consumer_account_id == account_id,
-            Invocation.idempotency_key == idempotency_key,
-        )
-        # The row may already sit in this session from the replay lookup, and the
-        # locked read has to see what the other worker committed since then.
-        .execution_options(populate_existing=True)
-        .with_for_update(),
-    )
-    if existing is None:
-        raise NotFoundError("invocation not found")
-    if existing.request_hash != request_hash:
-        raise ConflictError("idempotency key already used for a different request")
-    return interpret_stored_outcome(existing, now=datetime.now(UTC))
-
-
 async def _forward_and_record(
     *,
     resolved: ResolvedInvokeTarget,
@@ -419,19 +385,28 @@ async def _forward_and_record(
             timeout_seconds=resolved.endpoint.timeout_seconds,
             auth=resolved.auth,
         )
-    except (
-        ProviderGatewayTargetError,
-        ProviderGatewayTimeoutError,
-        ProviderGatewayTransportError,
-        ProviderGatewayResponseError,
-    ) as exc:
-        failure = _classify_gateway_failure(exc)
+    except ProviderGatewayTimeoutError as exc:
         invocation.status = InvocationStatus.FAILED
-        invocation.failure_reason = failure.failure_reason
-        invocation.error_message = failure.message
-        invocation.upstream_status_code = failure.upstream_status_code
+        invocation.failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
+        invocation.error_message = "upstream request timed out"
+        invocation.upstream_status_code = None
         invocation.in_progress_until = None
-        raise failure.error from exc
+        raise UpstreamTimeoutError("upstream request timed out") from exc
+    except ProviderGatewayResponseError as exc:
+        invocation.status = InvocationStatus.FAILED
+        invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
+        invocation.error_message = str(exc)
+        invocation.upstream_status_code = exc.upstream_status_code
+        invocation.in_progress_until = None
+        raise UpstreamError(str(exc)) from exc
+    except (ProviderGatewayTargetError, ProviderGatewayTransportError) as exc:
+        # An unsafe target and a transport error both mean the upstream never answered.
+        invocation.status = InvocationStatus.FAILED
+        invocation.failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
+        invocation.error_message = str(exc)
+        invocation.upstream_status_code = None
+        invocation.in_progress_until = None
+        raise UpstreamError(str(exc)) from exc
 
     invocation.status = InvocationStatus.SUCCEEDED
     invocation.response_payload = to_json_value(gateway_result.payload)
@@ -440,36 +415,6 @@ async def _forward_and_record(
     invocation.failure_reason = None
     invocation.in_progress_until = None
     return invocation
-
-
-def _classify_gateway_failure(exc: GatewayFailureError) -> GatewayFailure:
-    if isinstance(exc, ProviderGatewayTimeoutError):
-        return GatewayFailure(
-            failure_reason=InvocationFailureReason.UPSTREAM_TIMEOUT,
-            message="upstream request timed out",
-            upstream_status_code=None,
-            error=UpstreamTimeoutError("upstream request timed out"),
-        )
-    if isinstance(exc, ProviderGatewayResponseError):
-        return GatewayFailure(
-            failure_reason=InvocationFailureReason.UPSTREAM_RESPONSE,
-            message=str(exc),
-            upstream_status_code=exc.upstream_status_code,
-            error=UpstreamError(str(exc)),
-        )
-    # An unsafe target and a transport error both mean the upstream never answered.
-    return GatewayFailure(
-        failure_reason=InvocationFailureReason.UPSTREAM_TRANSPORT,
-        message=str(exc),
-        upstream_status_code=None,
-        error=UpstreamError(str(exc)),
-    )
-
-
-def _raise_stored_failure(invocation: Invocation) -> NoReturn:
-    if invocation.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
-        raise UpstreamTimeoutError("upstream request timed out")
-    raise UpstreamError(invocation.error_message or "upstream request failed")
 
 
 def _build_request_hash(
