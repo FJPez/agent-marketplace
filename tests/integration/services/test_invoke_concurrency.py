@@ -163,6 +163,8 @@ async def test_a_second_request_meeting_a_live_lease_is_rejected_without_a_secon
         http_client.release.set()
         if not first.done():
             first.cancel()
+        # Consume the cancellation so the task is never destroyed while still pending.
+        await asyncio.gather(first, return_exceptions=True)
 
     assert invocation.status is InvocationStatus.SUCCEEDED
     assert len(http_client.calls) == 1
@@ -206,6 +208,8 @@ async def test_two_racing_claims_forward_exactly_once(
         for task in tasks:
             if not task.done():
                 task.cancel()
+        # Consume the cancellations so no task is destroyed while still pending.
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     succeeded = [
         result
