@@ -113,11 +113,9 @@ async def _seed_upstream(
 
 @pytest.mark.asyncio
 async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
-    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     provider_account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
         db_session_factory,
@@ -190,11 +188,9 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
 
 @pytest.mark.asyncio
 async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the_lock(
-    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     provider_account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
         db_session_factory,
@@ -299,11 +295,9 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
 
 @pytest.mark.asyncio
 async def test_publish_holds_its_lock_until_the_single_commit(
-    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     provider_account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
         db_session_factory,
@@ -400,11 +394,9 @@ async def test_publish_holds_its_lock_until_the_single_commit(
 
 @pytest.mark.asyncio
 async def test_concurrent_suspends_serialise_on_the_service_row_lock(
-    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = clean_database
     provider_account_id = await _create_provider_account(db_session_factory)
     admin_account_id = await create_admin_account_record(db_session_factory)
     service_id = await _seed_service(

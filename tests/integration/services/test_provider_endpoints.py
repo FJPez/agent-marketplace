@@ -29,10 +29,7 @@ from app.services.provider_endpoints import (
     upsert_upstream,
 )
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("clean_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 REQUEST_SCHEMA: JsonObject = {"type": "object", "properties": {"text": {"type": "string"}}}
 RESPONSE_SCHEMA: JsonObject = {"type": "object", "properties": {"result": {"type": "string"}}}

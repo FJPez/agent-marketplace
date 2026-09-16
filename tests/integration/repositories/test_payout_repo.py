@@ -122,7 +122,6 @@ async def _seed_payout_dependencies(
 
 @pytest.mark.asyncio
 async def test_payout_execution_repository_persists_and_replays_provider_payouts(
-    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     provider_account_factory: ProviderAccountFactory,
     consumer_account_factory: ConsumerAccountFactory,
@@ -133,7 +132,6 @@ async def test_payout_execution_repository_persists_and_replays_provider_payouts
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
 ) -> None:
-    _ = clean_database
     (
         provider_account_id,
         service_id,

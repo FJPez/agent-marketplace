@@ -1,11 +1,9 @@
 import asyncio
 import logging
 import os
-import re
 from collections.abc import AsyncIterator, Generator
 from contextlib import suppress
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
 
 # These must be set before any import of app.main, which creates the
 # FastAPI application (and validates Settings) at module level.
@@ -109,22 +107,13 @@ async def _flush_redis_database(redis_url: str) -> None:
         redis_client.connection_pool.disconnect()
 
 
+# The database named by TEST_REDIS_URL is flushed, so it must be reserved for tests.
+# Redis tests are pinned to one xdist worker via the "redis" xdist group and
+# --dist loadgroup, so simultaneous independent test runs must not share the database.
 @pytest.fixture
 def test_redis_url() -> Generator[str, None, None]:
-    base_redis_url = os.environ.get("TEST_REDIS_URL")
-    assert base_redis_url is not None
-
-    # Each xdist worker gets its own Redis database so the FLUSHDB below cannot wipe
-    # another worker's keys. Residual: two concurrent pytest runs on the same machine
-    # reuse the same worker ids, so they still share a database. That is documented,
-    # not solved.
-    redis_url = base_redis_url
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
-    if worker_id is not None:
-        worker_match = re.fullmatch(r"gw(\d+)", worker_id)
-        if worker_match is not None:
-            split_url = urlsplit(base_redis_url)
-            redis_url = urlunsplit(split_url._replace(path=f"/{worker_match.group(1)}"))
+    redis_url = os.environ.get("TEST_REDIS_URL")
+    assert redis_url is not None
 
     asyncio.run(_flush_redis_database(redis_url))
     try:

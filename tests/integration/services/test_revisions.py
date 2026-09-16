@@ -7,10 +7,7 @@ from app.core.enums import AccessMode
 from app.db.models import Account, Service, ServiceEndpoint, ServiceRevision
 from app.services import revisions
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("clean_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 async def _create_provider_account(

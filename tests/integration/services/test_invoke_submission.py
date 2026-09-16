@@ -34,7 +34,7 @@ from app.schemas.invoke import InvokeRequest
 from app.services.invoke_submission import InvokeSuccess, submit
 from app.services.payment_service import PaymentRequiredChallenge
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("clean_database")]
+pytestmark = [pytest.mark.asyncio]
 
 PAYLOAD: dict[str, object] = {"text": "hello"}
 IDEMPOTENCY_KEY = "submit-key"

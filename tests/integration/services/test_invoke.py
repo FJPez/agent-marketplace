@@ -28,7 +28,7 @@ from app.core.errors import (
 from app.db.models import Invocation, ServiceEndpoint
 from app.services import invoke
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("clean_database")]
+pytestmark = [pytest.mark.asyncio]
 
 PAYLOAD: dict[str, object] = {"text": "hello"}
 

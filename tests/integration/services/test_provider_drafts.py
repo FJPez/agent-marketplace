@@ -20,10 +20,7 @@ from app.services.provider_drafts import (
     update_service,
 )
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("clean_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 async def test_create_service_persists_draft_service_with_stripped_fields(

@@ -20,10 +20,7 @@ from app.db.models import LedgerEntry
 from app.services import finance
 from app.services.ledger_service import LedgerService
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("clean_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 async def seed_provider_context(

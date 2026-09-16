@@ -8,11 +8,8 @@ from app.db.models import Account
 
 @pytest.mark.asyncio
 async def test_account_model_persists_unified_identity_fields(
-    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = clean_database
-
     async with db_session_factory.begin() as session:
         account = Account(
             wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",

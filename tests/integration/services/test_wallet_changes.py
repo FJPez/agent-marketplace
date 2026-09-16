@@ -15,10 +15,7 @@ from app.core.security import AuthTokenType, decode_jwt
 from app.db.models import Account, WalletChangeLog
 from app.services.wallet_changes import confirm_wallet_change, initiate_wallet_change
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("clean_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 def _wallet_change_settings() -> Settings:

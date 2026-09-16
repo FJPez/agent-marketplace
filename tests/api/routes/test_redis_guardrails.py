@@ -26,10 +26,13 @@ if TYPE_CHECKING:
         UpstreamFactory,
     )
 
-pytestmark = pytest.mark.skipif(
-    "TEST_REDIS_URL" not in os.environ,
-    reason="TEST_REDIS_URL is not configured",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        "TEST_REDIS_URL" not in os.environ,
+        reason="TEST_REDIS_URL is not configured",
+    ),
+    pytest.mark.xdist_group("redis"),
+]
 
 
 async def _create_provider_account(

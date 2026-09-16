@@ -21,10 +21,7 @@ from app.services.auth import (
     verify_wallet,
 )
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("clean_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 def _auth_settings() -> Settings:

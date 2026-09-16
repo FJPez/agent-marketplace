@@ -17,7 +17,7 @@ from app.core.errors import ConflictError
 from app.db.models import Invocation
 from app.services import invoke
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("clean_database")]
+pytestmark = [pytest.mark.asyncio]
 
 PAYLOAD = {"text": "hello"}
 IDEMPOTENCY_KEY = "concurrent-key"
