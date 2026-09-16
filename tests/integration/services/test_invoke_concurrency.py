@@ -1,9 +1,8 @@
 import asyncio
-from collections.abc import AsyncIterator
 
 import pytest
 from httpx import Response
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_consumer_account_record,
@@ -18,7 +17,7 @@ from app.core.errors import ConflictError
 from app.db.models import Invocation
 from app.services import invoke
 
-pytestmark = [pytest.mark.asyncio]
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("clean_database")]
 
 PAYLOAD = {"text": "hello"}
 IDEMPOTENCY_KEY = "concurrent-key"
@@ -26,19 +25,6 @@ IDEMPOTENCY_KEY = "concurrent-key"
 # instead of hanging the suite; generous because a loaded runner can stretch the
 # ~1s happy path well past ten seconds.
 WAIT_TIMEOUT_SECONDS = 30
-
-
-@pytest.fixture(autouse=True)
-async def clear_invocations(
-    migrated_database: None,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[None]:
-    _ = migrated_database
-    yield
-    # Requesting migrated_database orders this cleanup before its downgrade, which
-    # narrows the status CHECK back to the terminal values that in-progress rows fail.
-    async with db_session_factory.begin() as session:
-        await session.execute(delete(Invocation))
 
 
 class GatedHttpClient:

@@ -16,10 +16,16 @@ if TYPE_CHECKING:
 
 config = context.config
 
-if config.config_file_name is not None:
+# Programmatic callers that manage logging themselves opt out: re-running fileConfig
+# would restore the INFO-level alembic logger the test session turns down.
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-config.set_main_option("sqlalchemy.url", Settings().database_url)
+# Tests route the migration chain to a dedicated database through this attribute.
+config.set_main_option(
+    "sqlalchemy.url",
+    config.attributes.get("database_url") or Settings().database_url,
+)
 target_metadata = Base.metadata
 
 

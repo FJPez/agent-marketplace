@@ -12,7 +12,7 @@ from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHea
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 

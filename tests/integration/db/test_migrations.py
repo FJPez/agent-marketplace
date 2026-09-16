@@ -3,10 +3,10 @@ from datetime import UTC, datetime
 
 import pytest
 from alembic import command
-from alembic.config import Config
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
+from tests.integration.db.support import MigrationDatabase
 
 DOMAIN_TABLES = {
     "accounts",
@@ -225,16 +225,17 @@ async def _seed_head_state_for_downgrade(db_engine: AsyncEngine) -> None:
 
 
 def test_head_migration_downgrades_cleanly_with_service_rows(
-    alembic_config: Config,
-    db_engine: AsyncEngine,
+    migration_database: MigrationDatabase,
 ) -> None:
-    command.upgrade(alembic_config, "head")
-    asyncio.run(_seed_head_state_for_downgrade(db_engine))
+    config = migration_database.config
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    asyncio.run(_seed_head_state_for_downgrade(migration_database.engine))
 
     try:
-        command.downgrade(alembic_config, "base")
+        command.downgrade(config, "base")
     finally:
-        command.upgrade(alembic_config, "head")
+        command.upgrade(config, "head")
 
 
 async def _seed_service_for_health_checks(db_engine: AsyncEngine, *, slug: str) -> int:
@@ -300,20 +301,20 @@ async def _read_health_check_service_ids(db_engine: AsyncEngine) -> list[int]:
 
 
 def test_head_migration_rejects_health_check_for_unknown_service(
-    migrated_database: None,
+    clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     with pytest.raises(IntegrityError):
         asyncio.run(_insert_health_check(db_engine, service_id=987654))
 
 
 def test_head_migration_cascades_health_checks_when_service_is_deleted(
-    migrated_database: None,
+    clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     service_id = asyncio.run(_seed_service_for_health_checks(db_engine, slug="cascade-health"))
     asyncio.run(_insert_health_check(db_engine, service_id=service_id))
@@ -325,63 +326,68 @@ def test_head_migration_cascades_health_checks_when_service_is_deleted(
 
 
 def test_health_check_service_fk_migration_drops_orphan_rows(
-    alembic_config: Config,
-    db_engine: AsyncEngine,
+    migration_database: MigrationDatabase,
 ) -> None:
-    command.downgrade(alembic_config, "base")
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
     try:
-        command.upgrade(alembic_config, "moderation_actions_0018")
-        service_id = asyncio.run(_seed_service_for_health_checks(db_engine, slug="orphan-health"))
-        asyncio.run(_insert_health_check(db_engine, service_id=service_id))
-        asyncio.run(_insert_health_check(db_engine, service_id=987654))
+        command.upgrade(config, "moderation_actions_0018")
+        service_id = asyncio.run(_seed_service_for_health_checks(engine, slug="orphan-health"))
+        asyncio.run(_insert_health_check(engine, service_id=service_id))
+        asyncio.run(_insert_health_check(engine, service_id=987654))
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(config, "head")
 
-        assert asyncio.run(_read_health_check_service_ids(db_engine)) == [service_id]
+        assert asyncio.run(_read_health_check_service_ids(engine)) == [service_id]
     finally:
-        command.downgrade(alembic_config, "base")
+        command.downgrade(config, "base")
 
 
 def test_health_check_service_fk_migration_round_trips_at_head(
-    alembic_config: Config,
-    db_engine: AsyncEngine,
+    migration_database: MigrationDatabase,
 ) -> None:
-    command.upgrade(alembic_config, "head")
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
     try:
-        command.downgrade(alembic_config, "moderation_actions_0018")
+        command.downgrade(config, "moderation_actions_0018")
 
-        foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "service_health_checks"))
+        foreign_keys = asyncio.run(get_foreign_key_specs(engine, "service_health_checks"))
         assert foreign_keys == []
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(config, "head")
 
-        foreign_keys = asyncio.run(get_foreign_key_specs(db_engine, "service_health_checks"))
+        foreign_keys = asyncio.run(get_foreign_key_specs(engine, "service_health_checks"))
         service_fk = next(fk for fk in foreign_keys if fk["constrained_columns"] == ["service_id"])
         assert service_fk["referred_table"] == "services"
         assert service_fk["options"] == {"ondelete": "CASCADE"}
     finally:
-        command.downgrade(alembic_config, "base")
+        command.downgrade(config, "base")
 
 
 def test_schema_alignment_migration_round_trips_drifted_column_types(
-    alembic_config: Config,
-    db_engine: AsyncEngine,
+    migration_database: MigrationDatabase,
 ) -> None:
-    command.upgrade(alembic_config, "head")
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
     try:
-        invocation_columns = asyncio.run(get_column_specs(db_engine, "invocations"))
-        quote_columns = asyncio.run(get_column_specs(db_engine, "quotes"))
+        invocation_columns = asyncio.run(get_column_specs(engine, "invocations"))
+        quote_columns = asyncio.run(get_column_specs(engine, "quotes"))
         assert str(invocation_columns["response_payload"]["type"]) == "JSONB"
         assert str(quote_columns["pricing_type"]["type"]) == "VARCHAR(14)"
 
-        command.downgrade(alembic_config, "service_health_0019")
+        command.downgrade(config, "service_health_0019")
 
-        invocation_columns = asyncio.run(get_column_specs(db_engine, "invocations"))
-        quote_columns = asyncio.run(get_column_specs(db_engine, "quotes"))
+        invocation_columns = asyncio.run(get_column_specs(engine, "invocations"))
+        quote_columns = asyncio.run(get_column_specs(engine, "quotes"))
         assert str(invocation_columns["response_payload"]["type"]) == "JSON"
         assert str(quote_columns["pricing_type"]["type"]) == "VARCHAR(50)"
     finally:
-        command.downgrade(alembic_config, "base")
+        command.downgrade(config, "base")
 
 
 async def _seed_legacy_pricing_state(db_engine: AsyncEngine) -> None:
@@ -508,44 +514,45 @@ async def _insert_endpoint_price_without_currency(db_engine: AsyncEngine) -> Non
 
 
 def test_endpoint_prices_migration_round_trips_legacy_pricing_rows(
-    alembic_config: Config,
-    db_engine: AsyncEngine,
+    migration_database: MigrationDatabase,
 ) -> None:
-    command.downgrade(alembic_config, "base")
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
     try:
-        command.upgrade(alembic_config, "auth_wallet_binding_0016")
-        asyncio.run(_seed_legacy_pricing_state(db_engine))
+        command.upgrade(config, "auth_wallet_binding_0016")
+        asyncio.run(_seed_legacy_pricing_state(engine))
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(config, "head")
 
-        table_names = asyncio.run(get_table_names(db_engine))
+        table_names = asyncio.run(get_table_names(engine))
         assert "endpoint_prices" in table_names
         assert "pricing_models" not in table_names
 
-        columns = asyncio.run(get_column_specs(db_engine, "endpoint_prices"))
+        columns = asyncio.run(get_column_specs(engine, "endpoint_prices"))
         assert "pricing_type" not in columns
         assert columns["amount_minor"]["nullable"] is False
         assert columns["currency"]["nullable"] is False
 
-        assert asyncio.run(_read_endpoint_prices(db_engine)) == [("paid-endpoint", 500, "USD")]
+        assert asyncio.run(_read_endpoint_prices(engine)) == [("paid-endpoint", 500, "USD")]
 
         with pytest.raises(IntegrityError):
-            asyncio.run(_insert_endpoint_price_without_currency(db_engine))
+            asyncio.run(_insert_endpoint_price_without_currency(engine))
 
-        command.downgrade(alembic_config, "auth_wallet_binding_0016")
+        command.downgrade(config, "auth_wallet_binding_0016")
 
-        table_names = asyncio.run(get_table_names(db_engine))
+        table_names = asyncio.run(get_table_names(engine))
         assert "pricing_models" in table_names
         assert "endpoint_prices" not in table_names
-        assert asyncio.run(_read_legacy_pricing_models(db_engine)) == [
+        assert asyncio.run(_read_legacy_pricing_models(engine)) == [
             ("free-endpoint", "free"),
             ("paid-endpoint", "fixed_per_call"),
         ]
 
-        command.upgrade(alembic_config, "head")
-        assert asyncio.run(_read_endpoint_prices(db_engine)) == [("paid-endpoint", 500, "USD")]
+        command.upgrade(config, "head")
+        assert asyncio.run(_read_endpoint_prices(engine)) == [("paid-endpoint", 500, "USD")]
     finally:
-        command.downgrade(alembic_config, "base")
+        command.downgrade(config, "base")
 
 
 async def _seed_invocation_context(db_engine: AsyncEngine) -> tuple[int, int, int]:
@@ -671,11 +678,6 @@ async def _insert_invocation_with_lease(
         )
 
 
-async def _delete_invocations(db_engine: AsyncEngine) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(text("DELETE FROM invocations"))
-
-
 async def _read_invocation_leases(db_engine: AsyncEngine) -> list[tuple[str, str, datetime | None]]:
     async with db_engine.connect() as connection:
         result = await connection.execute(
@@ -691,10 +693,10 @@ async def _read_invocation_leases(db_engine: AsyncEngine) -> list[tuple[str, str
 
 
 def test_head_migration_rejects_a_lease_on_a_terminal_invocation(
-    migrated_database: None,
+    clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     consumer_account_id, service_id, endpoint_id = asyncio.run(
         _seed_invocation_context(db_engine),
@@ -715,73 +717,70 @@ def test_head_migration_rejects_a_lease_on_a_terminal_invocation(
 
 
 def test_head_migration_accepts_in_progress_invocations_with_and_without_a_lease(
-    migrated_database: None,
+    clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     consumer_account_id, service_id, endpoint_id = asyncio.run(
         _seed_invocation_context(db_engine),
     )
     leased_until = datetime(2030, 1, 1, tzinfo=UTC)
 
-    try:
-        asyncio.run(
-            _insert_invocation_with_lease(
-                db_engine,
-                consumer_account_id=consumer_account_id,
-                service_id=service_id,
-                endpoint_id=endpoint_id,
-                idempotency_key="in-progress-leased",
-                status="in_progress",
-                in_progress_until=leased_until,
-            )
+    asyncio.run(
+        _insert_invocation_with_lease(
+            db_engine,
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            idempotency_key="in-progress-leased",
+            status="in_progress",
+            in_progress_until=leased_until,
         )
-        asyncio.run(
-            _insert_invocation_with_lease(
-                db_engine,
-                consumer_account_id=consumer_account_id,
-                service_id=service_id,
-                endpoint_id=endpoint_id,
-                idempotency_key="in-progress-unleased",
-                status="in_progress",
-                in_progress_until=None,
-            )
+    )
+    asyncio.run(
+        _insert_invocation_with_lease(
+            db_engine,
+            consumer_account_id=consumer_account_id,
+            service_id=service_id,
+            endpoint_id=endpoint_id,
+            idempotency_key="in-progress-unleased",
+            status="in_progress",
+            in_progress_until=None,
         )
+    )
 
-        assert asyncio.run(_read_invocation_leases(db_engine)) == [
-            ("in-progress-leased", "in_progress", leased_until),
-            ("in-progress-unleased", "in_progress", None),
-        ]
-    finally:
-        # The downgrade past submission_hardening_0015 narrows the status CHECK
-        # back to the terminal values, so in-progress rows cannot outlive the test.
-        asyncio.run(_delete_invocations(db_engine))
+    assert asyncio.run(_read_invocation_leases(db_engine)) == [
+        ("in-progress-leased", "in_progress", leased_until),
+        ("in-progress-unleased", "in_progress", None),
+    ]
 
 
 def test_execution_lease_migration_round_trips_at_head(
-    alembic_config: Config,
-    db_engine: AsyncEngine,
+    migration_database: MigrationDatabase,
 ) -> None:
-    command.upgrade(alembic_config, "head")
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
     try:
-        columns = asyncio.run(get_column_specs(db_engine, "invocations"))
-        constraints = asyncio.run(get_check_constraint_names(db_engine, "invocations"))
+        columns = asyncio.run(get_column_specs(engine, "invocations"))
+        constraints = asyncio.run(get_check_constraint_names(engine, "invocations"))
         assert "in_progress_until" in columns
         assert "ck_invocations_lease_only_in_progress" in constraints
 
-        command.downgrade(alembic_config, "schema_alignment_0020")
+        command.downgrade(config, "schema_alignment_0020")
 
-        columns = asyncio.run(get_column_specs(db_engine, "invocations"))
-        constraints = asyncio.run(get_check_constraint_names(db_engine, "invocations"))
+        columns = asyncio.run(get_column_specs(engine, "invocations"))
+        constraints = asyncio.run(get_check_constraint_names(engine, "invocations"))
         assert "in_progress_until" not in columns
         assert "ck_invocations_lease_only_in_progress" not in constraints
 
-        command.upgrade(alembic_config, "head")
+        command.upgrade(config, "head")
 
-        columns = asyncio.run(get_column_specs(db_engine, "invocations"))
-        constraints = asyncio.run(get_check_constraint_names(db_engine, "invocations"))
+        columns = asyncio.run(get_column_specs(engine, "invocations"))
+        constraints = asyncio.run(get_check_constraint_names(engine, "invocations"))
         assert "in_progress_until" in columns
         assert "ck_invocations_lease_only_in_progress" in constraints
     finally:
-        command.downgrade(alembic_config, "base")
+        command.downgrade(config, "base")

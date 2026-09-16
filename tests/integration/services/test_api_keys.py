@@ -12,7 +12,7 @@ from app.services.api_keys import create_api_key, list_api_keys, revoke_api_key
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 

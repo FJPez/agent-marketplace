@@ -905,11 +905,11 @@ async def test_request_provider_payouts_returns_conflict_when_wallet_missing(
 @pytest.mark.asyncio
 async def test_finance_routes_do_not_leak_internal_exceptions(
     app: FastAPI,
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
     provider_account_id, _ = await _seed_provider_finance_data(db_session_factory)
 
     async def explode(*, session: object, account_id: int) -> list[object]:

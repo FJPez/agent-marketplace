@@ -18,7 +18,7 @@ from app.services import discovery
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 

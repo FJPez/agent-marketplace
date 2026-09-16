@@ -22,7 +22,7 @@ from app.services.ledger_service import LedgerService
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 

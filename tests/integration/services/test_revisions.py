@@ -9,7 +9,7 @@ from app.services import revisions
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 

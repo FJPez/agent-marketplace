@@ -8,10 +8,10 @@ from app.services.accounts import get_account, update_display_name
 
 @pytest.mark.asyncio
 async def test_get_account_returns_persisted_account(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
     account_id = await create_account(
         db_session_factory,
         wallet_address="0x742d35Cc6634C0532925A3B8D4C9dB96C4B4d8B6",
@@ -28,10 +28,10 @@ async def test_get_account_returns_persisted_account(
 
 @pytest.mark.asyncio
 async def test_get_account_raises_not_found_for_missing_id(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError):
@@ -40,10 +40,10 @@ async def test_get_account_raises_not_found_for_missing_id(
 
 @pytest.mark.asyncio
 async def test_update_display_name_persists_and_advances_updated_at(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
     account_id = await create_account(
         db_session_factory,
         display_name="Alpha",
@@ -70,11 +70,11 @@ async def test_update_display_name_persists_and_advances_updated_at(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("display_name", ["", "   ", "x" * 256])
 async def test_update_display_name_rejects_invalid_value(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     display_name: str,
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
     account_id = await create_account(db_session_factory)
 
     async with db_session_factory() as session:
@@ -88,10 +88,10 @@ async def test_update_display_name_rejects_invalid_value(
 
 @pytest.mark.asyncio
 async def test_update_display_name_raises_not_found_for_missing_id(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError):

@@ -18,7 +18,7 @@ from app.services.moderation import ModerationServiceState, ServiceUnavailableEr
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 type ModerationMutation = Callable[..., Awaitable[ModerationAction]]

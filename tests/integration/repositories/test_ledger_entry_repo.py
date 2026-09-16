@@ -28,10 +28,10 @@ from app.repositories.ledger_entry_repo import LedgerEntryRepository
 
 @pytest.mark.asyncio
 async def test_ledger_entry_repository_persists_provider_entries(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     async with db_session_factory.begin() as session:
         provider_account = Account(display_name="Provider")
@@ -178,10 +178,10 @@ async def test_ledger_entry_repository_persists_provider_entries(
 
 @pytest.mark.asyncio
 async def test_ledger_entries_are_immutable_in_database(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
 
     async with db_session_factory.begin() as session:
         provider_account = Account(display_name="Provider")

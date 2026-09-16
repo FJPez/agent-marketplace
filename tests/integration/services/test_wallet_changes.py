@@ -17,7 +17,7 @@ from app.services.wallet_changes import confirm_wallet_change, initiate_wallet_c
 
 pytestmark = [
     pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
+    pytest.mark.usefixtures("clean_database"),
 ]
 
 

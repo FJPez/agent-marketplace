@@ -118,10 +118,10 @@ class _SlowHttpClient:
 @pytest.fixture
 async def redis_app_clients(
     monkeypatch: pytest.MonkeyPatch,
-    migrated_database: None,
+    clean_database: None,
     test_redis_url: str,
 ) -> AsyncIterator[tuple[FastAPI, AsyncClient, FastAPI, AsyncClient]]:
-    _ = migrated_database
+    _ = clean_database
     monkeypatch.setenv("APP_REDIS_URL", test_redis_url)
     monkeypatch.setenv("APP_API_RATE_LIMIT", "1/minute")
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")

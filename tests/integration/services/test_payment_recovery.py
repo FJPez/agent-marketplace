@@ -129,10 +129,10 @@ def payment_header() -> str:
 
 
 async def test_a_settled_attempt_whose_invocation_already_succeeded_finishes_without_re_forwarding(
-    migrated_database: None,
+    clean_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
+    _ = clean_database
     provider_account_id = await create_provider_account_record(db_session_factory)
     consumer_account_id = await create_consumer_account_record(db_session_factory)
     service_id = await create_service_record(

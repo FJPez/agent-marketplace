@@ -1,11 +1,10 @@
 import json
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import pytest
 from httpx import Response
 from pydantic import SecretStr
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_consumer_account_record,
@@ -35,28 +34,11 @@ from app.schemas.invoke import InvokeRequest
 from app.services.invoke_submission import InvokeSuccess, submit
 from app.services.payment_service import PaymentRequiredChallenge
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("migrated_database")]
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("clean_database")]
 
 PAYLOAD: dict[str, object] = {"text": "hello"}
 IDEMPOTENCY_KEY = "submit-key"
 PAYMENT_IDENTIFIER = "payment-1"
-
-
-@pytest.fixture(autouse=True)
-async def clear_invocations(
-    migrated_database: None,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[None]:
-    _ = migrated_database
-    yield
-    # Requesting migrated_database orders this cleanup before its downgrade, which
-    # narrows the status CHECK back to the terminal values that in-progress rows fail.
-    # Only in-progress rows need removing: terminal rows survive the downgrade, and
-    # ledger entries are immutable in the database by design.
-    async with db_session_factory.begin() as session:
-        await session.execute(
-            delete(Invocation).where(Invocation.status == InvocationStatus.IN_PROGRESS),
-        )
 
 
 class FakeHttpClient:
