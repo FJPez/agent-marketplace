@@ -13,10 +13,7 @@ from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.db.models import Service, ServiceHealthCheck, ServiceRevision
 from app.services import publishing
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 async def _seed_publishable_service(

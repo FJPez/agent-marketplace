@@ -1,11 +1,10 @@
-from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 from httpx import Response
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_consumer_account_record,
@@ -34,19 +33,6 @@ pytestmark = [pytest.mark.asyncio]
 PAYLOAD: dict[str, object] = {"text": "hello"}
 
 
-@pytest.fixture(autouse=True)
-async def clear_invocations(
-    migrated_database: None,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[None]:
-    _ = migrated_database
-    yield
-    # Requesting migrated_database orders this cleanup before its downgrade, which
-    # narrows the status CHECK back to the terminal values that in-progress rows fail.
-    async with db_session_factory.begin() as session:
-        await session.execute(delete(Invocation))
-
-
 class FakeHttpClient:
     """Stands in for the outbound http client, the invoke path's only external I/O."""
 
@@ -63,9 +49,6 @@ class FakeHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response:
-        _ = json
-        _ = headers
-        _ = kwargs
         self.calls.append(f"{method} {url}")
         if not self.outcomes:
             raise AssertionError("no fake outcome configured")

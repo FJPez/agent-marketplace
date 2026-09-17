@@ -2,24 +2,37 @@ import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import NamedTuple
 
+from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
+import app.db.models  # noqa: F401
 from app.core.config import Settings
+from app.db.base import Base
 
 TEST_DATABASE_SUFFIX = "_test"
+MIGRATION_DATABASE_SUFFIX = "_migrations"
+ALEMBIC_VERSION_TABLE = "alembic_version"
 DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 RUN_ID_PATTERN = re.compile(r"[^A-Za-z0-9_]+")
+
+
+class MigrationDatabase(NamedTuple):
+    """A database reserved for tests that drive the migration chain by hand."""
+
+    config: Config
+    engine: AsyncEngine
 
 
 class PostgresUnavailableError(RuntimeError):
     """Raised when the admin Postgres database cannot be reached."""
 
 
-def get_test_database_url(database_url: str | None = None) -> str:
+def get_test_database_url(database_url: str | None = None, *, suffix: str = "") -> str:
     resolved_database_url = database_url or Settings().database_url
     url = make_url(resolved_database_url)
     database_name = url.database
@@ -29,7 +42,9 @@ def get_test_database_url(database_url: str | None = None) -> str:
 
     run_id = _build_test_run_id()
 
-    return url.set(database=f"{database_name}{TEST_DATABASE_SUFFIX}_{run_id}").render_as_string(
+    return url.set(
+        database=f"{database_name}{TEST_DATABASE_SUFFIX}_{run_id}{suffix}",
+    ).render_as_string(
         hide_password=False,
     )
 
@@ -110,6 +125,24 @@ async def recreate_test_database(database_url: str) -> None:
         )
         await connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}"'))
         await connection.execute(text(f'CREATE DATABASE "{database_name}"'))
+
+
+async def truncate_all_tables(engine: AsyncEngine) -> None:
+    require_test_database_url(engine.url.render_as_string(hide_password=False))
+
+    # CASCADE makes ordering irrelevant, and sorting would warn about the
+    # services <-> service_revisions foreign key cycle on every call.
+    table_names = [name for name in Base.metadata.tables if name != ALEMBIC_VERSION_TABLE]
+    if not table_names:
+        return
+
+    targets = ", ".join(f'"{table_name}"' for table_name in table_names)
+    async with engine.begin() as connection:
+        # A connection leaked by an earlier test still holds locks on these tables,
+        # and TRUNCATE takes ACCESS EXCLUSIVE: time out so the leak fails loudly
+        # here instead of hanging the whole run.
+        await connection.execute(text("SET lock_timeout = '5s'"))
+        await connection.execute(text(f"TRUNCATE {targets} RESTART IDENTITY CASCADE"))
 
 
 async def drop_test_database(database_url: str) -> None:

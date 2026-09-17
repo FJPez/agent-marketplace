@@ -20,7 +20,6 @@ from app.repositories.payment_attempt_repo import PaymentAttemptRepository
 
 @pytest.mark.asyncio
 async def test_payment_attempt_repository_persists_and_loads_by_identifier(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
     provider_account_factory: ProviderAccountFactory,
     consumer_account_factory: ConsumerAccountFactory,
@@ -31,9 +30,6 @@ async def test_payment_attempt_repository_persists_and_loads_by_identifier(
     invocation_factory: InvocationFactory,
     payment_attempt_factory: PaymentAttemptFactory,
 ) -> None:
-    _ = migrated_database
-    _ = db_session_factory
-
     provider_account_id = await provider_account_factory(display_name="Provider")
     consumer_account_id = await consumer_account_factory(display_name="Consumer")
     service_id = await service_factory(

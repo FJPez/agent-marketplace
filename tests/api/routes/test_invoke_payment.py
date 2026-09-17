@@ -407,10 +407,6 @@ class _FailingPayoutExecutor:
         idempotency_key: str,
         nonce: int,
     ) -> PreparedPayout:
-        _ = destination_wallet
-        _ = amount_minor
-        _ = idempotency_key
-        _ = nonce
         raise RuntimeError("rpc unavailable")
 
     async def send_prepared_payout(
@@ -419,8 +415,6 @@ class _FailingPayoutExecutor:
         raw_transaction: str,
         reference: str,
     ) -> SentPayout:
-        _ = raw_transaction
-        _ = reference
         raise RuntimeError("rpc unavailable")
 
 
@@ -431,8 +425,6 @@ class _UnavailableFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         raise FacilitatorUnavailableError("facilitator unavailable")
 
     async def settle(
@@ -441,8 +433,6 @@ class _UnavailableFacilitatorClient:
         payment_requirement: dict[str, object],
         payment_payload: dict[str, object],
     ) -> dict[str, object]:
-        _ = payment_requirement
-        _ = payment_payload
         raise AssertionError("settle should not be called")
 
 

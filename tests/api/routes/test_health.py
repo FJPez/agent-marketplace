@@ -44,7 +44,6 @@ def test_health_ready_route_returns_service_unavailable_without_redis_when_confi
 
     class _HealthySession:
         async def execute(self, statement: object) -> object:
-            _ = statement
             return 1
 
     class _HealthySessionContext:

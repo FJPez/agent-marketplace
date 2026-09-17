@@ -1,9 +1,8 @@
 import asyncio
-from collections.abc import AsyncIterator
 
 import pytest
 from httpx import Response
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_consumer_account_record,
@@ -28,19 +27,6 @@ IDEMPOTENCY_KEY = "concurrent-key"
 WAIT_TIMEOUT_SECONDS = 30
 
 
-@pytest.fixture(autouse=True)
-async def clear_invocations(
-    migrated_database: None,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> AsyncIterator[None]:
-    _ = migrated_database
-    yield
-    # Requesting migrated_database orders this cleanup before its downgrade, which
-    # narrows the status CHECK back to the terminal values that in-progress rows fail.
-    async with db_session_factory.begin() as session:
-        await session.execute(delete(Invocation))
-
-
 class GatedHttpClient:
     """Holds the first upstream call open so a second caller meets a live lease."""
 
@@ -58,9 +44,6 @@ class GatedHttpClient:
         headers: dict[str, str],
         **kwargs: object,
     ) -> Response:
-        _ = json
-        _ = headers
-        _ = kwargs
         self.calls.append(f"{method} {url}")
         self.started.set()
         await asyncio.wait_for(self.release.wait(), timeout=WAIT_TIMEOUT_SECONDS)

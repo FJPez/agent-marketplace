@@ -10,10 +10,7 @@ from app.db.models import ServiceHealthCheck
 from app.services import service_health
 from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHealthOutcome
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 @pytest.fixture

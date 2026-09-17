@@ -13,11 +13,8 @@ def _database_url(db_session_factory: async_sessionmaker[AsyncSession]) -> str:
 
 @pytest.mark.asyncio
 async def test_bootstrap_admin_creates_treasury_admin_account(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
-
     treasury_wallet = await bootstrap_admin(
         database_url=_database_url(db_session_factory),
         treasury_private_key="0x" + "cd" * 32,
@@ -37,10 +34,8 @@ async def test_bootstrap_admin_creates_treasury_admin_account(
 
 @pytest.mark.asyncio
 async def test_bootstrap_admin_promotes_existing_treasury_account_without_touching_others(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     treasury_wallet = "0x89AEF553A06ab0C3173e79DE1Ce241A9ed3b992C"
 
     async with db_session_factory.begin() as session:
@@ -83,11 +78,8 @@ async def test_bootstrap_admin_promotes_existing_treasury_account_without_touchi
 
 @pytest.mark.asyncio
 async def test_bootstrap_admin_is_idempotent(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
-
     first_wallet = await bootstrap_admin(
         database_url=_database_url(db_session_factory),
         treasury_private_key="0x" + "cd" * 32,
@@ -109,10 +101,8 @@ async def test_bootstrap_admin_is_idempotent(
 
 @pytest.mark.asyncio
 async def test_bootstrap_admin_accepts_plain_postgres_database_url(
-    migrated_database: None,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    _ = migrated_database
     database_url = _database_url(db_session_factory).replace(
         "postgresql+asyncpg://", "postgresql://"
     )

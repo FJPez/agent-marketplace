@@ -16,10 +16,7 @@ from app.core.errors import NotFoundError
 from app.db.models import Service
 from app.services import discovery
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 async def test_list_services_returns_only_active_services_with_enabled_endpoints(

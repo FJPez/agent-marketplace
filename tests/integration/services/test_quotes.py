@@ -20,10 +20,7 @@ from app.db.models import Quote, Service, ServiceEndpoint
 from app.schemas.quote import QuoteCreateRequest
 from app.services import quotes
 
-pytestmark = [
-    pytest.mark.asyncio,
-    pytest.mark.usefixtures("migrated_database"),
-]
+pytestmark = [pytest.mark.asyncio]
 
 
 async def test_create_quote_snapshots_price_and_contract_binding(

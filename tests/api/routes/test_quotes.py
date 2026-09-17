@@ -247,14 +247,13 @@ async def test_create_quote_returns_not_found_for_missing_endpoint(
 
 @pytest.mark.asyncio
 async def test_create_quote_rate_limits_repeated_requests(
-    migrated_database: None,
+    clean_database: None,
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
     endpoint_price_factory: EndpointPriceFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = migrated_database
     monkeypatch.setenv("APP_API_RATE_LIMIT", "10/minute")
     monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "1/minute")
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
@@ -298,7 +297,7 @@ async def test_create_quote_rate_limits_repeated_requests(
 
 @pytest.mark.asyncio
 async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
-    migrated_database: None,
+    clean_database: None,
     provider_account_factory: ProviderAccountFactory,
     consumer_account_factory: ConsumerAccountFactory,
     service_factory: ServiceFactory,
@@ -307,7 +306,6 @@ async def test_create_quote_rate_limit_scopes_authenticated_accounts_separately(
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _ = migrated_database
     monkeypatch.setenv("APP_API_RATE_LIMIT", "10/minute")
     monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "1/minute")
     monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")

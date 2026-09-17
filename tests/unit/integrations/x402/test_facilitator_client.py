@@ -11,25 +11,17 @@ from app.integrations.x402.facilitator_client import (
 
 class _FakeSdkClient:
     async def verify(self, payload: object, requirement: object) -> object:
-        _ = payload
-        _ = requirement
         raise RuntimeError("boom")
 
     async def settle(self, payload: object, requirement: object) -> object:
-        _ = payload
-        _ = requirement
         raise RuntimeError("boom")
 
 
 class _FakeAuthErrorSdkClient:
     async def verify(self, payload: object, requirement: object) -> object:
-        _ = payload
-        _ = requirement
         raise ValueError("Facilitator verify failed (401): unauthorized")
 
     async def settle(self, payload: object, requirement: object) -> object:
-        _ = payload
-        _ = requirement
         raise ValueError("Facilitator settle failed (403): forbidden")
 
 
