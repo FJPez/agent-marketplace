@@ -9,15 +9,14 @@ from app.core.config import Settings
 from app.core.enums import AccessMode, InvocationStatus
 from app.db.models import Invocation
 from app.integrations.provider_gateway.client import SupportsRequest
-from app.schemas.invoke import InvokeRequest
-from app.schemas.service_ref import PublicServiceRef
-from app.services import invoke
-from app.services.payment_service import (
-    PaymentRequiredChallenge,
-    PaymentService,
+from app.integrations.x402.protocols import (
     SupportsFacilitatorClient,
     SupportsX402ResourceServer,
 )
+from app.schemas.invoke import InvokeRequest
+from app.schemas.service_ref import PublicServiceRef
+from app.services import invoke
+from app.services.payment_service import PaymentRequiredChallenge, PaymentService
 
 
 @dataclass(frozen=True, slots=True)

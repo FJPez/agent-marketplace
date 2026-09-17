@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Protocol
 import pytest
 from sqlalchemy import select
 from tests.helpers.auth import create_account
+from tests.helpers.x402 import build_payment_payload, build_payment_requirement
 
 from app.core.enums import (
     AccessMode,
@@ -619,8 +620,13 @@ async def create_payment_attempt_record(
             idempotency_key=idempotency_key,
             payment_identifier=payment_identifier,
             status=status,
-            payment_requirement=payment_requirement or {"amount_minor": 500},
-            payment_payload=payment_payload or {"payment_identifier": payment_identifier},
+            payment_requirement=(
+                payment_requirement or build_payment_requirement().model_dump(mode="json")
+            ),
+            payment_payload=(
+                payment_payload
+                or build_payment_payload(payment_identifier=payment_identifier or "payment-1").wire
+            ),
             verify_outcome=verify_outcome,
             settle_outcome=settle_outcome,
             facilitator_reference=facilitator_reference,

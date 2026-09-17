@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING
 
 from sqlalchemy.exc import IntegrityError
 
@@ -17,19 +16,21 @@ from app.core.logging import (
     build_event_context,
     get_logger,
 )
-from app.integrations.x402.facilitator_client import (
-    FacilitatorAuthError,
-    FacilitatorConfigError,
-    FacilitatorUnavailableError,
-)
-from app.integrations.x402.payment_identifier import (
+from app.integrations.x402.facilitator_client import FacilitatorAuthError, FacilitatorError
+from app.integrations.x402.models import (
     InvalidPaymentPayloadError,
-    extract_payment_identifier,
-    parse_payment_header,
+    PaymentPayload,
+    PaymentRequirement,
+    SettleOutcome,
+    VerifyOutcome,
 )
 from app.integrations.x402.payment_requirements import (
     PaymentRequirementConfigError,
     build_payment_requirement,
+)
+from app.integrations.x402.protocols import (
+    SupportsFacilitatorClient,
+    SupportsX402ResourceServer,
 )
 from app.repositories.payment_attempt_repo import PaymentAttemptRepository
 from app.services import invoke
@@ -46,38 +47,6 @@ if TYPE_CHECKING:
     from app.db.models import Invocation, PaymentAttempt
     from app.integrations.provider_gateway.client import SupportsRequest
     from app.services.invoke import ResolvedInvokeTarget
-
-
-@runtime_checkable
-class SupportsFacilitatorClient(Protocol):
-    async def verify(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]: ...
-
-    async def settle(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]: ...
-
-
-@runtime_checkable
-class SupportsX402ResourceServer(Protocol):
-    def build_payment_required_headers(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-    ) -> dict[str, str]: ...
-
-    def build_payment_response_headers(
-        self,
-        *,
-        settle_outcome: dict[str, object],
-    ) -> dict[str, str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,8 +105,7 @@ class PaymentService:
             return self._challenge(payment_requirement, detail="payment required")
 
         try:
-            payment_payload = parse_payment_header(payment_signature)
-            payment_identifier = extract_payment_identifier(payment_payload)
+            payment_payload = PaymentPayload.from_header(payment_signature)
         except InvalidPaymentPayloadError:
             return self._challenge(payment_requirement, detail="payment required")
 
@@ -145,7 +113,6 @@ class PaymentService:
             actor,
             quote_id=quote_id,
             idempotency_key=idempotency_key,
-            payment_identifier=payment_identifier,
             payment_requirement=payment_requirement,
             payment_payload=payment_payload,
         )
@@ -172,8 +139,8 @@ class PaymentService:
         actor: ActorContext,
         *,
         resolved: ResolvedInvokeTarget,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
+        payment_requirement: PaymentRequirement,
+        payment_payload: PaymentPayload,
         attempt: PaymentAttempt,
     ) -> PaymentRequiredChallenge | PaidInvokeSuccess:
         quote = resolved.quote
@@ -197,7 +164,9 @@ class PaymentService:
             return PaidInvokeSuccess(
                 invocation=invocation,
                 response_headers=(
-                    self._build_response_headers(attempt.settle_outcome)
+                    self._build_response_headers(
+                        SettleOutcome.model_validate(attempt.settle_outcome)
+                    )
                     if attempt.settle_outcome
                     else {}
                 ),
@@ -210,26 +179,19 @@ class PaymentService:
             raise UpstreamError("payment settlement failed")
 
         if attempt.status is PaymentAttemptStatus.CHALLENGED:
-            if not _payment_payload_matches_requirement(
-                payment_payload=payment_payload,
-                payment_requirement=payment_requirement,
-            ):
-                mismatch_verify_outcome: dict[str, object] = {
-                    "ok": False,
-                    "reason": "payment asset mismatch",
-                }
+            if not payment_payload.matches(payment_requirement):
                 await self._mark_verify_failed(
                     attempt,
-                    verify_outcome=mismatch_verify_outcome,
+                    verify_outcome=VerifyOutcome.asset_mismatch(),
                     quote_id=quote.id,
                 )
                 return self._challenge(payment_requirement, detail="payment could not be verified")
 
             verify_outcome = await self._verify(
-                payment_requirement=payment_requirement,
-                payment_payload=payment_payload,
+                requirement=payment_requirement,
+                payload=payment_payload,
             )
-            if not _is_verify_success(verify_outcome):
+            if not verify_outcome.accepted:
                 await self._mark_verify_failed(
                     attempt,
                     verify_outcome=verify_outcome,
@@ -237,21 +199,18 @@ class PaymentService:
                 )
                 return self._challenge(payment_requirement, detail="payment could not be verified")
 
-            attempt.verify_outcome = verify_outcome
-            attempt.facilitator_reference = _extract_reference(verify_outcome)
+            attempt.verify_outcome = verify_outcome.model_dump(mode="json")
             attempt.status = PaymentAttemptStatus.VERIFIED
             await self._session.commit()
 
         if attempt.status is PaymentAttemptStatus.VERIFIED:
             settle_outcome = await self._settle(
-                payment_requirement=payment_requirement,
-                payment_payload=payment_payload,
+                requirement=payment_requirement,
+                payload=payment_payload,
             )
-            attempt.settle_outcome = settle_outcome
-            attempt.facilitator_reference = _extract_reference(
-                settle_outcome
-            ) or _extract_reference(attempt.verify_outcome or {})
-            if not _is_settle_success(settle_outcome):
+            attempt.settle_outcome = settle_outcome.model_dump(mode="json")
+            attempt.facilitator_reference = settle_outcome.reference
+            if not settle_outcome.success:
                 await self._mark_settle_failed(
                     attempt,
                     quote_id=quote.id,
@@ -304,17 +263,19 @@ class PaymentService:
                 service_id=resolved.service.id,
                 invocation_id=invocation.id,
                 payment_attempt_id=attempt.id,
-                gross_amount_minor=_get_payment_amount(payment_requirement),
+                gross_amount_minor=payment_requirement.payment_amount,
                 currency=payment_token.symbol,
                 network=self._settings.x402_network,
             )
             attempt.status = PaymentAttemptStatus.CONSUMED
             await self._session.commit()
-            settle_outcome = attempt.settle_outcome
-            assert settle_outcome is not None
+            stored_settle_outcome = attempt.settle_outcome
+            assert stored_settle_outcome is not None
             return PaidInvokeSuccess(
                 invocation=invocation,
-                response_headers=self._build_response_headers(settle_outcome),
+                response_headers=self._build_response_headers(
+                    SettleOutcome.model_validate(stored_settle_outcome)
+                ),
             )
 
         msg = f"unsupported payment attempt status: {attempt.status.value}"
@@ -325,7 +286,7 @@ class PaymentService:
         *,
         amount_minor: int,
         currency: str | None,
-    ) -> dict[str, object]:
+    ) -> PaymentRequirement:
         try:
             return build_payment_requirement(
                 amount_minor=amount_minor,
@@ -341,18 +302,18 @@ class PaymentService:
 
     def _challenge(
         self,
-        payment_requirement: dict[str, object],
+        payment_requirement: PaymentRequirement,
         *,
         detail: str,
     ) -> PaymentRequiredChallenge:
         headers = self._x402_resource_server.build_payment_required_headers(
-            payment_requirement=payment_requirement,
+            requirement=payment_requirement,
         )
         return PaymentRequiredChallenge(headers=headers, body={"detail": detail})
 
-    def _build_response_headers(self, settle_outcome: dict[str, object]) -> dict[str, str]:
+    def _build_response_headers(self, settle_outcome: SettleOutcome) -> dict[str, str]:
         return self._x402_resource_server.build_payment_response_headers(
-            settle_outcome=settle_outcome,
+            outcome=settle_outcome,
         )
 
     async def build_success_headers_for_invocation(self, invocation_id: int) -> dict[str, str]:
@@ -360,10 +321,10 @@ class PaymentService:
         if (
             attempt is None
             or attempt.status is not PaymentAttemptStatus.CONSUMED
-            or attempt.settle_outcome is None
+            or not attempt.settle_outcome
         ):
             return {}
-        return self._build_response_headers(attempt.settle_outcome)
+        return self._build_response_headers(SettleOutcome.model_validate(attempt.settle_outcome))
 
     async def _get_or_create_attempt(
         self,
@@ -371,12 +332,11 @@ class PaymentService:
         *,
         quote_id: int,
         idempotency_key: str,
-        payment_identifier: str,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
+        payment_requirement: PaymentRequirement,
+        payment_payload: PaymentPayload,
     ) -> tuple[PaymentAttempt, bool]:
         attempt = await self._attempt_repo.get_by_payment_identifier(
-            payment_identifier=payment_identifier,
+            payment_identifier=payment_payload.identifier,
         )
         if attempt is not None:
             return attempt, False
@@ -386,10 +346,10 @@ class PaymentService:
             quote_id=quote_id,
             invocation_id=None,
             idempotency_key=idempotency_key,
-            payment_identifier=payment_identifier,
+            payment_identifier=payment_payload.identifier,
             status=PaymentAttemptStatus.CHALLENGED,
-            payment_requirement=payment_requirement,
-            payment_payload=payment_payload,
+            payment_requirement=payment_requirement.model_dump(mode="json"),
+            payment_payload=payment_payload.wire,
             verify_outcome=None,
             settle_outcome=None,
             facilitator_reference=None,
@@ -399,7 +359,7 @@ class PaymentService:
         except IntegrityError:
             await self._session.rollback()
             existing = await self._attempt_repo.get_by_payment_identifier(
-                payment_identifier=payment_identifier,
+                payment_identifier=payment_payload.identifier,
             )
             if existing is not None:
                 return existing, True
@@ -410,10 +370,10 @@ class PaymentService:
         self,
         attempt: PaymentAttempt,
         *,
-        verify_outcome: dict[str, object],
+        verify_outcome: VerifyOutcome,
         quote_id: int,
     ) -> None:
-        attempt.verify_outcome = verify_outcome
+        attempt.verify_outcome = verify_outcome.model_dump(mode="json")
         attempt.status = PaymentAttemptStatus.VERIFY_FAILED
         logger.info(
             "payment verification failed",
@@ -449,77 +409,31 @@ class PaymentService:
     async def _verify(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> VerifyOutcome:
         try:
             return await self._facilitator_client.verify(
-                payment_requirement=payment_requirement,
-                payment_payload=payment_payload,
+                requirement=requirement,
+                payload=payload,
             )
-        except FacilitatorConfigError as exc:
-            raise UpstreamError(str(exc)) from exc
         except FacilitatorAuthError as exc:
             raise UpstreamError("facilitator authentication failed") from exc
-        except FacilitatorUnavailableError as exc:
+        except FacilitatorError as exc:
             raise UpstreamError(str(exc)) from exc
 
     async def _settle(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> SettleOutcome:
         try:
             return await self._facilitator_client.settle(
-                payment_requirement=payment_requirement,
-                payment_payload=payment_payload,
+                requirement=requirement,
+                payload=payload,
             )
-        except FacilitatorConfigError as exc:
-            raise UpstreamError(str(exc)) from exc
         except FacilitatorAuthError as exc:
             raise UpstreamError("facilitator authentication failed") from exc
-        except FacilitatorUnavailableError as exc:
+        except FacilitatorError as exc:
             raise UpstreamError(str(exc)) from exc
-
-
-def _is_verify_success(verify_outcome: dict[str, object]) -> bool:
-    return bool(
-        verify_outcome.get("isValid") or verify_outcome.get("ok") or verify_outcome.get("is_valid")
-    )
-
-
-def _is_settle_success(settle_outcome: dict[str, object]) -> bool:
-    return bool(settle_outcome.get("ok") or settle_outcome.get("success"))
-
-
-def _extract_reference(outcome: dict[str, object]) -> str | None:
-    for key in ("reference", "transaction"):
-        value = outcome.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _get_payment_amount(payment_requirement: dict[str, object]) -> int:
-    value = payment_requirement.get("payment_amount")
-    if isinstance(value, int):
-        return value
-    msg = "payment requirement is missing payment_amount"
-    raise UpstreamError(msg)
-
-
-def _payment_payload_matches_requirement(
-    *,
-    payment_payload: dict[str, object],
-    payment_requirement: dict[str, object],
-) -> bool:
-    accepted = payment_payload.get("accepted")
-    if not isinstance(accepted, Mapping):
-        return False
-    accepted_mapping = cast("Mapping[str, object]", accepted)
-    accepted_asset = accepted_mapping.get("asset")
-    required_asset = payment_requirement.get("asset")
-    if not isinstance(accepted_asset, str) or not isinstance(required_asset, str):
-        return False
-    return accepted_asset.casefold() == required_asset.casefold()

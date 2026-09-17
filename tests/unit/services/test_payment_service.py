@@ -5,8 +5,12 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from sqlalchemy.exc import IntegrityError
-from x402 import PaymentPayload
-from x402.http import encode_payment_signature_header
+from tests.helpers.x402 import (
+    build_payment_payload,
+    build_payment_requirement,
+    build_settle_outcome,
+    payment_signature_header,
+)
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
@@ -21,6 +25,12 @@ from app.core.errors import UpstreamError
 from app.db.models import ProviderUpstream, Quote, Service, ServiceEndpoint
 from app.integrations.provider_gateway.signing import HmacAuthConfig
 from app.integrations.x402.facilitator_client import FacilitatorAuthError
+from app.integrations.x402.models import (
+    PaymentPayload,
+    PaymentRequirement,
+    SettleOutcome,
+    VerifyOutcome,
+)
 from app.services import invoke
 from app.services import payment_service as payment_service_module
 from app.services.invoke import ResolvedInvokeTarget
@@ -30,7 +40,10 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from app.integrations.provider_gateway.client import SupportsRequest
-    from app.services.payment_service import SupportsFacilitatorClient, SupportsX402ResourceServer
+    from app.integrations.x402.protocols import (
+        SupportsFacilitatorClient,
+        SupportsX402ResourceServer,
+    )
 
 
 class FakeSession:
@@ -251,39 +264,41 @@ class FakeInvoke:
         return self.invocation_for_lookup
 
 
+def verify_accepted() -> VerifyOutcome:
+    return VerifyOutcome(accepted=True, payer="0xpayer", checked_by="facilitator")
+
+
 class FakeFacilitatorClient:
     def __init__(
         self,
         *,
-        verify_outcomes: list[dict[str, object]] | None = None,
-        settle_outcomes: list[dict[str, object]] | None = None,
+        verify_outcomes: list[VerifyOutcome] | None = None,
+        settle_outcomes: list[SettleOutcome] | None = None,
     ) -> None:
         self.verify_calls = 0
         self.settle_calls = 0
-        default_verify_outcomes: list[dict[str, object]] = [{"ok": True, "reference": "verify-1"}]
-        default_settle_outcomes: list[dict[str, object]] = [{"ok": True, "reference": "settle-1"}]
         self.verify_outcomes = (
-            verify_outcomes if verify_outcomes is not None else default_verify_outcomes
+            verify_outcomes if verify_outcomes is not None else [verify_accepted()]
         )
         self.settle_outcomes = (
-            settle_outcomes if settle_outcomes is not None else default_settle_outcomes
+            settle_outcomes if settle_outcomes is not None else [build_settle_outcome()]
         )
 
     async def verify(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> VerifyOutcome:
         self.verify_calls += 1
         return self.verify_outcomes.pop(0)
 
     async def settle(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> SettleOutcome:
         self.settle_calls += 1
         return self.settle_outcomes.pop(0)
 
@@ -292,16 +307,16 @@ class FakeX402ResourceServer:
     def build_payment_required_headers(
         self,
         *,
-        payment_requirement: dict[str, object],
+        requirement: PaymentRequirement,
     ) -> dict[str, str]:
         return {}
 
     def build_payment_response_headers(
         self,
         *,
-        settle_outcome: dict[str, object],
+        outcome: SettleOutcome,
     ) -> dict[str, str]:
-        return {"PAYMENT-RESPONSE": str(settle_outcome.get("reference", ""))}
+        return {"PAYMENT-RESPONSE": outcome.reference or ""}
 
 
 class FakeHttpClient:
@@ -327,28 +342,6 @@ class FakeLedgerService:
 
     async def record_paid_invocation(self, **kwargs: object) -> None:
         self.record_calls.append(kwargs)
-
-
-def _payment_header(*, payment_identifier: str) -> str:
-    return encode_payment_signature_header(
-        PaymentPayload.model_validate(
-            {
-                "payload": {
-                    "authorization": {"nonce": payment_identifier},
-                    "transaction": "0xabc123",
-                },
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "eip155:84532",
-                    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                    "amount": "500",
-                    "payTo": "0x000000000000000000000000000000000000c0de",
-                    "maxTimeoutSeconds": 300,
-                    "extra": {},
-                },
-            }
-        )
-    )
 
 
 def _resolved_target() -> ResolvedInvokeTarget:
@@ -434,7 +427,7 @@ async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_c
         quote_id=21,
         idempotency_key="invoke-key",
         status=PaymentAttemptStatus.CONSUMED,
-        settle_outcome={"ok": True, "reference": "settle-1"},
+        settle_outcome=build_settle_outcome().model_dump(mode="json"),
     )
     fake_invoke = FakeInvoke(invocation_for_lookup=FakeInvocation(id=88))
     fake_invoke.install(monkeypatch)
@@ -443,24 +436,19 @@ async def test_handle_paid_invoke_replays_consumed_attempt_without_facilitator_c
     monkeypatch.setattr(
         service,
         "_build_requirement",
-        lambda *, amount_minor, currency: {
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            "payment_amount": 5_000_000,
-        },
+        lambda *, amount_minor, currency: build_payment_requirement(),
     )
 
     result = await service.handle_paid_invoke(
         ActorContext(account_id=12),
         resolved=_resolved_target(),
         idempotency_key="invoke-key",
-        payment_signature=_payment_header(payment_identifier="payment-1"),
+        payment_signature=payment_signature_header(payment_identifier="payment-1"),
     )
 
     assert isinstance(result, PaidInvokeSuccess)
     assert result.invocation.id == 88
-    assert result.response_headers == {"PAYMENT-RESPONSE": "settle-1"}
+    assert result.response_headers == {"PAYMENT-RESPONSE": "0xsettled"}
     assert facilitator_client.verify_calls == 0
     assert facilitator_client.settle_calls == 0
     assert fake_invoke.get_invocation_calls == 1
@@ -479,7 +467,7 @@ async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facili
         quote_id=21,
         idempotency_key="invoke-key-1",
         status=PaymentAttemptStatus.SETTLE_FAILED,
-        settle_outcome={"ok": True, "reference": "settle-1"},
+        settle_outcome=build_settle_outcome().model_dump(mode="json"),
     )
     FakeInvoke().install(monkeypatch)
     service = _build_service(session, facilitator_client=facilitator_client)
@@ -487,12 +475,7 @@ async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facili
     monkeypatch.setattr(
         service,
         "_build_requirement",
-        lambda *, amount_minor, currency: {
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            "payment_amount": 5_000_000,
-        },
+        lambda *, amount_minor, currency: build_payment_requirement(),
     )
 
     with pytest.raises(UpstreamError, match="payment settlement failed"):
@@ -500,7 +483,7 @@ async def test_handle_paid_invoke_replays_terminal_settle_failure_without_facili
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            payment_signature=_payment_header(payment_identifier="payment-1"),
+            payment_signature=payment_signature_header(payment_identifier="payment-1"),
         )
 
     assert facilitator_client.verify_calls == 0
@@ -514,8 +497,8 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
 ) -> None:
     session = FakeSession()
     facilitator_client = FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        verify_outcomes=[verify_accepted()],
+        settle_outcomes=[build_settle_outcome()],
     )
     fake_invoke = FakeInvoke(
         invocation_for_lookup=FakeInvocation(id=77),
@@ -528,12 +511,7 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
     monkeypatch.setattr(
         service,
         "_build_requirement",
-        lambda *, amount_minor, currency: {
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            "payment_amount": 5_000_000,
-        },
+        lambda *, amount_minor, currency: build_payment_requirement(),
     )
 
     with pytest.raises(UpstreamError, match="upstream request failed"):
@@ -541,15 +519,15 @@ async def test_handle_paid_invoke_marks_compensation_required_after_settled_invo
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            payment_signature=_payment_header(payment_identifier="payment-compensate"),
+            payment_signature=payment_signature_header(payment_identifier="payment-compensate"),
         )
 
     attempt = service._attempt_repo.added_attempt
     assert attempt is not None
     assert attempt.status is PaymentAttemptStatus.SETTLED
     assert attempt.invocation_id is None
-    assert attempt.verify_outcome == {"ok": True, "reference": "verify-1"}
-    assert attempt.settle_outcome == {"ok": True, "reference": "settle-1"}
+    assert attempt.verify_outcome == verify_accepted().model_dump(mode="json")
+    assert attempt.settle_outcome == build_settle_outcome().model_dump(mode="json")
     assert session.commit_calls == 3
     assert service._ledger_service.record_calls == []
     assert fake_invoke.execute_calls == 1
@@ -561,17 +539,17 @@ async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
         async def verify(
             self,
             *,
-            payment_requirement: dict[str, object],
-            payment_payload: dict[str, object],
-        ) -> dict[str, object]:
+            requirement: PaymentRequirement,
+            payload: PaymentPayload,
+        ) -> VerifyOutcome:
             raise FacilitatorAuthError("facilitator authentication failed")
 
         async def settle(
             self,
             *,
-            payment_requirement: dict[str, object],
-            payment_payload: dict[str, object],
-        ) -> dict[str, object]:
+            requirement: PaymentRequirement,
+            payload: PaymentPayload,
+        ) -> SettleOutcome:
             raise AssertionError("settle should not be called")
 
     service = PaymentService(
@@ -584,8 +562,8 @@ async def test_verify_maps_facilitator_auth_failures_to_bad_gateway() -> None:
 
     with pytest.raises(UpstreamError, match="facilitator authentication failed"):
         await service._verify(
-            payment_requirement={"amount_minor": 500},
-            payment_payload={"authorization": {"nonce": "payment-1"}},
+            requirement=build_payment_requirement(),
+            payload=build_payment_payload(),
         )
 
 
@@ -604,8 +582,8 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
         on_successful_commit=attempt_repo.persist,
     )
     facilitator_client = FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        verify_outcomes=[verify_accepted()],
+        settle_outcomes=[build_settle_outcome()],
     )
     fake_invoke = FakeInvoke()
     fake_invoke.install(monkeypatch)
@@ -620,12 +598,7 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
     monkeypatch.setattr(
         service,
         "_build_requirement",
-        lambda *, amount_minor, currency: {
-            "amount_minor": amount_minor,
-            "currency": currency,
-            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            "payment_amount": 5_000_000,
-        },
+        lambda *, amount_minor, currency: build_payment_requirement(),
     )
 
     with pytest.raises(RuntimeError, match="commit failed"):
@@ -633,7 +606,7 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
             ActorContext(account_id=12),
             resolved=_resolved_target(),
             idempotency_key="invoke-key",
-            payment_signature=_payment_header(payment_identifier="payment-1"),
+            payment_signature=payment_signature_header(payment_identifier="payment-1"),
         )
 
     assert attempt_repo.stored_attempt is not None
@@ -645,7 +618,7 @@ async def test_handle_paid_invoke_resumes_from_settled_attempt_after_final_commi
         ActorContext(account_id=12),
         resolved=_resolved_target(),
         idempotency_key="invoke-key",
-        payment_signature=_payment_header(payment_identifier="payment-1"),
+        payment_signature=payment_signature_header(payment_identifier="payment-1"),
     )
 
     assert isinstance(result, PaidInvokeSuccess)

@@ -6,30 +6,46 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from cdp.auth.utils.jwt import JwtOptions, generate_jwt
+from httpx import RequestError, TimeoutException
+from pydantic import ValidationError
 from x402 import parse_payment_payload
 from x402.http import AuthHeaders, FacilitatorConfig
-from x402.http.facilitator_client import HTTPFacilitatorClient
+from x402.http.facilitator_client import FacilitatorResponseError, HTTPFacilitatorClient
 
-from app.integrations.x402.models import to_payment_requirements
+from app.integrations.x402.models import SettleOutcome, VerifyOutcome
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
 
+    from app.integrations.x402.models import PaymentPayload, PaymentRequirement
+
 
 logger = logging.getLogger(__name__)
-_AUTH_STATUS_CODE_PATTERN = re.compile(r"\((?P<status>\d{3})\)")
-_CDP_FACILITATOR_HOSTS = {"api.cdp.coinbase.com"}
+AUTH_STATUS_CODE_PATTERN = re.compile(r"\((?P<status>\d{3})\)")
+CDP_FACILITATOR_HOSTS = {"api.cdp.coinbase.com"}
 
 
-class FacilitatorConfigError(RuntimeError):
+class FacilitatorError(Exception):
+    """No usable outcome could be obtained from the facilitator."""
+
+
+class FacilitatorConfigError(FacilitatorError):
     pass
 
 
-class FacilitatorAuthError(Exception):
+class FacilitatorAuthError(FacilitatorError):
     pass
 
 
-class FacilitatorUnavailableError(Exception):
+class FacilitatorTimeoutError(FacilitatorError):
+    pass
+
+
+class FacilitatorTransportError(FacilitatorError):
+    pass
+
+
+class FacilitatorProtocolError(FacilitatorError):
     pass
 
 
@@ -57,7 +73,7 @@ class CdpFacilitatorAuthProvider:
                 settle=self._build_bearer_headers("POST", "settle"),
                 supported=self._build_bearer_headers("GET", "supported"),
             )
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             raise FacilitatorAuthError("failed to generate facilitator auth token") from exc
 
     def _build_bearer_headers(self, request_method: str, endpoint: str) -> dict[str, str]:
@@ -74,6 +90,12 @@ class CdpFacilitatorAuthProvider:
 
 
 class FacilitatorClient:
+    """Turns facilitator calls into typed outcomes.
+
+    `/verify` only asks the facilitator whether the payment would be accepted: it moves no
+    funds and executes nothing on chain, so a verified attempt owes the payer nothing yet.
+    """
+
     def __init__(
         self,
         *,
@@ -98,68 +120,80 @@ class FacilitatorClient:
     async def verify(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
-        payload = parse_payment_payload(payment_payload)
-        requirement = to_payment_requirements(payment_requirement)
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> VerifyOutcome:
+        sdk_payload = parse_payment_payload(payload.wire)
+        sdk_requirement = requirement.to_sdk()
         try:
-            result = await self._client.verify(payload, requirement)
-            return result.model_dump(by_alias=True, exclude_none=True)
-        except FacilitatorAuthError as exc:
-            logger.warning(
-                "Facilitator authentication failed during verify for %s: %s",
-                self._identifier,
-                exc,
-            )
-            raise FacilitatorAuthError("facilitator authentication failed") from exc
-        except Exception as exc:
-            if _has_auth_status_code(exc):
-                logger.warning(
-                    "Facilitator returned an authentication failure during verify for %s: %s",
-                    self._identifier,
-                    exc,
-                )
-                raise FacilitatorAuthError("facilitator authentication failed") from exc
-            logger.warning(
-                "Facilitator verify failed for %s: %s",
-                self._identifier,
-                exc,
-            )
-            raise FacilitatorUnavailableError(_build_unavailable_message("verify", exc)) from exc
+            response = await self._client.verify(sdk_payload, sdk_requirement)
+        except (FacilitatorAuthError, RequestError, ValueError) as exc:
+            raise self._translate("verify", exc) from exc
+        return VerifyOutcome.from_sdk(response)
 
     async def settle(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
-        payload = parse_payment_payload(payment_payload)
-        requirement = to_payment_requirements(payment_requirement)
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> SettleOutcome:
+        sdk_payload = parse_payment_payload(payload.wire)
+        sdk_requirement = requirement.to_sdk()
         try:
-            result = await self._client.settle(payload, requirement)
-            return result.model_dump(by_alias=True, exclude_none=True)
-        except FacilitatorAuthError as exc:
+            response = await self._client.settle(sdk_payload, sdk_requirement)
+        except (FacilitatorAuthError, RequestError, ValueError) as exc:
+            raise self._translate("settle", exc) from exc
+        return SettleOutcome.from_sdk(response)
+
+    def _translate(self, operation: str, exc: Exception) -> FacilitatorError:
+        if isinstance(exc, FacilitatorAuthError):
             logger.warning(
-                "Facilitator authentication failed during settle for %s: %s",
+                "Facilitator authentication failed during %s for %s: %s",
+                operation,
                 self._identifier,
                 exc,
             )
-            raise FacilitatorAuthError("facilitator authentication failed") from exc
-        except Exception as exc:
-            if _has_auth_status_code(exc):
-                logger.warning(
-                    "Facilitator returned an authentication failure during settle for %s: %s",
-                    self._identifier,
-                    exc,
-                )
-                raise FacilitatorAuthError("facilitator authentication failed") from exc
+            return FacilitatorAuthError("facilitator authentication failed")
+        if isinstance(exc, TimeoutException):
             logger.warning(
-                "Facilitator settle failed for %s: %s",
+                "Facilitator %s timed out for %s: %s",
+                operation,
                 self._identifier,
                 exc,
             )
-            raise FacilitatorUnavailableError(_build_unavailable_message("settle", exc)) from exc
+            return FacilitatorTimeoutError(_build_failure_message(operation, exc))
+        if isinstance(exc, RequestError):
+            logger.warning(
+                "Facilitator %s could not reach %s: %s",
+                operation,
+                self._identifier,
+                exc,
+            )
+            return FacilitatorTransportError(_build_failure_message(operation, exc))
+        if isinstance(exc, FacilitatorResponseError | ValidationError):
+            logger.warning(
+                "Facilitator %s returned an unusable response from %s: %s",
+                operation,
+                self._identifier,
+                exc,
+            )
+            return FacilitatorProtocolError(_build_failure_message(operation, exc))
+        # Only the SDK's own bare ValueError carries the upstream status code in its message.
+        if _has_auth_status_code(exc):
+            logger.warning(
+                "Facilitator returned an authentication failure during %s for %s: %s",
+                operation,
+                self._identifier,
+                exc,
+            )
+            return FacilitatorAuthError("facilitator authentication failed")
+        logger.warning(
+            "Facilitator %s failed for %s: %s",
+            operation,
+            self._identifier,
+            exc,
+        )
+        return FacilitatorProtocolError(_build_failure_message(operation, exc))
 
 
 def _build_auth_provider(
@@ -196,22 +230,21 @@ def _build_request_path(base_path: str, endpoint: str) -> str:
 
 
 def _is_cdp_facilitator_url(url: str) -> bool:
-    return urlsplit(url).hostname in _CDP_FACILITATOR_HOSTS
+    return urlsplit(url).hostname in CDP_FACILITATOR_HOSTS
 
 
 def _has_auth_status_code(exc: Exception) -> bool:
-    status_code = _extract_status_code(exc)
-    return status_code in {401, 403}
+    return _extract_status_code(exc) in {401, 403}
 
 
 def _extract_status_code(exc: Exception) -> int | None:
-    match = _AUTH_STATUS_CODE_PATTERN.search(str(exc))
+    match = AUTH_STATUS_CODE_PATTERN.search(str(exc))
     if match is None:
         return None
     return int(match.group("status"))
 
 
-def _build_unavailable_message(operation: str, exc: Exception) -> str:
+def _build_failure_message(operation: str, exc: Exception) -> str:
     detail = str(exc).strip()
     if detail:
         return f"facilitator {operation} failed: {detail}"

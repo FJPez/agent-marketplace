@@ -8,6 +8,7 @@ from app.api.deps.database import SessionDep
 from app.api.deps.gateway import FacilitatorClientDep, HttpClientDep, X402ResourceServerDep
 from app.api.deps.headers import PaymentSignatureHeader, ValidatedIdempotencyKey
 from app.api.deps.settings import SettingsDep
+from app.integrations.x402.headers import PAYMENT_REQUIRED_HEADER
 from app.schemas.invoke import InvocationListItem, InvocationResponse, InvokeRequest
 from app.schemas.service_ref import PublicServiceRef
 from app.services import invoke, invoke_submission
@@ -31,7 +32,7 @@ router = APIRouter(tags=["invoke"])
         402: {
             "description": "Payment is required before the invoke can proceed.",
             "headers": {
-                "PAYMENT-REQUIRED": {
+                PAYMENT_REQUIRED_HEADER: {
                     "description": (
                         "Serialized x402 payment requirement for the requested paid invoke."
                     )

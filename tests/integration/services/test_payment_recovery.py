@@ -1,5 +1,3 @@
-import json
-
 import pytest
 from httpx import Response
 from pydantic import SecretStr
@@ -15,8 +13,11 @@ from tests.fixtures.domain import (
     create_service_record,
     create_upstream_record,
 )
-from x402 import PaymentPayload
-from x402.http import encode_payment_signature_header
+from tests.helpers.x402 import (
+    build_payment_requirement,
+    build_settle_outcome,
+    payment_signature_header,
+)
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
@@ -28,6 +29,12 @@ from app.core.enums import (
     PricingModelType,
 )
 from app.db.models import LedgerEntry, PaymentAttempt, Payout
+from app.integrations.x402.models import (
+    PaymentPayload,
+    PaymentRequirement,
+    SettleOutcome,
+    VerifyOutcome,
+)
 from app.services import invoke
 from app.services.payment_service import PaidInvokeSuccess, PaymentService
 
@@ -67,18 +74,18 @@ class FakeFacilitatorClient:
     async def verify(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> VerifyOutcome:
         self.calls.append("verify")
         raise AssertionError("a settled attempt must not be verified again")
 
     async def settle(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> SettleOutcome:
         self.calls.append("settle")
         raise AssertionError("a settled attempt must not be settled again")
 
@@ -87,38 +94,20 @@ class FakeX402ResourceServer:
     def build_payment_required_headers(
         self,
         *,
-        payment_requirement: dict[str, object],
+        requirement: PaymentRequirement,
     ) -> dict[str, str]:
-        return {"PAYMENT-REQUIRED": json.dumps(payment_requirement, sort_keys=True)}
+        return {"PAYMENT-REQUIRED": requirement.model_dump_json()}
 
     def build_payment_response_headers(
         self,
         *,
-        settle_outcome: dict[str, object],
+        outcome: SettleOutcome,
     ) -> dict[str, str]:
-        return {"PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
+        return {"PAYMENT-RESPONSE": outcome.model_dump_json()}
 
 
 def payment_header() -> str:
-    return encode_payment_signature_header(
-        PaymentPayload.model_validate(
-            {
-                "payload": {
-                    "authorization": {"nonce": PAYMENT_IDENTIFIER},
-                    "transaction": "0xabc123",
-                },
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "eip155:84532",
-                    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                    "amount": "500",
-                    "payTo": "0x000000000000000000000000000000000000c0de",
-                    "maxTimeoutSeconds": 300,
-                    "extra": {},
-                },
-            }
-        )
-    )
+    return payment_signature_header(payment_identifier=PAYMENT_IDENTIFIER)
 
 
 async def test_a_settled_attempt_whose_invocation_already_succeeded_finishes_without_re_forwarding(
@@ -177,11 +166,13 @@ async def test_a_settled_attempt_whose_invocation_already_succeeded_finishes_wit
                 idempotency_key=IDEMPOTENCY_KEY,
                 payment_identifier=PAYMENT_IDENTIFIER,
                 status=PaymentAttemptStatus.SETTLED,
-                payment_requirement={"amount_minor": 500},
-                payment_payload={"payment_identifier": PAYMENT_IDENTIFIER},
-                verify_outcome={"ok": True, "reference": "verify-1"},
-                settle_outcome={"ok": True, "reference": "settle-1"},
-                facilitator_reference="settle-1",
+                payment_requirement=build_payment_requirement().model_dump(mode="json"),
+                payment_payload=PaymentPayload.from_header(payment_header()).wire,
+                verify_outcome=VerifyOutcome(accepted=True, checked_by="facilitator").model_dump(
+                    mode="json"
+                ),
+                settle_outcome=build_settle_outcome().model_dump(mode="json"),
+                facilitator_reference="0xsettled",
             )
         )
 
