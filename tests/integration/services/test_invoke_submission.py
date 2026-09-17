@@ -36,7 +36,7 @@ from app.integrations.x402.models import (
 )
 from app.schemas.invoke import InvokeRequest
 from app.services.invoke_submission import InvokeSuccess, submit
-from app.services.payment_service import PaymentRequiredChallenge
+from app.services.payment import PaymentRequiredChallenge
 
 pytestmark = [pytest.mark.asyncio]
 

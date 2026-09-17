@@ -202,6 +202,7 @@ class PaymentAttemptFactory(Protocol):
         verify_outcome: JsonObject | None = ...,
         settle_outcome: JsonObject | None = ...,
         facilitator_reference: str | None = ...,
+        settle_in_progress_until: datetime | None = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -611,6 +612,7 @@ async def create_payment_attempt_record(
     verify_outcome: JsonObject | None = None,
     settle_outcome: JsonObject | None = None,
     facilitator_reference: str | None = None,
+    settle_in_progress_until: datetime | None = None,
 ) -> int:
     async with db_session_factory.begin() as session:
         attempt = PaymentAttempt(
@@ -630,6 +632,7 @@ async def create_payment_attempt_record(
             verify_outcome=verify_outcome,
             settle_outcome=settle_outcome,
             facilitator_reference=facilitator_reference,
+            settle_in_progress_until=settle_in_progress_until,
         )
         session.add(attempt)
         await session.flush()
@@ -1047,6 +1050,7 @@ def payment_attempt_factory(
         verify_outcome: JsonObject | None = None,
         settle_outcome: JsonObject | None = None,
         facilitator_reference: str | None = None,
+        settle_in_progress_until: datetime | None = None,
     ) -> int:
         return await create_payment_attempt_record(
             db_session_factory,
@@ -1061,6 +1065,7 @@ def payment_attempt_factory(
             verify_outcome=verify_outcome,
             settle_outcome=settle_outcome,
             facilitator_reference=facilitator_reference,
+            settle_in_progress_until=settle_in_progress_until,
         )
 
     return create_payment_attempt

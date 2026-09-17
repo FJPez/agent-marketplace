@@ -9,10 +9,15 @@ from app.api.deps.gateway import FacilitatorClientDep, HttpClientDep, X402Resour
 from app.api.deps.headers import PaymentSignatureHeader, ValidatedIdempotencyKey
 from app.api.deps.settings import SettingsDep
 from app.integrations.x402.headers import PAYMENT_REQUIRED_HEADER
-from app.schemas.invoke import InvocationListItem, InvocationResponse, InvokeRequest
+from app.schemas.invoke import (
+    InvocationListItem,
+    InvocationResponse,
+    InvokeRequest,
+    PaymentRequiredResponse,
+)
 from app.schemas.service_ref import PublicServiceRef
 from app.services import invoke, invoke_submission
-from app.services.payment_service import PaymentRequiredChallenge
+from app.services.payment import PaymentRequiredChallenge
 
 router = APIRouter(tags=["invoke"])
 
@@ -31,6 +36,7 @@ router = APIRouter(tags=["invoke"])
         200: {"description": "Invocation completed successfully."},
         402: {
             "description": "Payment is required before the invoke can proceed.",
+            "model": PaymentRequiredResponse,
             "headers": {
                 PAYMENT_REQUIRED_HEADER: {
                     "description": (

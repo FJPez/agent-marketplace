@@ -67,6 +67,17 @@ async def get_check_constraint_names(
     return {constraint["name"] for constraint in constraints}
 
 
+async def get_unique_constraint_names(
+    db_engine: AsyncEngine,
+    table_name: str,
+) -> set[str]:
+    async with db_engine.connect() as connection:
+        constraints = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_unique_constraints(table_name),
+        )
+    return {constraint["name"] for constraint in constraints}
+
+
 def test_head_migration_creates_expected_unified_tables(
     migrated_database: None,
     db_engine: AsyncEngine,
@@ -732,6 +743,155 @@ def test_head_migration_accepts_in_progress_invocations_with_and_without_a_lease
         ("in-progress-leased", "in_progress", leased_until),
         ("in-progress-unleased", "in_progress", None),
     ]
+
+
+async def _seed_settling_payment_attempt(db_engine: AsyncEngine) -> None:
+    consumer_account_id, service_id, endpoint_id = await _seed_invocation_context(db_engine)
+    async with db_engine.begin() as connection:
+        quote_id = (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO quotes (
+                        service_id,
+                        endpoint_id,
+                        endpoint_key,
+                        request_hash,
+                        pricing_type,
+                        amount_minor,
+                        currency,
+                        expires_at
+                    )
+                    VALUES (
+                        :service_id,
+                        :endpoint_id,
+                        'translate',
+                        :request_hash,
+                        'fixed_per_call',
+                        500,
+                        'USD',
+                        now()
+                    )
+                    RETURNING id
+                    """
+                ),
+                {
+                    "service_id": service_id,
+                    "endpoint_id": endpoint_id,
+                    "request_hash": "c" * 64,
+                },
+            )
+        ).scalar_one()
+        await connection.execute(
+            text(
+                """
+                INSERT INTO payment_attempts (
+                    consumer_account_id,
+                    quote_id,
+                    idempotency_key,
+                    payment_identifier,
+                    status,
+                    payment_requirement,
+                    payment_payload,
+                    settle_in_progress_until
+                )
+                VALUES (
+                    :consumer_account_id,
+                    :quote_id,
+                    'settling-key',
+                    'settling-payment',
+                    'settling',
+                    CAST('{}' AS jsonb),
+                    CAST('{}' AS jsonb),
+                    :settle_in_progress_until
+                )
+                """
+            ),
+            {
+                "consumer_account_id": consumer_account_id,
+                "quote_id": quote_id,
+                "settle_in_progress_until": datetime(2030, 1, 1, tzinfo=UTC),
+            },
+        )
+
+
+async def _update_payment_attempt_status(db_engine: AsyncEngine, *, status: str) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE payment_attempts SET status = :status"),
+            {"status": status},
+        )
+
+
+async def _read_payment_attempt_statuses(db_engine: AsyncEngine) -> list[str]:
+    async with db_engine.connect() as connection:
+        result = await connection.execute(
+            text("SELECT status FROM payment_attempts ORDER BY id"),
+        )
+        return [row[0] for row in result]
+
+
+def test_head_migration_adds_the_payment_settlement_claim(
+    migrated_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    columns = asyncio.run(get_column_specs(db_engine, "payment_attempts"))
+    check_constraints = asyncio.run(get_check_constraint_names(db_engine, "payment_attempts"))
+    ledger_unique_constraints = asyncio.run(
+        get_unique_constraint_names(db_engine, "ledger_entries"),
+    )
+
+    assert "settle_in_progress_until" in columns
+    assert "ck_payment_attempts_lease_only_settling" in check_constraints
+    assert "ck_payment_attempts_payment_attempt_status" in check_constraints
+    assert "uq_ledger_entries_payment_attempt_entry_type" in ledger_unique_constraints
+
+
+def test_head_migration_rejects_a_settlement_lease_on_a_non_settling_attempt(
+    clean_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    asyncio.run(_seed_settling_payment_attempt(db_engine))
+
+    with pytest.raises(IntegrityError):
+        asyncio.run(
+            _update_payment_attempt_status(db_engine, status="settled"),
+        )
+
+
+def test_settlement_claim_migration_round_trips_at_head(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "head")
+    try:
+        asyncio.run(_seed_settling_payment_attempt(engine))
+        assert asyncio.run(_read_payment_attempt_statuses(engine)) == ["settling"]
+
+        # The downgrade is schema-reversible only: a settling attempt cannot be expressed
+        # by the older schema, so it is deleted rather than silently relabelled.
+        command.downgrade(config, "invocations_0021")
+
+        columns = asyncio.run(get_column_specs(engine, "payment_attempts"))
+        check_constraints = asyncio.run(get_check_constraint_names(engine, "payment_attempts"))
+        ledger_unique_constraints = asyncio.run(
+            get_unique_constraint_names(engine, "ledger_entries"),
+        )
+        assert asyncio.run(_read_payment_attempt_statuses(engine)) == []
+        assert "settle_in_progress_until" not in columns
+        assert "ck_payment_attempts_lease_only_settling" not in check_constraints
+        assert "uq_ledger_entries_payment_attempt_entry_type" not in ledger_unique_constraints
+
+        command.upgrade(config, "head")
+
+        columns = asyncio.run(get_column_specs(engine, "payment_attempts"))
+        check_constraints = asyncio.run(get_check_constraint_names(engine, "payment_attempts"))
+        assert "settle_in_progress_until" in columns
+        assert "ck_payment_attempts_lease_only_settling" in check_constraints
+    finally:
+        command.downgrade(config, "base")
 
 
 def test_execution_lease_migration_round_trips_at_head(
