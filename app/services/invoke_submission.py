@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
-from app.core.enums import AccessMode
+from app.core.enums import AccessMode, InvocationStatus
 from app.db.models import Invocation
 from app.integrations.provider_gateway.client import SupportsRequest
 from app.schemas.invoke import InvokeRequest
@@ -57,6 +57,10 @@ async def submit(
         idempotency_key=idempotency_key,
     )
     if replayed is not None:
+        # A stored failure settles the repeated request whatever its access mode, and
+        # settles it before any payment header is looked up.
+        if replayed.status is InvocationStatus.FAILED:
+            raise invoke.exception_for_failed_invocation(replayed)
         if replayed.access_mode is not AccessMode.PAID:
             return InvokeSuccess(invocation=replayed, response_headers={})
         replay_headers = await payments.build_success_headers_for_invocation(replayed.id)
@@ -92,4 +96,6 @@ async def submit(
         idempotency_key=idempotency_key,
         http_client=http_client,
     )
+    if invocation.status is InvocationStatus.FAILED:
+        raise invoke.exception_for_failed_invocation(invocation)
     return InvokeSuccess(invocation=invocation, response_headers={})

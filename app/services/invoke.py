@@ -30,13 +30,11 @@ from app.core.logging import (
 )
 from app.core.request_hash import hash_request_body
 from app.core.request_schema_validation import PayloadSchemaMismatchError, validate_request_payload
-from app.db.models import Invocation, Quote, Service, ServiceEndpoint
+from app.db.models import Invocation, ProviderUpstream, Quote, Service, ServiceEndpoint
 from app.integrations.provider_gateway.client import (
     ProviderGatewayClient,
-    ProviderGatewayResponseError,
-    ProviderGatewayTargetError,
-    ProviderGatewayTimeoutError,
-    ProviderGatewayTransportError,
+    ProviderGatewayError,
+    ProviderResponse,
     SupportsRequest,
 )
 from app.integrations.provider_gateway.signing import HmacAuthConfig, get_hmac_auth_config
@@ -56,6 +54,7 @@ LEASE_GRACE_SECONDS = 30
 class ResolvedInvokeTarget:
     service: Service
     endpoint: ServiceEndpoint
+    upstream: ProviderUpstream
     request_hash: str
     quote: Quote | None
     auth: HmacAuthConfig
@@ -139,6 +138,7 @@ async def resolve_target(
     return ResolvedInvokeTarget(
         service=service,
         endpoint=endpoint,
+        upstream=upstream,
         request_hash=request_hash,
         quote=quote,
         auth=auth,
@@ -156,7 +156,13 @@ async def try_replay(
     quote_id: int | None,
     idempotency_key: str,
 ) -> Invocation | None:
-    """Interpret the stored outcome of a repeated request, ahead of any current-state checks."""
+    """Interpret the stored outcome of a repeated request, ahead of any current-state checks.
+
+    A terminal row is returned as a value, SUCCEEDED and FAILED alike. Every caller must
+    interpret the returned status and raise `exception_for_failed_invocation` for a FAILED
+    one once its own bookkeeping is durable. An in-progress or unknown row raises
+    `ConflictError`.
+    """
     existing = await session.scalar(
         select(Invocation).where(
             Invocation.consumer_account_id == account_id,
@@ -200,7 +206,13 @@ async def execute(
     idempotency_key: str,
     http_client: SupportsRequest,
 ) -> Invocation:
-    """Claim the invocation, forward it upstream at most once, and store the outcome."""
+    """Claim the invocation, forward it upstream at most once, and store the outcome.
+
+    The durable terminal row is returned as a value, SUCCEEDED and FAILED alike. Every
+    caller must interpret the returned status and raise `exception_for_failed_invocation`
+    for a FAILED one once its own bookkeeping is durable. An in-progress or unknown row
+    raises `ConflictError`.
+    """
     claimed = await _claim_invocation(
         session=session,
         account_id=account_id,
@@ -229,91 +241,62 @@ async def execute(
             if existing.request_hash != resolved.request_hash:
                 raise ConflictError("idempotency key already used for a different request")
             replayed = _replay_stored_invocation(existing, now=datetime.now(UTC))
-        except (NotFoundError, ConflictError, UpstreamError, UpstreamTimeoutError):
+        except (NotFoundError, ConflictError):
             await session.rollback()
             raise
         await session.commit()
         return replayed
 
-    upstream = resolved.endpoint.upstream
-    if upstream is None:
-        raise InvalidStateError("service endpoint is not invokable")
-
     gateway_client = ProviderGatewayClient(http_client)
     try:
-        gateway_result = await gateway_client.invoke(
-            base_url=upstream.base_url,
-            path=upstream.path,
-            http_method=upstream.http_method,
+        response = await gateway_client.invoke(
+            base_url=resolved.upstream.base_url,
+            path=resolved.upstream.path,
+            http_method=resolved.upstream.http_method,
             payload=resolved.payload,
             request_hash=resolved.request_hash,
             invocation_id=claimed.id,
             timeout_seconds=resolved.endpoint.timeout_seconds,
             auth=resolved.auth,
         )
-    except (
-        ProviderGatewayTargetError,
-        ProviderGatewayTimeoutError,
-        ProviderGatewayTransportError,
-        ProviderGatewayResponseError,
-    ) as exc:
-        if isinstance(exc, ProviderGatewayTimeoutError):
-            failure_reason = InvocationFailureReason.UPSTREAM_TIMEOUT
-            message = "upstream request timed out"
-            failed_status_code: int | None = None
-            error: UpstreamError | UpstreamTimeoutError = UpstreamTimeoutError(message)
-        elif isinstance(exc, ProviderGatewayResponseError):
-            failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
-            message = str(exc)
-            failed_status_code = exc.upstream_status_code
-            error = UpstreamError(message)
-        else:
-            # An unsafe target and a transport error both mean the upstream never answered.
-            failure_reason = InvocationFailureReason.UPSTREAM_TRANSPORT
-            message = str(exc)
-            failed_status_code = None
-            error = UpstreamError(message)
-
-        claimed.status = InvocationStatus.FAILED
-        claimed.failure_reason = failure_reason
-        claimed.error_message = message
-        claimed.upstream_status_code = failed_status_code
-        claimed.in_progress_until = None
-        await session.commit()
-        logger.error(
-            "invoke failed",
-            extra=build_event_context(
-                "invoke.failed",
-                **{
-                    ACCOUNT_ID_FIELD: account_id,
-                    INVOCATION_ID_FIELD: claimed.id,
-                    SERVICE_ID_FIELD: resolved.service.id,
-                },
-            ),
+    except ProviderGatewayError as exc:
+        _record_failure(
+            claimed,
+            failure_reason=exc.failure_reason,
+            message=str(exc),
+            upstream_status_code=exc.upstream_status_code,
         )
-        raise error from exc
-
-    claimed.status = InvocationStatus.SUCCEEDED
-    claimed.response_payload = to_json_value(gateway_result.payload)
-    claimed.upstream_status_code = gateway_result.status_code
-    claimed.error_message = None
-    claimed.failure_reason = None
-    claimed.in_progress_until = None
+    else:
+        _record_response(claimed, response)
     await session.commit()
-    # The outcome is durable before it is announced, so no log claims a success the
+
+    # The outcome is durable before it is announced, so no log claims an outcome the
     # database never kept.
-    logger.info(
-        "invoke succeeded",
-        extra=build_event_context(
-            "invoke.succeeded",
-            **{
-                ACCOUNT_ID_FIELD: account_id,
-                INVOCATION_ID_FIELD: claimed.id,
-                SERVICE_ID_FIELD: resolved.service.id,
-            },
-        ),
+    event_context = build_event_context(
+        "invoke.failed" if claimed.status is InvocationStatus.FAILED else "invoke.succeeded",
+        **{
+            ACCOUNT_ID_FIELD: account_id,
+            INVOCATION_ID_FIELD: claimed.id,
+            SERVICE_ID_FIELD: resolved.service.id,
+        },
     )
+    if claimed.status is InvocationStatus.FAILED:
+        logger.error("invoke failed", extra=event_context)
+    else:
+        logger.info("invoke succeeded", extra=event_context)
     return claimed
+
+
+def exception_for_failed_invocation(
+    invocation: Invocation,
+) -> UpstreamError | UpstreamTimeoutError:
+    """Return the exception a caller raises for a stored failed invocation."""
+    if invocation.status is not InvocationStatus.FAILED:
+        msg = "exception_for_failed_invocation requires a failed invocation"
+        raise ValueError(msg)
+    if invocation.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
+        return UpstreamTimeoutError("upstream request timed out")
+    return UpstreamError(invocation.error_message or "upstream request failed")
 
 
 async def get_invocation(
@@ -346,17 +329,43 @@ async def list_invocations(*, session: AsyncSession, account_id: int) -> list[In
 
 def _replay_stored_invocation(invocation: Invocation, *, now: datetime) -> Invocation:
     """Answer a repeated request from the invocation row alone, never forwarding it again."""
-    if invocation.status is InvocationStatus.SUCCEEDED:
+    if invocation.status in {InvocationStatus.SUCCEEDED, InvocationStatus.FAILED}:
         return invocation
-    if invocation.status is InvocationStatus.FAILED:
-        if invocation.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT:
-            raise UpstreamTimeoutError("upstream request timed out")
-        raise UpstreamError(invocation.error_message or "upstream request failed")
     if invocation.in_progress_until is not None and invocation.in_progress_until > now:
         raise ConflictError("request already in progress")
     # A missing or expired lease says only that the claiming worker stopped reporting.
     # The upstream may or may not have run, so nothing is forwarded again.
     raise ConflictError("invocation outcome is unknown; recovery required")
+
+
+def _record_response(invocation: Invocation, response: ProviderResponse) -> None:
+    """Write the upstream's answer onto the claimed row, leaving the commit to the caller."""
+    invocation.upstream_status_code = response.status_code
+    invocation.in_progress_until = None
+    if response.ok:
+        invocation.status = InvocationStatus.SUCCEEDED
+        invocation.response_payload = to_json_value(response.payload)
+        invocation.error_message = None
+        invocation.failure_reason = None
+        return
+    invocation.status = InvocationStatus.FAILED
+    invocation.failure_reason = InvocationFailureReason.UPSTREAM_RESPONSE
+    invocation.error_message = "upstream request failed"
+
+
+def _record_failure(
+    invocation: Invocation,
+    *,
+    failure_reason: InvocationFailureReason,
+    message: str,
+    upstream_status_code: int | None,
+) -> None:
+    """Write a failure onto the claimed row, leaving the commit to the caller."""
+    invocation.status = InvocationStatus.FAILED
+    invocation.failure_reason = failure_reason
+    invocation.error_message = message
+    invocation.upstream_status_code = upstream_status_code
+    invocation.in_progress_until = None
 
 
 async def _claim_invocation(

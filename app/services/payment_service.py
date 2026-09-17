@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Protocol, cast, runtime_checkable
 
 from sqlalchemy.exc import IntegrityError
 
-from app.core.enums import PaymentAttemptStatus, PricingModelType
+from app.core.enums import InvocationStatus, PaymentAttemptStatus, PricingModelType
 from app.core.errors import ConflictError, UpstreamError
 from app.core.logging import (
     INVOCATION_ID_FIELD,
@@ -272,6 +272,8 @@ class PaymentService:
                 idempotency_key=attempt.idempotency_key,
                 http_client=self._http_client,
             )
+            if invocation.status is InvocationStatus.FAILED:
+                raise invoke.exception_for_failed_invocation(invocation)
             attempt.invocation_id = invocation.id
             await self._ledger_service.record_paid_invocation(
                 provider_account_id=resolved.service.provider_account_id,

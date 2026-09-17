@@ -10,9 +10,15 @@ from x402.http import encode_payment_signature_header
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
-from app.core.enums import AccessMode, PaymentAttemptStatus, PricingModelType, ServiceLifecycle
+from app.core.enums import (
+    AccessMode,
+    InvocationStatus,
+    PaymentAttemptStatus,
+    PricingModelType,
+    ServiceLifecycle,
+)
 from app.core.errors import UpstreamError
-from app.db.models import Quote, Service, ServiceEndpoint
+from app.db.models import ProviderUpstream, Quote, Service, ServiceEndpoint
 from app.integrations.provider_gateway.signing import HmacAuthConfig
 from app.integrations.x402.facilitator_client import FacilitatorAuthError
 from app.services import invoke
@@ -76,6 +82,7 @@ class FakeCommitSequenceSession:
 @dataclass
 class FakeInvocation:
     id: int
+    status: InvocationStatus = InvocationStatus.SUCCEEDED
 
 
 @dataclass
@@ -380,9 +387,17 @@ def _resolved_target() -> ResolvedInvokeTarget:
         timeout_seconds=30,
         is_enabled=True,
     )
+    upstream = ProviderUpstream(
+        endpoint_id=endpoint.id,
+        base_url="http://127.0.0.1:9000",
+        path="/invoke",
+        http_method="POST",
+        config={},
+    )
     return ResolvedInvokeTarget(
         service=service,
         endpoint=endpoint,
+        upstream=upstream,
         request_hash="a" * 64,
         quote=quote,
         auth=HmacAuthConfig(key_id="gateway-key", secret="super-secret"),

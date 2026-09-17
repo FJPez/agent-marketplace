@@ -7,32 +7,53 @@ from typing import Protocol, runtime_checkable
 import httpx
 from httpx import Response
 
+from app.core.enums import InvocationFailureReason
 from app.core.upstream_targets import UnsafeUpstreamTargetError, validate_upstream_base_url
 from app.integrations.provider_gateway.signing import HmacAuthConfig, build_signed_headers
 
 
-class ProviderGatewayTimeoutError(Exception):
-    pass
+class ProviderGatewayError(Exception):
+    """Raised only when no valid protocol outcome could be observed at all."""
 
-
-class ProviderGatewayTransportError(Exception):
-    pass
-
-
-class ProviderGatewayTargetError(Exception):
-    pass
-
-
-class ProviderGatewayResponseError(Exception):
-    def __init__(self, message: str, *, upstream_status_code: int | None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_reason: InvocationFailureReason,
+        upstream_status_code: int | None = None,
+    ) -> None:
+        self.failure_reason = failure_reason
         self.upstream_status_code = upstream_status_code
         super().__init__(message)
 
 
+class ProviderGatewayTimeoutError(ProviderGatewayError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, failure_reason=InvocationFailureReason.UPSTREAM_TIMEOUT)
+
+
+class ProviderGatewayTransportError(ProviderGatewayError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, failure_reason=InvocationFailureReason.UPSTREAM_TRANSPORT)
+
+
+class ProviderGatewayProtocolError(ProviderGatewayError):
+    def __init__(self, message: str, *, upstream_status_code: int) -> None:
+        super().__init__(
+            message,
+            failure_reason=InvocationFailureReason.UPSTREAM_RESPONSE,
+            upstream_status_code=upstream_status_code,
+        )
+
+
 @dataclass(frozen=True, slots=True)
-class ProviderGatewayResult:
+class ProviderResponse:
     status_code: int
-    payload: object
+    payload: object | None
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status_code < 300
 
 
 @runtime_checkable
@@ -65,7 +86,8 @@ class ProviderGatewayClient:
         invocation_id: int,
         timeout_seconds: int,
         auth: HmacAuthConfig,
-    ) -> ProviderGatewayResult:
+    ) -> ProviderResponse:
+        """Return the upstream's answer, raising only when the upstream never answered."""
         timestamp = str(int(time()))
         headers = build_signed_headers(
             key_id=auth.key_id,
@@ -80,7 +102,8 @@ class ProviderGatewayClient:
         try:
             validated_base_url = validate_upstream_base_url(base_url)
         except UnsafeUpstreamTargetError as exc:
-            raise ProviderGatewayTargetError(str(exc)) from exc
+            # A refused target and a dead connection both mean nothing reached the upstream.
+            raise ProviderGatewayTransportError(str(exc)) from exc
 
         url = f"{validated_base_url.rstrip('/')}{path}"
         try:
@@ -96,17 +119,16 @@ class ProviderGatewayClient:
         except httpx.RequestError as exc:
             raise ProviderGatewayTransportError("upstream request failed") from exc
 
-        if response.status_code < 200 or response.status_code >= 300:
-            raise ProviderGatewayResponseError(
-                "upstream request failed",
-                upstream_status_code=response.status_code,
-            )
+        # A non-2xx body is the provider's error page, not a protocol payload, so it is
+        # never parsed; the status code alone carries the outcome.
+        if not (200 <= response.status_code < 300):
+            return ProviderResponse(status_code=response.status_code, payload=None)
 
         try:
             body = response.json()
         except ValueError as exc:
-            raise ProviderGatewayResponseError(
+            raise ProviderGatewayProtocolError(
                 "upstream returned invalid json",
                 upstream_status_code=response.status_code,
             ) from exc
-        return ProviderGatewayResult(status_code=response.status_code, payload=body)
+        return ProviderResponse(status_code=response.status_code, payload=body)
