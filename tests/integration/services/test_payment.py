@@ -16,6 +16,7 @@ from tests.fixtures.domain import (
 from tests.fixtures.payment import (
     PAID_ENDPOINT_KEY,
     PAID_INVOKE_PAYLOAD,
+    FacilitatorHook,
     MoneyRowsLoader,
     NeverCalledFacilitatorClient,
     PaidInvokeRunner,
@@ -162,6 +163,62 @@ async def test_the_settle_claim_is_durable_before_the_facilitator_is_called(
     attempt = await load_payment_attempt()
     assert observed == [(PaymentAttemptStatus.SETTLING, True)]
     assert attempt.status is PaymentAttemptStatus.CONSUMED
+
+
+async def test_no_transaction_is_open_while_the_facilitator_verifies(
+    paid_target: PaidTarget,
+    run_paid_invoke: PaidInvokeRunner,
+    scripted_facilitator_client: ScriptedFacilitatorFactory,
+    assert_no_open_transaction: FacilitatorHook,
+) -> None:
+    facilitator_client = scripted_facilitator_client(
+        verify_results=[VERIFY_ACCEPTED],
+        settle_results=[build_settle_outcome()],
+        on_verify=assert_no_open_transaction,
+        on_settle=assert_no_open_transaction,
+    )
+
+    outcome = await run_paid_invoke(
+        target=paid_target,
+        facilitator_client=facilitator_client,
+        http_client=ScriptedHttpClient(responses=[Response(status_code=200, json={"ok": True})]),
+    )
+
+    assert isinstance(outcome, PaidInvokeSuccess)
+    assert len(facilitator_client.verify_calls) == 1
+    assert len(facilitator_client.settle_calls) == 1
+
+
+async def test_no_transaction_is_open_while_an_existing_attempt_is_verified(
+    paid_target: PaidTarget,
+    run_paid_invoke: PaidInvokeRunner,
+    scripted_facilitator_client: ScriptedFacilitatorFactory,
+    payment_attempt_factory: PaymentAttemptFactory,
+    assert_no_open_transaction: FacilitatorHook,
+) -> None:
+    # The claim insert conflicts with this row, so the flow reaches the facilitator by
+    # loading the attempt instead of by inserting it.
+    await payment_attempt_factory(
+        consumer_account_id=paid_target.consumer_account_id,
+        quote_id=paid_target.quote_id,
+        status=PaymentAttemptStatus.CHALLENGED,
+    )
+    facilitator_client = scripted_facilitator_client(
+        verify_results=[VERIFY_ACCEPTED],
+        settle_results=[build_settle_outcome()],
+        on_verify=assert_no_open_transaction,
+        on_settle=assert_no_open_transaction,
+    )
+
+    outcome = await run_paid_invoke(
+        target=paid_target,
+        facilitator_client=facilitator_client,
+        http_client=ScriptedHttpClient(responses=[Response(status_code=200, json={"ok": True})]),
+    )
+
+    assert isinstance(outcome, PaidInvokeSuccess)
+    assert len(facilitator_client.verify_calls) == 1
+    assert len(facilitator_client.settle_calls) == 1
 
 
 async def test_an_unanswered_settle_ends_unknown_and_is_never_settled_again(

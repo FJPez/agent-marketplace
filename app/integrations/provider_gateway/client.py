@@ -87,7 +87,7 @@ class ProviderGatewayClient:
         timeout_seconds: int,
         auth: HmacAuthConfig,
     ) -> ProviderResponse:
-        """Return the upstream's answer, raising only when the upstream never answered."""
+        """Return the upstream's answer, raising only when no usable answer was observed."""
         timestamp = str(int(time()))
         headers = build_signed_headers(
             key_id=auth.key_id,
@@ -102,7 +102,8 @@ class ProviderGatewayClient:
         try:
             validated_base_url = validate_upstream_base_url(base_url)
         except UnsafeUpstreamTargetError as exc:
-            # A refused target and a dead connection both mean nothing reached the upstream.
+            # A refused target is reported the same way as a transport fault: no usable
+            # answer was observed, and the request may or may not have reached the upstream.
             raise ProviderGatewayTransportError(str(exc)) from exc
 
         url = f"{validated_base_url.rstrip('/')}{path}"

@@ -4,8 +4,16 @@ Every status change is a compare-and-set against the status the caller believes 
 attempt is in, so two workers holding the same payment identifier can never both act.
 Claims are committed before the facilitator is called and completions after it, which
 keeps a settle that is never answered visible as `settlement_unknown` rather than as
-something safe to retry. Nothing here rolls the session back: a rollback expires every
-loaded object, and the shared session outlives this flow.
+something safe to retry. No database transaction is ever open across external I/O: the
+session is committed before every facilitator call and before every provider forward.
+
+Commits belong to `_claim_attempt`, `_verify`, `_record_verify_failure`, `_settle`,
+`_finish_settled` and `_require_compensation`. Each of those commits either makes a
+claim durable before external I/O or makes a completion durable after it, and no other
+function in this module commits.
+
+Nothing here rolls the session back: a rollback expires every loaded object, and the
+shared session outlives this flow.
 """
 
 from __future__ import annotations
@@ -348,6 +356,10 @@ async def _claim_attempt(
             raise ConflictError(IDENTIFIER_REUSED_DETAIL)
         if attempt.idempotency_key != idempotency_key:
             raise ConflictError(IDENTIFIER_REUSED_DETAIL)
+        # The loads above opened a read transaction, and the caller carries this attempt
+        # straight into the facilitator call, so it ends here rather than staying open
+        # across that call.
+        await session.commit()
         return attempt
 
     owner = await session.scalar(
@@ -484,7 +496,12 @@ async def _settle(
     facilitator_client: SupportsFacilitatorClient,
     settings: Settings,
 ) -> None:
-    """Move the payer's funds exactly once, recording the claim before the call."""
+    """Ask the facilitator to move the payer's funds, at most once from this system.
+
+    The claim on the settle is durable before the call is made. An answered call leaves
+    the attempt settled or failed; an unanswered one leaves the outcome unknown, which is
+    not a state anything here retries.
+    """
     lease_until = datetime.now(UTC) + timedelta(
         seconds=settings.x402_facilitator_timeout_seconds + SETTLE_LEASE_GRACE_SECONDS,
     )
@@ -791,19 +808,18 @@ async def _transition(
     """Move the attempt from one status to the next, or report that someone else did.
 
     The status the caller believes the row is in is part of the WHERE clause, so the
-    database, not a prior read, decides which worker owns the next step.
+    database, not a prior read, decides which worker owns the next step. The updated row
+    comes back from RETURNING and refreshes the loaded attempt, so the caller sees the
+    new state without a second read.
     """
-    changed = await session.scalar(
+    result = await session.execute(
         update(PaymentAttempt)
         .where(PaymentAttempt.id == attempt.id, PaymentAttempt.status == expected)
         .values(status=to, **fields)
-        .returning(PaymentAttempt.id)
-        .execution_options(synchronize_session=False),
+        .returning(PaymentAttempt),
+        execution_options={"populate_existing": True},
     )
-    if changed is None:
-        return False
-    await _reload(session, attempt)
-    return True
+    return result.scalar_one_or_none() is not None
 
 
 async def _reload(session: AsyncSession, attempt: PaymentAttempt) -> None:

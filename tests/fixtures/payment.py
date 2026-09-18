@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 import pytest
 from httpx import Response
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import select, text
 from tests.fixtures.domain import (
     create_consumer_account_record,
     create_endpoint_price_record,
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from app.integrations.x402.protocols import SupportsFacilitatorClient
     from app.services.payment import PaidInvokeSuccess, PaymentRequiredChallenge
 
-type SettleHook = Callable[[async_sessionmaker[AsyncSession]], Awaitable[None]]
+type FacilitatorHook = Callable[[async_sessionmaker[AsyncSession]], Awaitable[None]]
 type VerifyScript = Sequence[VerifyOutcome | Exception]
 type SettleScript = Sequence[SettleOutcome | Exception]
 
@@ -131,11 +131,13 @@ class ScriptedFacilitatorClient:
         verify_results: VerifyScript = (),
         settle_results: SettleScript = (),
         session_factory: async_sessionmaker[AsyncSession] | None = None,
-        on_settle: SettleHook | None = None,
+        on_verify: FacilitatorHook | None = None,
+        on_settle: FacilitatorHook | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.verify_results = list(verify_results)
         self.settle_results = list(settle_results)
+        self.on_verify = on_verify
         self.on_settle = on_settle
         self.verify_calls: list[str] = []
         self.settle_calls: list[str] = []
@@ -147,6 +149,11 @@ class ScriptedFacilitatorClient:
         payload: PaymentPayload,
     ) -> VerifyOutcome:
         self.verify_calls.append(payload.identifier)
+        if self.on_verify is not None:
+            assert self.session_factory is not None
+            # The hook runs while the verify is in flight, so it observes the session
+            # that is driving the flow exactly as the facilitator would hold it.
+            await self.on_verify(self.session_factory)
         result = self._take(self.verify_results, "verify")
         if isinstance(result, Exception):
             raise result
@@ -240,7 +247,8 @@ class ScriptedFacilitatorFactory(Protocol):
         *,
         verify_results: VerifyScript = ...,
         settle_results: SettleScript = ...,
-        on_settle: SettleHook | None = ...,
+        on_verify: FacilitatorHook | None = ...,
+        on_settle: FacilitatorHook | None = ...,
     ) -> ScriptedFacilitatorClient: ...
 
 
@@ -267,16 +275,44 @@ def scripted_facilitator_client(
         *,
         verify_results: VerifyScript = (),
         settle_results: SettleScript = (),
-        on_settle: SettleHook | None = None,
+        on_verify: FacilitatorHook | None = None,
+        on_settle: FacilitatorHook | None = None,
     ) -> ScriptedFacilitatorClient:
         return ScriptedFacilitatorClient(
             session_factory=db_session_factory,
             verify_results=verify_results,
             settle_results=settle_results,
+            on_verify=on_verify,
             on_settle=on_settle,
         )
 
     return build
+
+
+@pytest.fixture
+def assert_no_open_transaction(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> FacilitatorHook:
+    """A facilitator hook that fails if any other connection sits in a transaction.
+
+    The session driving the paid invoke is the one that would be idle in transaction
+    while the fake facilitator awaits this hook, so the count is a real observation of
+    the flow rather than of the test.
+    """
+
+    async def assert_none_open(session_factory: async_sessionmaker[AsyncSession]) -> None:
+        async with db_session_factory() as session:
+            open_transactions = await session.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() "
+                    "AND state = 'idle in transaction' "
+                    "AND pid <> pg_backend_pid()",
+                ),
+            )
+        assert open_transactions == 0, "a database transaction is open across the facilitator call"
+
+    return assert_none_open
 
 
 @pytest.fixture
