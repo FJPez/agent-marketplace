@@ -71,9 +71,15 @@ async def _init_app_state(state: AppState) -> None:
     state.stack.push_async_callback(state.http_client.aclose)
     if state.redis_client is not None:
         state.stack.callback(state.redis_client.connection_pool.disconnect)
+    # The settlement lease is derived from the facilitator call timeout, so the facilitator
+    # gets its own client rather than the provider gateway's read and write timeouts.
+    facilitator_http_client = AsyncClient(
+        timeout=Timeout(state.settings.x402_facilitator_timeout_seconds),
+    )
+    state.stack.push_async_callback(facilitator_http_client.aclose)
     state.facilitator_client = FacilitatorClient(
         url=state.settings.x402_facilitator_url,
-        http_client=state.http_client,
+        http_client=facilitator_http_client,
         cdp_api_key_id=state.settings.x402_cdp_api_key_id,
         cdp_api_key_secret=state.settings.x402_cdp_api_key_secret,
     )

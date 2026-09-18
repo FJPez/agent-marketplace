@@ -1,6 +1,6 @@
 import pytest
 
-from app.services.ledger_service import split_paid_invocation_amount
+from app.services.ledger import split_paid_invocation_amount
 
 
 @pytest.mark.parametrize(

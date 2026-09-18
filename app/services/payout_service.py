@@ -19,7 +19,7 @@ from app.core.logging import (
 from app.integrations.payouts import PayoutExecutionError, PreparedPayout, SupportsPayoutExecutor
 from app.repositories.account_repo import AccountRepository
 from app.repositories.payout_repo import PayoutExecutionRepository
-from app.services.ledger_service import split_paid_invocation_amount
+from app.services.ledger import split_paid_invocation_amount
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession

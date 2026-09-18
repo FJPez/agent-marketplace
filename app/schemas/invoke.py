@@ -29,6 +29,12 @@ class InvokeRequest(BaseModel):
     quote_id: Id | None = None
 
 
+class PaymentRequiredResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    detail: str
+
+
 class InvocationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

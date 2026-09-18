@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Integer, String, text
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,6 +21,13 @@ from app.db.base import Base
 
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "payment_attempt_id",
+            "entry_type",
+            name="uq_ledger_entries_payment_attempt_entry_type",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     provider_account_id: Mapped[int] = mapped_column(

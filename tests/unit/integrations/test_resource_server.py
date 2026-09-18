@@ -1,3 +1,4 @@
+from tests.helpers.x402 import build_payment_requirement, build_settle_outcome
 from x402.http import decode_payment_required_header, decode_payment_response_header
 
 from app.integrations.x402.resource_server import X402ResourceServerAdapter
@@ -5,18 +6,7 @@ from app.integrations.x402.resource_server import X402ResourceServerAdapter
 
 def test_build_payment_required_headers_uses_official_x402_encoding() -> None:
     headers = X402ResourceServerAdapter().build_payment_required_headers(
-        payment_requirement={
-            "scheme": "exact",
-            "asset": "usdc",
-            "amount_minor": 500,
-            "payment_amount": 5_000_000,
-            "currency": "USD",
-            "pay_to": "0x000000000000000000000000000000000000c0de",
-            "network": "base-sepolia",
-            "network_caip2": "eip155:84532",
-            "facilitator_url": "https://x402.org/facilitator",
-            "max_timeout_seconds": 300,
-        }
+        requirement=build_payment_requirement(),
     )
 
     decoded = decode_payment_required_header(headers["PAYMENT-REQUIRED"])
@@ -31,12 +21,7 @@ def test_build_payment_required_headers_uses_official_x402_encoding() -> None:
 
 def test_build_payment_response_headers_uses_official_x402_encoding() -> None:
     headers = X402ResourceServerAdapter().build_payment_response_headers(
-        settle_outcome={
-            "success": True,
-            "transaction": "0xsettled",
-            "network": "eip155:84532",
-            "payer": "0xpayer",
-        }
+        outcome=build_settle_outcome(),
     )
 
     decoded = decode_payment_response_header(headers["PAYMENT-RESPONSE"])
