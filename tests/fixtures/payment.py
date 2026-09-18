@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, NamedTuple, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol
 
 import pytest
 from httpx import Response
@@ -32,7 +32,7 @@ from app.integrations.x402.models import (
 from app.services import invoke, payment
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Coroutine, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -202,6 +202,10 @@ class PaymentAttemptLoader(Protocol):
     def __call__(self, *, payment_identifier: str = ...) -> Awaitable[PaymentAttempt]: ...
 
 
+class PaymentAttemptsLoader(Protocol):
+    def __call__(self) -> Awaitable[list[PaymentAttempt]]: ...
+
+
 class MoneyRowsLoader(Protocol):
     def __call__(self) -> Awaitable[MoneyRows]: ...
 
@@ -218,7 +222,7 @@ class PaidInvokeRunner(Protocol):
         asset: str = ...,
         quote_id: int | None = ...,
         account_id: int | None = ...,
-    ) -> Awaitable[PaymentRequiredChallenge | PaidInvokeSuccess]: ...
+    ) -> Coroutine[Any, Any, PaymentRequiredChallenge | PaidInvokeSuccess]: ...
 
 
 class ReplayedPaidInvokeRunner(Protocol):
@@ -227,7 +231,7 @@ class ReplayedPaidInvokeRunner(Protocol):
         *,
         invocation_id: int,
         account_id: int,
-    ) -> Awaitable[PaidInvokeSuccess]: ...
+    ) -> Coroutine[Any, Any, PaidInvokeSuccess]: ...
 
 
 class ScriptedFacilitatorFactory(Protocol):
@@ -337,6 +341,20 @@ def load_payment_attempt(
             )
         assert attempt is not None
         return attempt
+
+    return load
+
+
+@pytest.fixture
+def load_payment_attempts(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> PaymentAttemptsLoader:
+    async def load() -> list[PaymentAttempt]:
+        async with db_session_factory() as session:
+            attempts = await session.scalars(
+                select(PaymentAttempt).order_by(PaymentAttempt.id),
+            )
+            return list(attempts.all())
 
     return load
 

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 import pytest
 from alembic import command
 from sqlalchemy import inspect, text
+from sqlalchemy.engine.interfaces import ReflectedIndex
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.db.support import MigrationDatabase
@@ -76,6 +77,17 @@ async def get_unique_constraint_names(
             lambda sync_conn: inspect(sync_conn).get_unique_constraints(table_name),
         )
     return {constraint["name"] for constraint in constraints}
+
+
+async def get_index_specs(
+    db_engine: AsyncEngine,
+    table_name: str,
+) -> dict[str, ReflectedIndex]:
+    async with db_engine.connect() as connection:
+        indexes = await connection.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_indexes(table_name),
+        )
+    return {name: index for index in indexes if (name := index["name"]) is not None}
 
 
 def test_head_migration_creates_expected_unified_tables(
@@ -840,11 +852,20 @@ def test_head_migration_adds_the_payment_settlement_claim(
     ledger_unique_constraints = asyncio.run(
         get_unique_constraint_names(db_engine, "ledger_entries"),
     )
+    indexes = asyncio.run(get_index_specs(db_engine, "payment_attempts"))
+    active_request_index = indexes["uq_payment_attempts_active_request"]
+    predicate = active_request_index["dialect_options"]["postgresql_where"]
 
     assert "settle_in_progress_until" in columns
     assert "ck_payment_attempts_lease_only_settling" in check_constraints
     assert "ck_payment_attempts_payment_attempt_status" in check_constraints
     assert "uq_ledger_entries_payment_attempt_entry_type" in ledger_unique_constraints
+    assert active_request_index["unique"] is True
+    assert active_request_index["column_names"] == ["consumer_account_id", "idempotency_key"]
+    # The predicate comes back in the database's own rendering, so it is read for the two
+    # rejected statuses it must leave out rather than compared as text.
+    assert "verify_failed" in predicate
+    assert "settle_failed" in predicate
 
 
 def test_head_migration_rejects_a_settlement_lease_on_a_non_settling_attempt(
@@ -879,17 +900,21 @@ def test_settlement_claim_migration_round_trips_at_head(
         ledger_unique_constraints = asyncio.run(
             get_unique_constraint_names(engine, "ledger_entries"),
         )
+        indexes = asyncio.run(get_index_specs(engine, "payment_attempts"))
         assert asyncio.run(_read_payment_attempt_statuses(engine)) == []
         assert "settle_in_progress_until" not in columns
         assert "ck_payment_attempts_lease_only_settling" not in check_constraints
         assert "uq_ledger_entries_payment_attempt_entry_type" not in ledger_unique_constraints
+        assert "uq_payment_attempts_active_request" not in indexes
 
         command.upgrade(config, "head")
 
         columns = asyncio.run(get_column_specs(engine, "payment_attempts"))
         check_constraints = asyncio.run(get_check_constraint_names(engine, "payment_attempts"))
+        indexes = asyncio.run(get_index_specs(engine, "payment_attempts"))
         assert "settle_in_progress_until" in columns
         assert "ck_payment_attempts_lease_only_settling" in check_constraints
+        assert "uq_payment_attempts_active_request" in indexes
     finally:
         command.downgrade(config, "base")
 

@@ -21,6 +21,7 @@ from tests.fixtures.payment import (
     PaidInvokeRunner,
     PaidTarget,
     PaymentAttemptLoader,
+    PaymentAttemptsLoader,
     ReplayedPaidInvokeRunner,
     ScriptedFacilitatorFactory,
     ScriptedHttpClient,
@@ -47,6 +48,7 @@ VERIFY_ACCEPTED = VerifyOutcome(accepted=True, payer="0xpayer", checked_by="faci
 SETTLE_REJECTED = SettleOutcome(success=False, error_reason="insufficient_funds")
 OTHER_ASSET = "0x00000000000000000000000000000000000000aa"
 EXPIRED_LEASE = datetime(2020, 1, 1, tzinfo=UTC)
+RACE_TIMEOUT_SECONDS = 30
 
 
 async def test_a_fresh_paid_invoke_settles_forwards_once_and_records_the_money(
@@ -511,7 +513,7 @@ async def test_two_workers_racing_the_settle_claim_settle_once(
         on_settle=hold_the_settle,
     )
 
-    winner, loser = await asyncio.gather(
+    winning_worker = asyncio.create_task(
         run_paid_invoke(
             target=paid_target,
             facilitator_client=facilitator_client,
@@ -519,9 +521,19 @@ async def test_two_workers_racing_the_settle_claim_settle_once(
                 responses=[Response(status_code=200, json={"ok": True})],
             ),
         ),
-        run_losing_worker(),
-        return_exceptions=True,
     )
+    losing_worker = asyncio.create_task(run_losing_worker())
+    try:
+        async with asyncio.timeout(RACE_TIMEOUT_SECONDS):
+            winner, loser = await asyncio.gather(
+                winning_worker,
+                losing_worker,
+                return_exceptions=True,
+            )
+    finally:
+        winning_worker.cancel()
+        losing_worker.cancel()
+        await asyncio.gather(winning_worker, losing_worker, return_exceptions=True)
 
     attempt = await load_payment_attempt()
     money = await load_money_rows()
@@ -530,6 +542,151 @@ async def test_two_workers_racing_the_settle_claim_settle_once(
     assert "in progress" in str(loser)
     assert len(facilitator_client.settle_calls) == 1
     assert attempt.status is PaymentAttemptStatus.CONSUMED
+    assert len(money.ledger_entries) == 3
+    assert len(money.payouts) == 1
+
+
+async def test_a_new_payment_cannot_replace_an_attempt_whose_settlement_is_unknown(
+    paid_target: PaidTarget,
+    run_paid_invoke: PaidInvokeRunner,
+    scripted_facilitator_client: ScriptedFacilitatorFactory,
+    never_called_facilitator_client: NeverCalledFacilitatorClient,
+    load_payment_attempts: PaymentAttemptsLoader,
+) -> None:
+    facilitator_client = scripted_facilitator_client(
+        verify_results=[VERIFY_ACCEPTED],
+        settle_results=[FacilitatorTimeoutError("facilitator settle failed: timed out")],
+    )
+
+    with pytest.raises(UpstreamError):
+        await run_paid_invoke(target=paid_target, facilitator_client=facilitator_client)
+
+    # The same request, signed again. Its first payment may already have moved the
+    # payer's funds, so a second one must not be able to move them again.
+    with pytest.raises(ConflictError, match="recovery required"):
+        await run_paid_invoke(
+            target=paid_target,
+            facilitator_client=never_called_facilitator_client,
+            payment_identifier="payment-2",
+        )
+
+    attempts = await load_payment_attempts()
+    assert [attempt.payment_identifier for attempt in attempts] == ["payment-1"]
+    assert attempts[0].status is PaymentAttemptStatus.SETTLEMENT_UNKNOWN
+    assert len(facilitator_client.settle_calls) == 1
+
+
+async def test_a_new_payment_cannot_replace_an_attempt_that_is_settling(
+    paid_target: PaidTarget,
+    run_paid_invoke: PaidInvokeRunner,
+    never_called_facilitator_client: NeverCalledFacilitatorClient,
+    payment_attempt_factory: PaymentAttemptFactory,
+    load_payment_attempts: PaymentAttemptsLoader,
+) -> None:
+    await payment_attempt_factory(
+        consumer_account_id=paid_target.consumer_account_id,
+        quote_id=paid_target.quote_id,
+        status=PaymentAttemptStatus.SETTLING,
+        settle_in_progress_until=datetime.now(UTC) + timedelta(minutes=5),
+    )
+
+    with pytest.raises(ConflictError, match="payment settlement in progress"):
+        await run_paid_invoke(
+            target=paid_target,
+            facilitator_client=never_called_facilitator_client,
+            payment_identifier="payment-2",
+        )
+
+    attempts = await load_payment_attempts()
+    assert [attempt.payment_identifier for attempt in attempts] == ["payment-1"]
+
+
+async def test_a_new_payment_can_replace_a_rejected_attempt(
+    paid_target: PaidTarget,
+    run_paid_invoke: PaidInvokeRunner,
+    scripted_facilitator_client: ScriptedFacilitatorFactory,
+    payment_attempt_factory: PaymentAttemptFactory,
+    load_payment_attempts: PaymentAttemptsLoader,
+) -> None:
+    await payment_attempt_factory(
+        consumer_account_id=paid_target.consumer_account_id,
+        quote_id=paid_target.quote_id,
+        status=PaymentAttemptStatus.VERIFY_FAILED,
+    )
+    facilitator_client = scripted_facilitator_client(
+        verify_results=[VERIFY_ACCEPTED],
+        settle_results=[build_settle_outcome()],
+    )
+
+    outcome = await run_paid_invoke(
+        target=paid_target,
+        facilitator_client=facilitator_client,
+        http_client=ScriptedHttpClient(responses=[Response(status_code=200, json={"ok": True})]),
+        payment_identifier="payment-2",
+    )
+
+    attempts = await load_payment_attempts()
+    assert isinstance(outcome, PaidInvokeSuccess)
+    assert [attempt.payment_identifier for attempt in attempts] == ["payment-1", "payment-2"]
+    assert attempts[1].status is PaymentAttemptStatus.CONSUMED
+
+
+async def test_two_distinct_payments_racing_for_one_request_settle_once(
+    paid_target: PaidTarget,
+    run_paid_invoke: PaidInvokeRunner,
+    scripted_facilitator_client: ScriptedFacilitatorFactory,
+    load_payment_attempts: PaymentAttemptsLoader,
+    load_money_rows: MoneyRowsLoader,
+) -> None:
+    facilitator_client = scripted_facilitator_client(
+        verify_results=[VERIFY_ACCEPTED],
+        settle_results=[build_settle_outcome()],
+    )
+    first_http_client = ScriptedHttpClient(
+        responses=[Response(status_code=200, json={"ok": True})],
+    )
+    second_http_client = ScriptedHttpClient(
+        responses=[Response(status_code=200, json={"ok": True})],
+    )
+
+    # Either worker may win, so both carry everything a winner needs and the scripted
+    # facilitator has exactly one verify and one settle to give away.
+    first_worker = asyncio.create_task(
+        run_paid_invoke(
+            target=paid_target,
+            facilitator_client=facilitator_client,
+            http_client=first_http_client,
+            payment_identifier="payment-1",
+        ),
+    )
+    second_worker = asyncio.create_task(
+        run_paid_invoke(
+            target=paid_target,
+            facilitator_client=facilitator_client,
+            http_client=second_http_client,
+            payment_identifier="payment-2",
+        ),
+    )
+    try:
+        async with asyncio.timeout(RACE_TIMEOUT_SECONDS):
+            outcomes = await asyncio.gather(
+                first_worker,
+                second_worker,
+                return_exceptions=True,
+            )
+    finally:
+        first_worker.cancel()
+        second_worker.cancel()
+        await asyncio.gather(first_worker, second_worker, return_exceptions=True)
+
+    attempts = await load_payment_attempts()
+    money = await load_money_rows()
+    assert sum(isinstance(outcome, PaidInvokeSuccess) for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, ConflictError) for outcome in outcomes) == 1
+    assert len(attempts) == 1
+    assert attempts[0].status is PaymentAttemptStatus.CONSUMED
+    assert len(facilitator_client.settle_calls) == 1
+    assert len(first_http_client.calls) + len(second_http_client.calls) == 1
     assert len(money.ledger_entries) == 3
     assert len(money.payouts) == 1
 

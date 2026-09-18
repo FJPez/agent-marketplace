@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Identity,
+    Index,
     String,
     UniqueConstraint,
     text,
@@ -27,6 +28,15 @@ class PaymentAttempt(Base):
         CheckConstraint(
             "status = 'settling' OR settle_in_progress_until IS NULL",
             name="lease_only_settling",
+        ),
+        # One caller's one request has at most one payment that is still worth money:
+        # only the two definitively rejected payments may be replaced by another.
+        Index(
+            "uq_payment_attempts_active_request",
+            "consumer_account_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("status NOT IN ('verify_failed', 'settle_failed')"),
         ),
     )
 

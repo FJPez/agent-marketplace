@@ -72,6 +72,7 @@ IN_PROGRESS_DETAIL = "payment already in progress"
 SETTLEMENT_UNKNOWN_DETAIL = "payment settlement outcome is unknown; recovery required"
 COMPENSATION_REQUIRED_DETAIL = "payment requires compensation; the invocation did not succeed"
 RECOVERY_REQUIRED_DETAIL = "paid invocation requires recovery"
+REQUEST_ALREADY_PAID_DETAIL = "request already paid; replay it with the original payment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,7 +299,12 @@ async def _claim_attempt(
     payload: PaymentPayload,
     requirement: PaymentRequirement,
 ) -> PaymentAttempt:
-    """Insert the challenged attempt, or load the one that already owns this identifier.
+    """Insert the challenged attempt, or load the payment that already owns this request.
+
+    The insert is skipped on a conflict with either the payment identifier or the active
+    request index, which holds one unresolved payment per caller and idempotency key. The
+    second one is what stops a freshly signed payment from settling a request whose
+    earlier payment may already have moved the payer's funds.
 
     Conflicts are skipped rather than raised so the shared session never has to roll
     back, which would expire every loaded object.
@@ -319,30 +325,67 @@ async def _claim_attempt(
             facilitator_reference=None,
             settle_in_progress_until=None,
         )
-        .on_conflict_do_nothing(index_elements=["payment_identifier"])
+        .on_conflict_do_nothing()
         .returning(PaymentAttempt)
     )
     attempt = await session.scalar(claim)
     await session.commit()
-    if attempt is None:
-        attempt = await session.scalar(
-            select(PaymentAttempt).where(
-                PaymentAttempt.payment_identifier == payload.identifier,
-            ),
-        )
-    if attempt is None:
-        raise ConflictError(IDENTIFIER_REUSED_DETAIL)
+    if attempt is not None:
+        return attempt
 
-    # One payment identifier pays for one caller's one request. The request body is
-    # bound through the quote and through the invocation claim, so these three are
-    # everything the attempt has to agree with.
-    if attempt.consumer_account_id != actor.account_id:
-        raise ConflictError(IDENTIFIER_REUSED_DETAIL)
-    if attempt.quote_id != quote.id:
-        raise ConflictError(IDENTIFIER_REUSED_DETAIL)
-    if attempt.idempotency_key != idempotency_key:
-        raise ConflictError(IDENTIFIER_REUSED_DETAIL)
-    return attempt
+    attempt = await session.scalar(
+        select(PaymentAttempt).where(
+            PaymentAttempt.payment_identifier == payload.identifier,
+        ),
+    )
+    if attempt is not None:
+        # One payment identifier pays for one caller's one request. The request body is
+        # bound through the quote and through the invocation claim, so these three are
+        # everything the attempt has to agree with.
+        if attempt.consumer_account_id != actor.account_id:
+            raise ConflictError(IDENTIFIER_REUSED_DETAIL)
+        if attempt.quote_id != quote.id:
+            raise ConflictError(IDENTIFIER_REUSED_DETAIL)
+        if attempt.idempotency_key != idempotency_key:
+            raise ConflictError(IDENTIFIER_REUSED_DETAIL)
+        return attempt
+
+    owner = await session.scalar(
+        select(PaymentAttempt).where(
+            PaymentAttempt.consumer_account_id == actor.account_id,
+            PaymentAttempt.idempotency_key == idempotency_key,
+            PaymentAttempt.status.not_in(
+                (
+                    PaymentAttemptStatus.VERIFY_FAILED,
+                    PaymentAttemptStatus.SETTLE_FAILED,
+                ),
+            ),
+        ),
+    )
+    if owner is not None:
+        raise _refuse_replacement_payment(owner)
+    # The row the insert conflicted with was rejected or removed in between, so this
+    # request has no owner to answer by and nothing here may start a second payment.
+    raise ConflictError(IN_PROGRESS_DETAIL)
+
+
+def _refuse_replacement_payment(owner: PaymentAttempt) -> ConflictError:
+    """Answer a second payment by the one that already owns the request, and refuse it.
+
+    The new payment is never carried forward: the owner may already have moved funds, so
+    the request is answered by where the owner stands and left for its own retry.
+    """
+    if owner.status is PaymentAttemptStatus.SETTLING:
+        return _settlement_in_flight_error(owner)
+    if owner.status is PaymentAttemptStatus.SETTLEMENT_UNKNOWN:
+        return ConflictError(SETTLEMENT_UNKNOWN_DETAIL)
+    if owner.status is PaymentAttemptStatus.SETTLED:
+        return ConflictError(RECOVERY_REQUIRED_DETAIL)
+    if owner.status is PaymentAttemptStatus.COMPENSATION_REQUIRED:
+        return ConflictError(COMPENSATION_REQUIRED_DETAIL)
+    if owner.status is PaymentAttemptStatus.CONSUMED:
+        return ConflictError(REQUEST_ALREADY_PAID_DETAIL)
+    return ConflictError(IN_PROGRESS_DETAIL)
 
 
 async def _verify(

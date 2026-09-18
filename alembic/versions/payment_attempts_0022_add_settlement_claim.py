@@ -7,6 +7,12 @@ ends in ``settlement_unknown`` instead of looking retryable. The CHECK keeps the
 lease on settling rows only, and the ledger unique constraint makes the three
 entries for one attempt insertable exactly once.
 
+Settlement safety belongs to the request rather than to one signed payment, so a
+partial unique index holds at most one active payment per consumer account and
+idempotency key. Only ``verify_failed`` and ``settle_failed`` are outside it:
+those are the definitively rejected payments a fresh one may replace, while every
+other status is an active or unresolved owner of the request.
+
 This migration is schema-reversible only: the downgrade deletes every attempt
 left in the two new statuses, because the older schema cannot express them.
 
@@ -30,6 +36,8 @@ STATUS_CHECK_NAME = "ck_payment_attempts_payment_attempt_status"
 # The metadata naming convention expands this to ck_payment_attempts_lease_only_settling.
 LEASE_CHECK_NAME = "lease_only_settling"
 LEDGER_ENTRY_UNIQUE_NAME = "uq_ledger_entries_payment_attempt_entry_type"
+ACTIVE_REQUEST_INDEX_NAME = "uq_payment_attempts_active_request"
+ACTIVE_REQUEST_PREDICATE = "status NOT IN ('verify_failed', 'settle_failed')"
 
 EXPANDED_STATUS_CHECK = (
     "status IN ("
@@ -73,6 +81,13 @@ def upgrade() -> None:
         "payment_attempts",
         "status = 'settling' OR settle_in_progress_until IS NULL",
     )
+    op.create_index(
+        ACTIVE_REQUEST_INDEX_NAME,
+        "payment_attempts",
+        ["consumer_account_id", "idempotency_key"],
+        unique=True,
+        postgresql_where=sa.text(ACTIVE_REQUEST_PREDICATE),
+    )
     op.create_unique_constraint(
         LEDGER_ENTRY_UNIQUE_NAME,
         "ledger_entries",
@@ -83,6 +98,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DELETE FROM payment_attempts WHERE status IN ('settling', 'settlement_unknown')")
     op.drop_constraint(LEDGER_ENTRY_UNIQUE_NAME, "ledger_entries", type_="unique")
+    op.drop_index(ACTIVE_REQUEST_INDEX_NAME, table_name="payment_attempts")
     op.drop_constraint(LEASE_CHECK_NAME, "payment_attempts", type_="check")
     op.drop_column("payment_attempts", "settle_in_progress_until")
     op.execute(f"ALTER TABLE payment_attempts DROP CONSTRAINT IF EXISTS {STATUS_CHECK_NAME}")
