@@ -3,13 +3,12 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from app.schemas.common import DisplayName, Id, RequestHash, Timestamp
+from app.schemas.common import DisplayName, Id, Timestamp
 
 
 class CommonModel(BaseModel):
     id: Id
     created_at: Timestamp
-    request_hash: RequestHash
 
 
 class DisplayNameModel(BaseModel):
@@ -21,13 +20,11 @@ def test_common_aliases_accept_valid_values() -> None:
         {
             "id": 1,
             "created_at": "2026-03-11T12:30:00Z",
-            "request_hash": "a" * 64,
         }
     )
 
     assert model.id == 1
     assert model.created_at == datetime(2026, 3, 11, 12, 30, tzinfo=UTC)
-    assert model.request_hash == "a" * 64
 
 
 def test_display_name_alias_strips_surrounding_whitespace() -> None:
@@ -39,62 +36,12 @@ def test_display_name_alias_strips_surrounding_whitespace() -> None:
 @pytest.mark.parametrize(
     ("payload", "field_name"),
     [
-        (
-            {
-                "id": 0,
-                "created_at": "2026-03-11T12:30:00Z",
-                "request_hash": "a" * 64,
-            },
-            "id",
-        ),
-        (
-            {
-                "id": 1,
-                "created_at": "2026-03-11T12:30:00",
-                "request_hash": "a" * 64,
-            },
-            "created_at",
-        ),
-        (
-            {
-                "id": 1,
-                "created_at": "2026-03-11T12:30:00Z",
-                "request_hash": "not-a-hash",
-            },
-            "request_hash",
-        ),
-        (
-            {
-                "id": True,
-                "created_at": "2026-03-11T12:30:00Z",
-                "request_hash": "a" * 64,
-            },
-            "id",
-        ),
-        (
-            {
-                "id": False,
-                "created_at": "2026-03-11T12:30:00Z",
-                "request_hash": "a" * 64,
-            },
-            "id",
-        ),
-        (
-            {
-                "id": "1",
-                "created_at": "2026-03-11T12:30:00Z",
-                "request_hash": "a" * 64,
-            },
-            "id",
-        ),
-        (
-            {
-                "id": 1.0,
-                "created_at": "2026-03-11T12:30:00Z",
-                "request_hash": "a" * 64,
-            },
-            "id",
-        ),
+        ({"id": 0, "created_at": "2026-03-11T12:30:00Z"}, "id"),
+        ({"id": 1, "created_at": "2026-03-11T12:30:00"}, "created_at"),
+        ({"id": True, "created_at": "2026-03-11T12:30:00Z"}, "id"),
+        ({"id": False, "created_at": "2026-03-11T12:30:00Z"}, "id"),
+        ({"id": "1", "created_at": "2026-03-11T12:30:00Z"}, "id"),
+        ({"id": 1.0, "created_at": "2026-03-11T12:30:00Z"}, "id"),
     ],
 )
 def test_common_aliases_reject_invalid_values(

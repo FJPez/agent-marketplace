@@ -1,4 +1,4 @@
-"""Public service identifier shared by the discovery and quote APIs."""
+"""Public service identifier used by the discovery API."""
 
 from typing import Annotated
 

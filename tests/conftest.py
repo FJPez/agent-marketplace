@@ -42,7 +42,6 @@ from app.main import create_app
 
 pytest_plugins = (
     "tests.fixtures.domain",
-    "tests.fixtures.payment",
     "tests.fixtures.settings",
 )
 

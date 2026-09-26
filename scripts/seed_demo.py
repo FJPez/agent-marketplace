@@ -353,7 +353,7 @@ async def seed_demo_data() -> SeedResult:
                 key=PAID_ENDPOINT_KEY,
                 access_mode=AccessMode.PAID,
                 name="Paid Summary",
-                summary="A paid endpoint for quote and x402 testing.",
+                summary="A paid endpoint for pricing and discovery testing.",
                 timeout_seconds=30,
             )
             await _upsert_upstream(

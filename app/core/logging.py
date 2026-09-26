@@ -13,13 +13,6 @@ DURATION_MS_FIELD: Final[str] = "duration_ms"
 ACCOUNT_ID_FIELD: Final[str] = "account_id"
 PROVIDER_ACCOUNT_ID_FIELD: Final[str] = "provider_account_id"
 SERVICE_ID_FIELD: Final[str] = "service_id"
-QUOTE_ID_FIELD: Final[str] = "quote_id"
-INVOCATION_ID_FIELD: Final[str] = "invocation_id"
-PAYMENT_ATTEMPT_ID_FIELD: Final[str] = "payment_attempt_id"
-PAYOUT_ID_FIELD: Final[str] = "payout_id"
-PAYOUT_STATUS_FIELD: Final[str] = "payout_status"
-PAYOUT_COUNT_FIELD: Final[str] = "payout_count"
-TRANSFER_REFERENCE_FIELD: Final[str] = "transfer_reference"
 ERROR_CODE_FIELD: Final[str] = "error_code"
 
 _request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)

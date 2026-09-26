@@ -18,7 +18,6 @@ from app.core.errors import (
 )
 from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.health_service import ReadinessCheckError
-from app.services.payout_service import PayoutConflictError
 
 Handler = Callable[[Request, Exception], Awaitable[Response]]
 
@@ -30,7 +29,6 @@ STATUS_CODES: dict[type[Exception], int] = {
     NotFoundError: status.HTTP_404_NOT_FOUND,
     ConflictError: status.HTTP_409_CONFLICT,
     InvalidStateError: status.HTTP_409_CONFLICT,
-    PayoutConflictError: status.HTTP_409_CONFLICT,
     PayloadSchemaMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     UpstreamError: status.HTTP_502_BAD_GATEWAY,
