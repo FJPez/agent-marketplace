@@ -107,8 +107,7 @@ async def _get_or_create_service(session: AsyncSession, *, provider_account_id: 
             name="Demo Agent Service",
             summary="Free and paid demo endpoints for manual marketplace testing.",
             description=(
-                "A seeded service for manual testing of discovery, quoting, free invoke, "
-                "and paid invoke flows."
+                "A seeded service for manual testing of discovery, publishing, and pricing flows."
             ),
             lifecycle=ServiceLifecycle.ACTIVE,
         )
@@ -119,8 +118,7 @@ async def _get_or_create_service(session: AsyncSession, *, provider_account_id: 
     service.name = "Demo Agent Service"
     service.summary = "Free and paid demo endpoints for manual marketplace testing."
     service.description = (
-        "A seeded service for manual testing of discovery, quoting, free invoke, and paid "
-        "invoke flows."
+        "A seeded service for manual testing of discovery, publishing, and pricing flows."
     )
     service.lifecycle = ServiceLifecycle.ACTIVE
     await session.flush()
