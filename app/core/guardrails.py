@@ -10,7 +10,7 @@ from app.core.config import get_settings
 from app.core.errors import UnauthenticatedError
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
-    build_actor_rate_limit_key,
+    build_client_rate_limit_key,
     get_rate_limits_backend,
 )
 from app.services.auth import resolve_actor
@@ -41,22 +41,11 @@ class ApiGuardrails:
         )
 
     async def _resolve_owner_key(self, request: Request) -> str:
-        cached_key = getattr(request.state, "rate_limit_owner_key", None)
-        if isinstance(cached_key, str):
-            return cached_key
-
         authorization = request.headers.get("Authorization")
-        if authorization is None:
-            owner_key = build_actor_rate_limit_key(request)
-            request.state.rate_limit_owner_key = owner_key
-            return owner_key
-
         app_state = getattr(request.app.state, "app_state", None)
         session_factory = getattr(app_state, "db_session_factory", None)
-        if session_factory is None:
-            owner_key = build_actor_rate_limit_key(request)
-            request.state.rate_limit_owner_key = owner_key
-            return owner_key
+        if authorization is None or session_factory is None:
+            return build_client_rate_limit_key(request)
 
         async with session_factory() as session:
             try:
@@ -67,12 +56,8 @@ class ApiGuardrails:
                     touch_api_key=False,
                 )
             except UnauthenticatedError:
-                owner_key = build_actor_rate_limit_key(request)
-            else:
-                owner_key = f"account:{actor.account_id}"
-
-        request.state.rate_limit_owner_key = owner_key
-        return owner_key
+                return build_client_rate_limit_key(request)
+        return f"account:{actor.account_id}"
 
 
 def install_guardrails(app: FastAPI, *, guardrails: ApiGuardrails) -> None:
