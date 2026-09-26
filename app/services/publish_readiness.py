@@ -1,21 +1,19 @@
 """Pure publish-readiness rules for the provider service graph."""
 
-from collections.abc import Mapping
-
 from app.core.enums import AccessMode
 from app.core.errors import InvalidInputError
+from app.core.json_types import JsonObject
 from app.db.models.service import Service
 
 
-def _has_hmac_auth_config(config: Mapping[str, object]) -> bool:
+def _has_hmac_auth_config(config: JsonObject) -> bool:
     auth = config.get("auth")
     if not isinstance(auth, dict):
         return False
-    auth_map = {str(key): value for key, value in auth.items()}
     return (
-        auth_map.get("type") == "hmac_sha256"
-        and isinstance(auth_map.get("key_id"), str)
-        and isinstance(auth_map.get("secret"), str)
+        auth.get("type") == "hmac_sha256"
+        and isinstance(auth.get("key_id"), str)
+        and isinstance(auth.get("secret"), str)
     )
 
 
