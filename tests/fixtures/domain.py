@@ -152,29 +152,6 @@ _DEFAULT_UPSTREAM_CONFIG = {
 }
 
 
-async def _ensure_service_revision(
-    session: AsyncSession,
-    *,
-    service: Service,
-) -> ServiceRevision:
-    if service.current_revision_id is not None and service.current_change_token is not None:
-        revision = await session.get(ServiceRevision, service.current_revision_id)
-        if revision is not None:
-            return revision
-
-    revision = ServiceRevision(
-        service_id=service.id,
-        revision_number=1,
-        change_token="c" * 64,
-        snapshot={"slug": service.slug},
-    )
-    session.add(revision)
-    await session.flush()
-    service.current_revision_id = revision.id
-    service.current_change_token = revision.change_token
-    return revision
-
-
 async def create_provider_account_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
