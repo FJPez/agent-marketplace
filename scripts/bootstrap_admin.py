@@ -53,11 +53,8 @@ async def bootstrap_admin(*, database_url: str, admin_wallet: str) -> str:
                         is_admin=True,
                     )
                 )
-                await session.flush()
-                return wallet_address
-
-            account.is_admin = True
-            await session.flush()
+            else:
+                account.is_admin = True
             return wallet_address
     finally:
         await engine.dispose()

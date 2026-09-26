@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 DEMO_PROVIDER_NAME = "Demo Provider"
 DEMO_SERVICE_SLUG = "demo-agent-service"
+DEMO_SERVICE_NAME = "Demo Agent Service"
+DEMO_SERVICE_SUMMARY = "Free and paid demo endpoints for manual marketplace testing."
+DEMO_SERVICE_DESCRIPTION = (
+    "A seeded service for manual testing of discovery, publishing, and pricing flows."
+)
 DEMO_CHANGE_TOKEN = "d" * 64
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
@@ -104,22 +109,18 @@ async def _get_or_create_service(session: AsyncSession, *, provider_account_id: 
         service = Service(
             provider_account_id=provider_account_id,
             slug=DEMO_SERVICE_SLUG,
-            name="Demo Agent Service",
-            summary="Free and paid demo endpoints for manual marketplace testing.",
-            description=(
-                "A seeded service for manual testing of discovery, publishing, and pricing flows."
-            ),
+            name=DEMO_SERVICE_NAME,
+            summary=DEMO_SERVICE_SUMMARY,
+            description=DEMO_SERVICE_DESCRIPTION,
             lifecycle=ServiceLifecycle.ACTIVE,
         )
         session.add(service)
         await session.flush()
 
     service.provider_account_id = provider_account_id
-    service.name = "Demo Agent Service"
-    service.summary = "Free and paid demo endpoints for manual marketplace testing."
-    service.description = (
-        "A seeded service for manual testing of discovery, publishing, and pricing flows."
-    )
+    service.name = DEMO_SERVICE_NAME
+    service.summary = DEMO_SERVICE_SUMMARY
+    service.description = DEMO_SERVICE_DESCRIPTION
     service.lifecycle = ServiceLifecycle.ACTIVE
     await session.flush()
     return service
