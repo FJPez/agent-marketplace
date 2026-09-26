@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Identity,
@@ -36,7 +37,17 @@ if TYPE_CHECKING:
 
 class ServiceEndpoint(Base):
     __tablename__ = "service_endpoints"
-    __table_args__ = (UniqueConstraint("service_id", "key"),)
+    __table_args__ = (
+        UniqueConstraint("service_id", "key"),
+        CheckConstraint(
+            "jsonb_typeof(request_schema) = 'object'",
+            name="request_schema_json_object",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(response_schema) = 'object'",
+            name="response_schema_json_object",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     service_id: Mapped[int] = mapped_column(

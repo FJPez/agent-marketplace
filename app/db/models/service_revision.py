@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Identity,
@@ -24,7 +25,13 @@ if TYPE_CHECKING:
 
 class ServiceRevision(Base):
     __tablename__ = "service_revisions"
-    __table_args__ = (UniqueConstraint("service_id", "revision_number"),)
+    __table_args__ = (
+        UniqueConstraint("service_id", "revision_number"),
+        CheckConstraint(
+            "jsonb_typeof(snapshot) = 'object'",
+            name="snapshot_json_object",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
     service_id: Mapped[int] = mapped_column(

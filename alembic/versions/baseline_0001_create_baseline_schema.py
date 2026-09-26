@@ -123,6 +123,10 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
+        sa.CheckConstraint(
+            "jsonb_typeof(snapshot) = 'object'",
+            name=op.f("ck_service_revisions_snapshot_json_object"),
+        ),
         sa.ForeignKeyConstraint(
             ["service_id"],
             ["services.id"],
@@ -239,6 +243,14 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(request_schema) = 'object'",
+            name=op.f("ck_service_endpoints_request_schema_json_object"),
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(response_schema) = 'object'",
+            name=op.f("ck_service_endpoints_response_schema_json_object"),
         ),
         sa.ForeignKeyConstraint(
             ["service_id"],
@@ -378,6 +390,10 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
             nullable=False,
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(config) = 'object'",
+            name=op.f("ck_provider_upstreams_config_json_object"),
         ),
         sa.ForeignKeyConstraint(
             ["endpoint_id"],
