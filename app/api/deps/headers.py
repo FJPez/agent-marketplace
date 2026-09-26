@@ -4,10 +4,11 @@ from fastapi import Header
 from pydantic import StringConstraints
 
 from app.core.http_headers import IDEMPOTENCY_KEY_HEADER
+from app.integrations.x402.headers import PAYMENT_SIGNATURE_HEADER
 
 ValidatedIdempotencyKey = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=255),
     Header(alias=IDEMPOTENCY_KEY_HEADER),
 ]
-PaymentSignatureHeader = Annotated[str | None, Header(alias="PAYMENT-SIGNATURE")]
+PaymentSignatureHeader = Annotated[str | None, Header(alias=PAYMENT_SIGNATURE_HEADER)]

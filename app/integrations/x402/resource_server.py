@@ -1,27 +1,30 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from x402 import PaymentRequired
 from x402.http import encode_payment_required_header, encode_payment_response_header
 
-from app.integrations.x402.models import to_payment_requirements, to_settle_response
+from app.integrations.x402.headers import PAYMENT_REQUIRED_HEADER, PAYMENT_RESPONSE_HEADER
+
+if TYPE_CHECKING:
+    from app.integrations.x402.models import PaymentRequirement, SettleOutcome
 
 
 class X402ResourceServerAdapter:
     def build_payment_required_headers(
         self,
         *,
-        payment_requirement: dict[str, object],
+        requirement: PaymentRequirement,
     ) -> dict[str, str]:
         header_value = encode_payment_required_header(
-            PaymentRequired(accepts=[to_payment_requirements(payment_requirement)])
+            PaymentRequired(accepts=[requirement.to_sdk()])
         )
-        return {"PAYMENT-REQUIRED": header_value}
+        return {PAYMENT_REQUIRED_HEADER: header_value}
 
     def build_payment_response_headers(
         self,
         *,
-        settle_outcome: dict[str, object],
+        outcome: SettleOutcome,
     ) -> dict[str, str]:
-        return {
-            "PAYMENT-RESPONSE": encode_payment_response_header(to_settle_response(settle_outcome))
-        }
+        return {PAYMENT_RESPONSE_HEADER: encode_payment_response_header(outcome.to_sdk())}

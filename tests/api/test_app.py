@@ -11,6 +11,7 @@ from app.core import lifespan as lifespan_module
 from app.core.config import AppEnv, Settings
 from app.core.lifespan import get_app_state
 from app.integrations.payouts import BaseSepoliaUsdcPayoutExecutor
+from app.integrations.x402.facilitator_client import FacilitatorConfigError
 from app.main import create_app
 
 
@@ -72,7 +73,7 @@ def test_create_app_fails_fast_for_cdp_facilitator_without_credentials(
 
     with (
         pytest.raises(
-            RuntimeError,
+            FacilitatorConfigError,
             match="APP_X402_CDP_API_KEY_ID and APP_X402_CDP_API_KEY_SECRET are required",
         ),
         TestClient(app),

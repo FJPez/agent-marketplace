@@ -1,11 +1,12 @@
 from app.core.config import PaymentToken
+from app.integrations.x402.models import PaymentRequirement
 
 
 class PaymentRequirementConfigError(Exception):
     pass
 
 
-_USD_MINOR_UNIT_EXPONENT = 2
+USD_MINOR_UNIT_EXPONENT = 2
 
 
 def build_payment_requirement(
@@ -17,7 +18,7 @@ def build_payment_requirement(
     facilitator_url: str,
     network: str,
     network_caip2: str,
-) -> dict[str, object]:
+) -> PaymentRequirement:
     if treasury_address is None:
         raise PaymentRequirementConfigError(
             "payment configuration is incomplete: "
@@ -28,27 +29,27 @@ def build_payment_requirement(
     if currency != "USD":
         raise PaymentRequirementConfigError("payment currency is not supported")
 
-    return {
-        "scheme": "exact",
-        "asset": payment_token.address,
-        "amount_minor": amount_minor,
-        "payment_amount": _to_payment_amount(
+    return PaymentRequirement(
+        scheme="exact",
+        asset=payment_token.address,
+        amount_minor=amount_minor,
+        payment_amount=_to_payment_amount(
             amount_minor=amount_minor,
             asset_decimals=payment_token.decimals,
         ),
-        "currency": currency,
-        "pay_to": treasury_address,
-        "network": network,
-        "network_caip2": network_caip2,
-        "facilitator_url": facilitator_url,
-        "max_timeout_seconds": 300,
-        "name": payment_token.name,
-        "version": payment_token.version,
-    }
+        currency=currency,
+        pay_to=treasury_address,
+        network=network,
+        network_caip2=network_caip2,
+        facilitator_url=facilitator_url,
+        max_timeout_seconds=300,
+        name=payment_token.name,
+        version=payment_token.version,
+    )
 
 
 def _to_payment_amount(*, amount_minor: int, asset_decimals: int) -> int:
-    exponent_delta = asset_decimals - _USD_MINOR_UNIT_EXPONENT
+    exponent_delta = asset_decimals - USD_MINOR_UNIT_EXPONENT
     if exponent_delta < 0:
         msg = "asset decimals cannot be less than USD minor unit precision"
         raise PaymentRequirementConfigError(msg)

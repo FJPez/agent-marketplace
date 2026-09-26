@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 import logging
-from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pytest
 from httpx import AsyncClient, Response
@@ -19,9 +17,17 @@ from tests.fixtures.domain import (
     create_service_record,
     create_upstream_record,
 )
+from tests.fixtures.payment import (
+    FakeX402ResourceServer,
+    ScriptedFacilitatorClient,
+    ScriptedHttpClient,
+)
 from tests.helpers.auth import auth_headers_for_account_id
-from x402 import PaymentPayload
-from x402.http import encode_payment_signature_header
+from tests.helpers.x402 import (
+    build_payment_requirement,
+    build_settle_outcome,
+    payment_signature_header,
+)
 
 from app.core.enums import (
     AccessMode,
@@ -44,7 +50,8 @@ from app.core.logging import (
 from app.core.request_hash import hash_request_body
 from app.db.models import Invocation, LedgerEntry, PaymentAttempt, Payout
 from app.integrations.payouts import PreparedPayout, SentPayout
-from app.integrations.x402.facilitator_client import FacilitatorUnavailableError
+from app.integrations.x402.facilitator_client import FacilitatorTransportError
+from app.integrations.x402.models import PaymentPayload, SettleOutcome, VerifyOutcome
 from app.integrations.x402.resource_server import X402ResourceServerAdapter
 
 if TYPE_CHECKING:
@@ -242,8 +249,8 @@ async def _seed_payment_attempt(
     idempotency_key: str,
     payment_identifier: str,
     status: PaymentAttemptStatus = PaymentAttemptStatus.CHALLENGED,
-    verify_outcome: dict[str, object] | None,
-    settle_outcome: dict[str, object] | None,
+    verify_outcome: VerifyOutcome | None,
+    settle_outcome: SettleOutcome | None,
 ) -> int:
     async with db_session_factory.begin() as session:
         attempt = PaymentAttempt(
@@ -253,102 +260,21 @@ async def _seed_payment_attempt(
             idempotency_key=idempotency_key,
             payment_identifier=payment_identifier,
             status=status,
-            payment_requirement={"amount_minor": 500},
-            payment_payload={"payment_identifier": payment_identifier},
-            verify_outcome=verify_outcome,
-            settle_outcome=settle_outcome,
-            facilitator_reference="settle-1",
+            payment_requirement=build_payment_requirement().model_dump(mode="json"),
+            payment_payload=PaymentPayload.from_header(
+                payment_signature_header(payment_identifier=payment_identifier)
+            ).wire,
+            verify_outcome=(
+                None if verify_outcome is None else verify_outcome.model_dump(mode="json")
+            ),
+            settle_outcome=(
+                None if settle_outcome is None else settle_outcome.model_dump(mode="json")
+            ),
+            facilitator_reference="0xsettled",
         )
         session.add(attempt)
         await session.flush()
         return attempt.id
-
-
-@dataclass
-class _FakeHttpClient:
-    responses: list[Response] = field(default_factory=list)
-    calls: list[dict[str, Any]] = field(default_factory=list)
-
-    async def request(
-        self,
-        method: str,
-        url: str,
-        *,
-        json: dict[str, object],
-        headers: dict[str, str],
-        **kwargs: object,
-    ) -> Response:
-        self.calls.append(
-            {
-                "method": method,
-                "url": url,
-                "json": json,
-                "headers": headers,
-                "kwargs": kwargs,
-            }
-        )
-        if not self.responses:
-            raise AssertionError("no fake upstream response configured")
-        return self.responses.pop(0)
-
-    async def aclose(self) -> None:
-        return None
-
-
-@dataclass
-class _FakeFacilitatorClient:
-    verify_outcomes: list[dict[str, object]]
-    settle_outcomes: list[dict[str, object]]
-    verify_calls: list[dict[str, object]] = field(default_factory=list)
-    settle_calls: list[dict[str, object]] = field(default_factory=list)
-
-    async def verify(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
-        self.verify_calls.append(
-            {
-                "payment_requirement": payment_requirement,
-                "payment_payload": payment_payload,
-            }
-        )
-        if not self.verify_outcomes:
-            raise AssertionError("no fake verify outcome configured")
-        return self.verify_outcomes.pop(0)
-
-    async def settle(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
-        self.settle_calls.append(
-            {
-                "payment_requirement": payment_requirement,
-                "payment_payload": payment_payload,
-            }
-        )
-        if not self.settle_outcomes:
-            raise AssertionError("no fake settle outcome configured")
-        return self.settle_outcomes.pop(0)
-
-
-class _FakeX402ResourceServer:
-    def build_payment_required_headers(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-    ) -> dict[str, str]:
-        return {"PAYMENT-REQUIRED": json.dumps(payment_requirement, sort_keys=True)}
-
-    def build_payment_response_headers(
-        self,
-        *,
-        settle_outcome: dict[str, object],
-    ) -> dict[str, str]:
-        return {"PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
 
 
 class _SuccessfulPayoutExecutor:
@@ -418,54 +344,26 @@ class _FailingPayoutExecutor:
         raise RuntimeError("rpc unavailable")
 
 
-class _UnavailableFacilitatorClient:
-    async def verify(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
-        raise FacilitatorUnavailableError("facilitator unavailable")
-
-    async def settle(
-        self,
-        *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
-        raise AssertionError("settle should not be called")
+def _verify_accepted() -> VerifyOutcome:
+    return VerifyOutcome(accepted=True, payer="0xpayer", checked_by="facilitator")
 
 
-def _payment_header(
-    *,
-    payment_identifier: str,
-    asset: str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-) -> str:
-    return encode_payment_signature_header(
-        PaymentPayload.model_validate(
-            {
-                "payload": {
-                    "authorization": {"nonce": payment_identifier},
-                    "transaction": "0xabc123",
-                },
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "eip155:84532",
-                    "asset": asset,
-                    "amount": "500",
-                    "payTo": "0x000000000000000000000000000000000000c0de",
-                    "maxTimeoutSeconds": 300,
-                    "extra": {},
-                },
-            }
-        )
+def _verify_rejected() -> VerifyOutcome:
+    return VerifyOutcome(
+        accepted=False,
+        reason="invalid_signature",
+        checked_by="facilitator",
     )
+
+
+def _settle_rejected() -> SettleOutcome:
+    return SettleOutcome(success=False, error_reason="insufficient_funds")
 
 
 def _install_payment_state(
     app: FastAPI,
     *,
-    upstream_client: _FakeHttpClient,
+    upstream_client: ScriptedHttpClient,
     facilitator_client: object,
     x402_resource_server: object | None = None,
     payout_executor: object | None = None,
@@ -474,7 +372,7 @@ def _install_payment_state(
     state = get_app_state(app)
     state.http_client = upstream_client
     state.facilitator_client = facilitator_client
-    state.x402_resource_server = x402_resource_server or _FakeX402ResourceServer()
+    state.x402_resource_server = x402_resource_server or FakeX402ResourceServer()
     state.settings.payouts_enabled = payouts_enabled
     state.settings.treasury_private_key = SecretStr("0x" + "11" * 32)
     state.payout_executor = payout_executor
@@ -498,8 +396,8 @@ async def test_paid_invoke_without_payment_returns_402_and_creates_no_records(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(),
-        facilitator_client=_FakeFacilitatorClient(verify_outcomes=[], settle_outcomes=[]),
+        upstream_client=ScriptedHttpClient(),
+        facilitator_client=ScriptedFacilitatorClient(verify_results=[], settle_results=[]),
     )
 
     response = await async_client.post(
@@ -537,12 +435,12 @@ async def test_paid_invoke_with_valid_payment_returns_success_and_payment_respon
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
-    upstream_client = _FakeHttpClient(
+    upstream_client = ScriptedHttpClient(
         responses=[Response(status_code=200, json={"result": "bonjour"})]
     )
-    facilitator_client = _FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    facilitator_client = ScriptedFacilitatorClient(
+        verify_results=[_verify_accepted()],
+        settle_results=[build_settle_outcome()],
     )
     _install_payment_state(
         app,
@@ -554,7 +452,7 @@ async def test_paid_invoke_with_valid_payment_returns_success_and_payment_respon
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -590,12 +488,12 @@ async def test_successful_paid_invoke_writes_ledger_entries(
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
-    upstream_client = _FakeHttpClient(
+    upstream_client = ScriptedHttpClient(
         responses=[Response(status_code=200, json={"result": "bonjour"})]
     )
-    facilitator_client = _FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    facilitator_client = ScriptedFacilitatorClient(
+        verify_results=[_verify_accepted()],
+        settle_results=[build_settle_outcome()],
     )
     _install_payment_state(
         app,
@@ -607,7 +505,9 @@ async def test_successful_paid_invoke_writes_ledger_entries(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-ledger"),
+            payment_header=payment_signature_header(
+                payment_identifier="payment-ledger",
+            ),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -652,12 +552,12 @@ async def test_successful_paid_invoke_logs_invoke_and_ledger_events(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=200, json={"result": "bonjour"})]
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[build_settle_outcome()],
         ),
     )
 
@@ -667,7 +567,9 @@ async def test_successful_paid_invoke_logs_invoke_and_ledger_events(
             headers={
                 **_auth_headers(
                     consumer_account_id,
-                    payment_header=_payment_header(payment_identifier="payment-log-success"),
+                    payment_header=payment_signature_header(
+                        payment_identifier="payment-log-success",
+                    ),
                 ),
                 "X-Request-ID": "invoke-log-success",
             },
@@ -690,7 +592,7 @@ async def test_successful_paid_invoke_logs_invoke_and_ledger_events(
     ledger_record = next(
         record
         for record in caplog.records
-        if record.name == "app.services.ledger_service"
+        if record.name == "app.services.payment"
         and getattr(record, EVENT_FIELD, None) == "ledger.recorded"
     )
 
@@ -720,12 +622,12 @@ async def test_successful_paid_invoke_replays_by_idempotency_key_without_second_
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
-    upstream_client = _FakeHttpClient(
+    upstream_client = ScriptedHttpClient(
         responses=[Response(status_code=200, json={"result": "bonjour"})]
     )
-    facilitator_client = _FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    facilitator_client = ScriptedFacilitatorClient(
+        verify_results=[_verify_accepted()],
+        settle_results=[build_settle_outcome()],
     )
     _install_payment_state(
         app,
@@ -734,7 +636,7 @@ async def test_successful_paid_invoke_replays_by_idempotency_key_without_second_
     )
     headers = _auth_headers(
         consumer_account_id,
-        payment_header=_payment_header(payment_identifier="payment-1"),
+        payment_header=payment_signature_header(payment_identifier="payment-1"),
     )
 
     first = await async_client.post(
@@ -751,6 +653,7 @@ async def test_successful_paid_invoke_replays_by_idempotency_key_without_second_
     assert first.status_code == 200
     assert second.status_code == 200
     assert second.json()["id"] == first.json()["id"]
+    assert "PAYMENT-RESPONSE" in second.headers
     assert len(upstream_client.calls) == 1
 
 
@@ -773,12 +676,12 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=500, json={"detail": "upstream failed"})]
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[build_settle_outcome()],
         ),
     )
 
@@ -788,7 +691,9 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
             headers={
                 **_auth_headers(
                     consumer_account_id,
-                    payment_header=_payment_header(payment_identifier="payment-log-failure"),
+                    payment_header=payment_signature_header(
+                        payment_identifier="payment-log-failure",
+                    ),
                 ),
                 "X-Request-ID": "invoke-log-failure",
             },
@@ -810,8 +715,8 @@ async def test_paid_invoke_logs_failed_invoke_event_for_upstream_error(
     )
     assert failed_invocation is not None
     assert payment_attempt is not None
-    assert payment_attempt.status is PaymentAttemptStatus.SETTLED
-    assert payment_attempt.invocation_id is None
+    assert payment_attempt.status is PaymentAttemptStatus.COMPENSATION_REQUIRED
+    assert payment_attempt.invocation_id == failed_invocation.id
     assert invocation_count == 1
     assert payment_attempt_count == 1
     assert ledger_count == 0
@@ -847,12 +752,12 @@ async def test_successful_paid_invoke_records_ready_provider_payout_when_enabled
     payout_executor = _SuccessfulPayoutExecutor()
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=200, json={"result": "bonjour"})]
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[build_settle_outcome()],
         ),
         payout_executor=payout_executor,
         payouts_enabled=True,
@@ -864,7 +769,9 @@ async def test_successful_paid_invoke_records_ready_provider_payout_when_enabled
             headers={
                 **_auth_headers(
                     consumer_account_id,
-                    payment_header=_payment_header(payment_identifier="payment-payout-success"),
+                    payment_header=payment_signature_header(
+                        payment_identifier="payment-payout-success",
+                    ),
                 ),
                 "X-Request-ID": "payout-success-req",
             },
@@ -913,12 +820,12 @@ async def test_paid_invoke_records_asset_denominated_provider_payout_amount(
     payout_executor = _SuccessfulPayoutExecutor()
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=200, json={"result": "bonjour"})]
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[build_settle_outcome()],
         ),
         payout_executor=payout_executor,
         payouts_enabled=True,
@@ -929,7 +836,9 @@ async def test_paid_invoke_records_asset_denominated_provider_payout_amount(
         headers={
             **_auth_headers(
                 consumer_account_id,
-                payment_header=_payment_header(payment_identifier="payment-payout-failure"),
+                payment_header=payment_signature_header(
+                    payment_identifier="payment-payout-failure",
+                ),
             ),
             "X-Request-ID": "payout-failure-req",
         },
@@ -973,12 +882,12 @@ async def test_paid_invoke_rejects_wrong_payment_token_before_invoke_or_payout(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=200, json={"result": "bonjour"})]
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[build_settle_outcome()],
         ),
         payouts_enabled=True,
     )
@@ -987,7 +896,7 @@ async def test_paid_invoke_rejects_wrong_payment_token_before_invoke_or_payout(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(
+            payment_header=payment_signature_header(
                 payment_identifier="wrong-token-payment",
                 asset="0x00000000000000000000000000000000000000aa",
             ),
@@ -1032,19 +941,21 @@ async def test_paid_invoke_replay_does_not_create_duplicate_provider_payout(
     payout_executor = _SuccessfulPayoutExecutor()
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=200, json={"result": "bonjour"})]
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[build_settle_outcome()],
         ),
         payout_executor=payout_executor,
         payouts_enabled=True,
     )
     headers = _auth_headers(
         consumer_account_id,
-        payment_header=_payment_header(payment_identifier="payment-payout-replay"),
+        payment_header=payment_signature_header(
+            payment_identifier="payment-payout-replay",
+        ),
     )
 
     first = await async_client.post(
@@ -1068,7 +979,7 @@ async def test_paid_invoke_replay_does_not_create_duplicate_provider_payout(
 
 
 @pytest.mark.asyncio
-async def test_successful_paid_invoke_replays_by_payment_identifier_without_second_upstream_call(
+async def test_paid_invoke_rejects_payment_identifier_reuse_for_a_different_idempotency_key(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -1083,19 +994,12 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
-    upstream_client = _FakeHttpClient(
+    upstream_client = ScriptedHttpClient(
         responses=[Response(status_code=200, json={"result": "bonjour"})]
     )
-    facilitator_client = _FakeFacilitatorClient(
-        verify_outcomes=[{"isValid": True, "reference": "verify-1"}],
-        settle_outcomes=[
-            {
-                "success": True,
-                "transaction": "0xsettled",
-                "network": "eip155:84532",
-                "payer": "0xpayer",
-            }
-        ],
+    facilitator_client = ScriptedFacilitatorClient(
+        verify_results=[_verify_accepted()],
+        settle_results=[build_settle_outcome()],
     )
     _install_payment_state(
         app,
@@ -1109,39 +1013,32 @@ async def test_successful_paid_invoke_replays_by_payment_identifier_without_seco
         headers=_auth_headers(
             consumer_account_id,
             idempotency_key="invoke-key-1",
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
-    async with db_session_factory.begin() as session:
-        attempt = await session.scalar(
-            select(PaymentAttempt).where(PaymentAttempt.payment_identifier == "payment-1"),
-        )
-        assert attempt is not None
-        attempt.settle_outcome = {}
     second = await async_client.post(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
             idempotency_key="invoke-key-2",
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
 
     assert first.status_code == 200
-    assert second.status_code == 200
-    assert second.json()["id"] == first.json()["id"]
-    assert "PAYMENT-RESPONSE" not in second.headers
+    assert "PAYMENT-RESPONSE" in first.headers
+    assert second.status_code == 409
+    assert second.json() == {"detail": "payment identifier already used"}
     assert len(upstream_client.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_paid_invoke_duplicate_attempt_insert_resumes_existing_attempt(
+async def test_paid_invoke_resumes_the_attempt_that_already_owns_the_payment_identifier(
     app: FastAPI,
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
     consumer_account_id = await _create_consumer_account(db_session_factory)
@@ -1153,6 +1050,8 @@ async def test_paid_invoke_duplicate_attempt_insert_resumes_existing_attempt(
         endpoint_id=endpoint_id,
         payload={"text": "hello"},
     )
+    # The challenge was already stored, so the insert this request makes conflicts and
+    # the request has to carry the stored attempt forward instead of starting a new one.
     await _seed_payment_attempt(
         db_session_factory,
         consumer_account_id=consumer_account_id,
@@ -1163,12 +1062,12 @@ async def test_paid_invoke_duplicate_attempt_insert_resumes_existing_attempt(
         verify_outcome=None,
         settle_outcome=None,
     )
-    upstream_client = _FakeHttpClient(
+    upstream_client = ScriptedHttpClient(
         responses=[Response(status_code=200, json={"result": "bonjour"})],
     )
-    facilitator_client = _FakeFacilitatorClient(
-        verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-        settle_outcomes=[{"ok": True, "reference": "settle-1"}],
+    facilitator_client = ScriptedFacilitatorClient(
+        verify_results=[_verify_accepted()],
+        settle_results=[build_settle_outcome()],
     )
     _install_payment_state(
         app,
@@ -1176,40 +1075,20 @@ async def test_paid_invoke_duplicate_attempt_insert_resumes_existing_attempt(
         facilitator_client=facilitator_client,
     )
 
-    from app.repositories.payment_attempt_repo import PaymentAttemptRepository
-
-    original_get_by_payment_identifier = PaymentAttemptRepository.get_by_payment_identifier
-    lookup_calls = 0
-
-    async def stale_then_delegate(
-        self: PaymentAttemptRepository,
-        *,
-        payment_identifier: str,
-    ) -> PaymentAttempt | None:
-        nonlocal lookup_calls
-        lookup_calls += 1
-        if lookup_calls == 1:
-            return None
-        return await original_get_by_payment_identifier(self, payment_identifier=payment_identifier)
-
-    monkeypatch.setattr(
-        PaymentAttemptRepository,
-        "get_by_payment_identifier",
-        stale_then_delegate,
-    )
-
     response = await async_client.post(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            idempotency_key="invoke-key-2",
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            idempotency_key="invoke-key-1",
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
 
+    _, payment_attempt_count, _, _ = await _count_rows(db_session_factory)
     assert response.status_code == 200
     assert response.json()["status"] == "succeeded"
+    assert payment_attempt_count == 1
     assert len(facilitator_client.verify_calls) == 1
     assert len(facilitator_client.settle_calls) == 1
     assert len(upstream_client.calls) == 1
@@ -1233,10 +1112,10 @@ async def test_failed_payment_identifier_reuse_replays_verification_challenge(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": False, "reference": "verify-1"}],
-            settle_outcomes=[],
+        upstream_client=ScriptedHttpClient(),
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_rejected()],
+            settle_results=[],
         ),
     )
 
@@ -1245,7 +1124,7 @@ async def test_failed_payment_identifier_reuse_replays_verification_challenge(
         headers=_auth_headers(
             consumer_account_id,
             idempotency_key="invoke-key-1",
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -1253,8 +1132,8 @@ async def test_failed_payment_identifier_reuse_replays_verification_challenge(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            idempotency_key="invoke-key-2",
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            idempotency_key="invoke-key-1",
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -1310,17 +1189,17 @@ async def test_paid_invoke_rejects_payment_identifier_reuse_for_different_quote(
         idempotency_key="invoke-key-1",
         payment_identifier="payment-1",
         status=PaymentAttemptStatus.CONSUMED,
-        verify_outcome={"ok": True, "reference": "verify-1"},
-        settle_outcome={"ok": True, "reference": "settle-1"},
+        verify_outcome=_verify_accepted(),
+        settle_outcome=build_settle_outcome(),
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(
+        upstream_client=ScriptedHttpClient(
             responses=[Response(status_code=200, json={"result": "fresh"})],
         ),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[],
-            settle_outcomes=[],
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[],
+            settle_results=[],
         ),
     )
 
@@ -1329,7 +1208,7 @@ async def test_paid_invoke_rejects_payment_identifier_reuse_for_different_quote(
         headers=_auth_headers(
             consumer_account_id,
             idempotency_key="invoke-key-2",
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={
             "endpoint_key": "translate",
@@ -1360,10 +1239,10 @@ async def test_verify_failure_returns_402(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": False, "reference": "verify-1"}],
-            settle_outcomes=[],
+        upstream_client=ScriptedHttpClient(),
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_rejected()],
+            settle_results=[],
         ),
     )
 
@@ -1371,7 +1250,7 @@ async def test_verify_failure_returns_402(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -1405,15 +1284,17 @@ async def test_paid_invoke_returns_502_when_facilitator_verify_raises(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(),
-        facilitator_client=_UnavailableFacilitatorClient(),
+        upstream_client=ScriptedHttpClient(),
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[FacilitatorTransportError("facilitator unavailable")],
+        ),
     )
 
     response = await async_client.post(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -1440,10 +1321,10 @@ async def test_settle_failure_returns_502(
     )
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[{"ok": True, "reference": "verify-1"}],
-            settle_outcomes=[{"ok": False, "reference": "settle-1"}],
+        upstream_client=ScriptedHttpClient(),
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[_verify_accepted()],
+            settle_results=[_settle_rejected()],
         ),
     )
 
@@ -1451,7 +1332,7 @@ async def test_settle_failure_returns_502(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
     )
@@ -1478,10 +1359,10 @@ async def test_paid_invoke_requires_quote(
     _ = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
     _install_payment_state(
         app,
-        upstream_client=_FakeHttpClient(),
-        facilitator_client=_FakeFacilitatorClient(
-            verify_outcomes=[],
-            settle_outcomes=[],
+        upstream_client=ScriptedHttpClient(),
+        facilitator_client=ScriptedFacilitatorClient(
+            verify_results=[],
+            settle_results=[],
         ),
     )
 
@@ -1489,10 +1370,62 @@ async def test_paid_invoke_requires_quote(
         "/v1/invoke/paid-invoke-service",
         headers=_auth_headers(
             consumer_account_id,
-            payment_header=_payment_header(payment_identifier="payment-1"),
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
         ),
         json={"endpoint_key": "translate", "payload": {"text": "hello"}},
     )
 
     assert response.status_code == 409
     assert response.json() == {"detail": "paid invoke requires quote"}
+
+
+@pytest.mark.asyncio
+async def test_paid_invoke_refuses_an_attempt_that_still_requires_compensation(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    consumer_account_id = await _create_consumer_account(db_session_factory)
+    service_id = await _seed_service(db_session_factory, provider_account_id=provider_account_id)
+    endpoint_id = await _seed_paid_endpoint(db_session_factory, service_id=service_id)
+    quote_id = await _seed_quote(
+        db_session_factory,
+        service_id=service_id,
+        endpoint_id=endpoint_id,
+        payload={"text": "hello"},
+    )
+    await _seed_payment_attempt(
+        db_session_factory,
+        consumer_account_id=consumer_account_id,
+        quote_id=quote_id,
+        invocation_id=None,
+        idempotency_key="invoke-key",
+        payment_identifier="payment-1",
+        status=PaymentAttemptStatus.COMPENSATION_REQUIRED,
+        verify_outcome=_verify_accepted(),
+        settle_outcome=build_settle_outcome(),
+    )
+    upstream_client = ScriptedHttpClient()
+    facilitator_client = ScriptedFacilitatorClient()
+    _install_payment_state(
+        app,
+        upstream_client=upstream_client,
+        facilitator_client=facilitator_client,
+    )
+
+    response = await async_client.post(
+        "/v1/invoke/paid-invoke-service",
+        headers=_auth_headers(
+            consumer_account_id,
+            payment_header=payment_signature_header(payment_identifier="payment-1"),
+        ),
+        json={"endpoint_key": "translate", "payload": {"text": "hello"}, "quote_id": quote_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "payment requires compensation; the invocation did not succeed",
+    }
+    assert upstream_client.calls == []
+    assert facilitator_client.settle_calls == []

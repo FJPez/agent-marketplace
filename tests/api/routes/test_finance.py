@@ -31,13 +31,13 @@ from app.db.models import (
     Account,
     ApiKey,
     Invocation,
+    LedgerEntry,
     PaymentAttempt,
     Payout,
     Quote,
     ServiceEndpoint,
 )
 from app.integrations.payouts import PreparedPayout, SentPayout
-from app.repositories.ledger_entry_repo import LedgerEntryRepository
 from app.services import finance
 
 
@@ -129,33 +129,23 @@ async def _seed_provider_finance_data(
         session.add(attempt)
         await session.flush()
 
-        repo = LedgerEntryRepository(session)
-        repo.add(
-            provider_account_id=provider_account_id,
-            service_id=service_id,
-            invocation_id=invocation.id,
-            payment_attempt_id=attempt.id,
-            entry_type=LedgerEntryType.CHARGE,
-            amount_minor=500,
-            currency="USD",
-        )
-        repo.add(
-            provider_account_id=provider_account_id,
-            service_id=service_id,
-            invocation_id=invocation.id,
-            payment_attempt_id=attempt.id,
-            entry_type=LedgerEntryType.PLATFORM_FEE,
-            amount_minor=50,
-            currency="USD",
-        )
-        repo.add(
-            provider_account_id=provider_account_id,
-            service_id=service_id,
-            invocation_id=invocation.id,
-            payment_attempt_id=attempt.id,
-            entry_type=LedgerEntryType.PROVIDER_EARNING,
-            amount_minor=450,
-            currency="USD",
+        session.add_all(
+            [
+                LedgerEntry(
+                    provider_account_id=provider_account_id,
+                    service_id=service_id,
+                    invocation_id=invocation.id,
+                    payment_attempt_id=attempt.id,
+                    entry_type=entry_type,
+                    amount_minor=amount_minor,
+                    currency="USD",
+                )
+                for entry_type, amount_minor in (
+                    (LedgerEntryType.CHARGE, 500),
+                    (LedgerEntryType.PLATFORM_FEE, 50),
+                    (LedgerEntryType.PROVIDER_EARNING, 450),
+                )
+            ],
         )
         return provider_account_id, service_id
 

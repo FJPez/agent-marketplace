@@ -6,7 +6,7 @@ from fastapi import Depends, HTTPException, Request, status
 
 from app.core.lifespan import get_app_state
 from app.integrations.provider_gateway.client import SupportsRequest
-from app.services.payment_service import (
+from app.integrations.x402.protocols import (
     SupportsFacilitatorClient,
     SupportsX402ResourceServer,
 )

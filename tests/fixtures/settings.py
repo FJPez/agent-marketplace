@@ -54,7 +54,7 @@ def base_test_env() -> Generator[None, None, None]:
 def settings_env_factory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
-) -> SettingsEnvFactory:
+) -> Generator[SettingsEnvFactory, None, None]:
     def configure(
         *,
         env: Mapping[str, str | None] | None = None,
@@ -76,4 +76,7 @@ def settings_env_factory(
         get_settings.cache_clear()
         return cwd or tmp_path
 
-    return configure
+    yield configure
+    # monkeypatch restores the environment, but a Settings built under the test's
+    # environment would otherwise stay cached for the next test on this worker.
+    get_settings.cache_clear()

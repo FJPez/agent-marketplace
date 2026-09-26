@@ -41,6 +41,8 @@ class PaymentAttemptStatus(StrEnum):
     CHALLENGED = "challenged"
     VERIFIED = "verified"
     VERIFY_FAILED = "verify_failed"
+    SETTLING = "settling"
+    SETTLEMENT_UNKNOWN = "settlement_unknown"
     SETTLE_FAILED = "settle_failed"
     SETTLED = "settled"
     CONSUMED = "consumed"

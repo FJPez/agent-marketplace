@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     x402_facilitator_url: str = "https://x402.org/facilitator"
     x402_network: str = "base-sepolia"
     x402_network_caip2: str = "eip155:84532"
+    x402_facilitator_timeout_seconds: int = 30
     x402_cdp_api_key_id: str | None = None
     x402_cdp_api_key_secret: str | None = None
     payouts_enabled: bool = False

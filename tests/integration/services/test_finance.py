@@ -17,8 +17,7 @@ from tests.fixtures.domain import (
 
 from app.core.enums import AccessMode, LedgerEntryType, PaymentAttemptStatus, PayoutStatus
 from app.db.models import LedgerEntry
-from app.services import finance
-from app.services.ledger_service import LedgerService
+from app.services import finance, ledger
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -145,14 +144,16 @@ async def test_get_provider_earnings_aggregates_per_currency(
     provider_account_id, service_id, attempts = await seed_provider_context(
         db_session_factory,
         slug="earnings-read",
+        attempt_count=2,
     )
-    invocation_id, payment_attempt_id = attempts[0]
-    for entry_type, amount_minor, currency in (
-        (LedgerEntryType.CHARGE, 500, "USD"),
-        (LedgerEntryType.PLATFORM_FEE, 50, "USD"),
-        (LedgerEntryType.PROVIDER_EARNING, 450, "USD"),
-        (LedgerEntryType.CHARGE, 5_000_000, "USDC"),
-        (LedgerEntryType.PROVIDER_EARNING, 4_500_000, "USDC"),
+    # One attempt per currency: the ledger allows one entry per type per attempt.
+    (usd_invocation_id, usd_attempt_id), (usdc_invocation_id, usdc_attempt_id) = attempts
+    for invocation_id, payment_attempt_id, entry_type, amount_minor, currency in (
+        (usd_invocation_id, usd_attempt_id, LedgerEntryType.CHARGE, 500, "USD"),
+        (usd_invocation_id, usd_attempt_id, LedgerEntryType.PLATFORM_FEE, 50, "USD"),
+        (usd_invocation_id, usd_attempt_id, LedgerEntryType.PROVIDER_EARNING, 450, "USD"),
+        (usdc_invocation_id, usdc_attempt_id, LedgerEntryType.CHARGE, 5_000_000, "USDC"),
+        (usdc_invocation_id, usdc_attempt_id, LedgerEntryType.PROVIDER_EARNING, 4_500_000, "USDC"),
     ):
         await create_ledger_entry_record(
             db_session_factory,
@@ -343,8 +344,8 @@ async def test_record_paid_invocation_writes_charge_fee_and_provider_earning_ent
     invocation_id, payment_attempt_id = attempts[0]
 
     async with db_session_factory.begin() as session:
-        service = LedgerService(session)
-        await service.record_paid_invocation(
+        await ledger.record_paid_invocation(
+            session=session,
             provider_account_id=provider_account_id,
             service_id=service_id,
             invocation_id=invocation_id,

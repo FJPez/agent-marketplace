@@ -337,7 +337,7 @@ async def test_try_replay_returns_nothing_when_no_invocation_is_stored(
     assert replayed is None
 
 
-async def test_try_replay_raises_a_stored_failure_after_the_endpoint_is_disabled(
+async def test_try_replay_returns_a_stored_failure_after_the_endpoint_is_disabled(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     target = await seed_target(db_session_factory, slug="replay-failure-disabled")
@@ -357,11 +357,15 @@ async def test_try_replay_raises_a_stored_failure_after_the_endpoint_is_disabled
     await disable_endpoint(db_session_factory, endpoint_id=target.endpoint_id)
 
     async with db_session_factory() as session:
-        with pytest.raises(UpstreamTimeoutError, match="upstream request timed out"):
-            await replay(session, target=target, idempotency_key="replay-failure-disabled")
+        replayed = await replay(session, target=target, idempotency_key="replay-failure-disabled")
+
+    assert replayed is not None
+    assert replayed.status is InvocationStatus.FAILED
+    assert replayed.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT
+    assert isinstance(invoke.exception_for_failed_invocation(replayed), UpstreamTimeoutError)
 
 
-async def test_try_replay_raises_a_stored_failure_after_its_quote_expires(
+async def test_try_replay_returns_a_stored_failure_after_its_quote_expires(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     target = await seed_target(db_session_factory, slug="replay-failure-expired-quote")
@@ -388,13 +392,18 @@ async def test_try_replay_raises_a_stored_failure_after_its_quote_expires(
     )
 
     async with db_session_factory() as session:
-        with pytest.raises(UpstreamError, match="upstream returned an error response"):
-            await replay(
-                session,
-                target=target,
-                idempotency_key="replay-failure-expired-quote",
-                quote_id=quote_id,
-            )
+        replayed = await replay(
+            session,
+            target=target,
+            idempotency_key="replay-failure-expired-quote",
+            quote_id=quote_id,
+        )
+
+    assert replayed is not None
+    assert replayed.status is InvocationStatus.FAILED
+    assert replayed.failure_reason is InvocationFailureReason.UPSTREAM_RESPONSE
+    assert replayed.upstream_status_code == 500
+    assert replayed.error_message == "upstream returned an error response"
 
 
 async def test_try_replay_reports_a_live_lease_after_its_quote_expires(
@@ -522,14 +531,15 @@ async def test_execute_records_an_unsafe_upstream_target_as_a_transport_failure(
 
     async with db_session_factory() as session:
         resolved = await resolve(session, target=target)
-        with pytest.raises(UpstreamError, match="upstream target is not allowed"):
-            await invoke.execute(
-                session=session,
-                account_id=target.consumer_account_id,
-                resolved=resolved,
-                idempotency_key="execute-target",
-                http_client=http_client,
-            )
+        returned = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="execute-target",
+            http_client=http_client,
+        )
+
+        assert returned.status is InvocationStatus.FAILED
 
     persisted = await read_invocation(db_session_factory, idempotency_key="execute-target")
 
@@ -549,14 +559,15 @@ async def test_execute_records_an_upstream_timeout(
 
     async with db_session_factory() as session:
         resolved = await resolve(session, target=target)
-        with pytest.raises(UpstreamTimeoutError, match="upstream request timed out"):
-            await invoke.execute(
-                session=session,
-                account_id=target.consumer_account_id,
-                resolved=resolved,
-                idempotency_key="execute-timeout",
-                http_client=http_client,
-            )
+        returned = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="execute-timeout",
+            http_client=http_client,
+        )
+
+        assert returned.status is InvocationStatus.FAILED
 
     persisted = await read_invocation(db_session_factory, idempotency_key="execute-timeout")
 
@@ -575,14 +586,15 @@ async def test_execute_records_an_upstream_transport_failure(
 
     async with db_session_factory() as session:
         resolved = await resolve(session, target=target)
-        with pytest.raises(UpstreamError, match="upstream request failed"):
-            await invoke.execute(
-                session=session,
-                account_id=target.consumer_account_id,
-                resolved=resolved,
-                idempotency_key="execute-transport",
-                http_client=http_client,
-            )
+        returned = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="execute-transport",
+            http_client=http_client,
+        )
+
+        assert returned.status is InvocationStatus.FAILED
 
     persisted = await read_invocation(db_session_factory, idempotency_key="execute-transport")
 
@@ -593,7 +605,7 @@ async def test_execute_records_an_upstream_transport_failure(
     assert persisted.in_progress_until is None
 
 
-async def test_execute_records_an_upstream_error_response_with_its_status_code(
+async def test_execute_returns_an_upstream_error_response_as_a_stored_failure(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     target = await seed_target(db_session_factory, slug="execute-response")
@@ -601,20 +613,24 @@ async def test_execute_records_an_upstream_error_response_with_its_status_code(
 
     async with db_session_factory() as session:
         resolved = await resolve(session, target=target)
-        with pytest.raises(UpstreamError, match="upstream request failed"):
-            await invoke.execute(
-                session=session,
-                account_id=target.consumer_account_id,
-                resolved=resolved,
-                idempotency_key="execute-response",
-                http_client=http_client,
-            )
+        returned = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="execute-response",
+            http_client=http_client,
+        )
+
+        assert returned.status is InvocationStatus.FAILED
+        assert returned.failure_reason is InvocationFailureReason.UPSTREAM_RESPONSE
+        assert returned.upstream_status_code == 503
 
     persisted = await read_invocation(db_session_factory, idempotency_key="execute-response")
 
     assert persisted.status is InvocationStatus.FAILED
     assert persisted.failure_reason is InvocationFailureReason.UPSTREAM_RESPONSE
     assert persisted.error_message == "upstream request failed"
+    assert persisted.response_payload is None
     assert persisted.upstream_status_code == 503
     assert persisted.in_progress_until is None
 
@@ -651,7 +667,7 @@ async def test_execute_replays_a_succeeded_invocation_without_calling_upstream(
     assert http_client.calls == []
 
 
-async def test_execute_replays_a_failed_invocation_without_calling_upstream(
+async def test_execute_returns_a_stored_failure_without_calling_upstream(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     target = await seed_target(db_session_factory, slug="execute-replay-failure")
@@ -672,16 +688,62 @@ async def test_execute_replays_a_failed_invocation_without_calling_upstream(
 
     async with db_session_factory() as session:
         resolved = await resolve(session, target=target)
-        with pytest.raises(UpstreamTimeoutError, match="upstream request timed out"):
-            await invoke.execute(
-                session=session,
-                account_id=target.consumer_account_id,
-                resolved=resolved,
-                idempotency_key="replay-failure",
-                http_client=http_client,
-            )
+        replayed = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="replay-failure",
+            http_client=http_client,
+        )
+
+        assert replayed.status is InvocationStatus.FAILED
+        assert replayed.failure_reason is InvocationFailureReason.UPSTREAM_TIMEOUT
 
     assert http_client.calls == []
+
+
+async def test_exception_for_failed_invocation_maps_a_timeout_row_to_a_timeout_error(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="failure-exception")
+    http_client = FakeHttpClient([httpx.TimeoutException("boom")])
+
+    async with db_session_factory() as session:
+        resolved = await resolve(session, target=target)
+        failed = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="failure-exception",
+            http_client=http_client,
+        )
+
+        error = invoke.exception_for_failed_invocation(failed)
+
+    assert isinstance(error, UpstreamTimeoutError)
+    assert str(error) == "upstream request timed out"
+
+
+async def test_exception_for_failed_invocation_maps_an_error_response_row_to_an_upstream_error(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    target = await seed_target(db_session_factory, slug="failure-exception-response")
+    http_client = FakeHttpClient([Response(status_code=503, json={"detail": "down"})])
+
+    async with db_session_factory() as session:
+        resolved = await resolve(session, target=target)
+        failed = await invoke.execute(
+            session=session,
+            account_id=target.consumer_account_id,
+            resolved=resolved,
+            idempotency_key="failure-exception-response",
+            http_client=http_client,
+        )
+
+        error = invoke.exception_for_failed_invocation(failed)
+
+    assert isinstance(error, UpstreamError)
+    assert str(error) == "upstream request failed"
 
 
 async def test_execute_rejects_a_reused_key_before_returning_any_stored_outcome(

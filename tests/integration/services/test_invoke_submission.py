@@ -1,4 +1,3 @@
-import json
 from dataclasses import dataclass
 
 import pytest
@@ -17,8 +16,7 @@ from tests.fixtures.domain import (
     create_service_record,
     create_upstream_record,
 )
-from x402 import PaymentPayload
-from x402.http import encode_payment_signature_header
+from tests.helpers.x402 import build_settle_outcome, payment_signature_header
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
@@ -30,9 +28,15 @@ from app.core.enums import (
     PricingModelType,
 )
 from app.db.models import Invocation, LedgerEntry, PaymentAttempt, Payout
+from app.integrations.x402.models import (
+    PaymentPayload,
+    PaymentRequirement,
+    SettleOutcome,
+    VerifyOutcome,
+)
 from app.schemas.invoke import InvokeRequest
 from app.services.invoke_submission import InvokeSuccess, submit
-from app.services.payment_service import PaymentRequiredChallenge
+from app.services.payment import PaymentRequiredChallenge
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -75,18 +79,18 @@ class FakeFacilitatorClient:
     async def verify(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> VerifyOutcome:
         self.calls.append("verify")
         raise AssertionError("the facilitator must not be called")
 
     async def settle(
         self,
         *,
-        payment_requirement: dict[str, object],
-        payment_payload: dict[str, object],
-    ) -> dict[str, object]:
+        requirement: PaymentRequirement,
+        payload: PaymentPayload,
+    ) -> SettleOutcome:
         self.calls.append("settle")
         raise AssertionError("the facilitator must not be called")
 
@@ -95,16 +99,16 @@ class FakeX402ResourceServer:
     def build_payment_required_headers(
         self,
         *,
-        payment_requirement: dict[str, object],
+        requirement: PaymentRequirement,
     ) -> dict[str, str]:
-        return {"PAYMENT-REQUIRED": json.dumps(payment_requirement, sort_keys=True)}
+        return {"PAYMENT-REQUIRED": requirement.model_dump_json()}
 
     def build_payment_response_headers(
         self,
         *,
-        settle_outcome: dict[str, object],
+        outcome: SettleOutcome,
     ) -> dict[str, str]:
-        return {"PAYMENT-RESPONSE": json.dumps(settle_outcome, sort_keys=True)}
+        return {"PAYMENT-RESPONSE": outcome.model_dump_json()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,25 +119,7 @@ class SubmitTarget:
 
 
 def payment_header() -> str:
-    return encode_payment_signature_header(
-        PaymentPayload.model_validate(
-            {
-                "payload": {
-                    "authorization": {"nonce": PAYMENT_IDENTIFIER},
-                    "transaction": "0xabc123",
-                },
-                "accepted": {
-                    "scheme": "exact",
-                    "network": "eip155:84532",
-                    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                    "amount": "500",
-                    "payTo": "0x000000000000000000000000000000000000c0de",
-                    "maxTimeoutSeconds": 300,
-                    "extra": {},
-                },
-            }
-        )
-    )
+    return payment_signature_header(payment_identifier=PAYMENT_IDENTIFIER)
 
 
 async def seed_target(
@@ -317,8 +303,10 @@ async def test_paid_replay_of_a_consumed_attempt_returns_the_settlement_headers(
         idempotency_key=IDEMPOTENCY_KEY,
         payment_identifier=PAYMENT_IDENTIFIER,
         status=PaymentAttemptStatus.CONSUMED,
-        verify_outcome={"ok": True, "reference": "verify-1"},
-        settle_outcome={"ok": True, "reference": "settle-1"},
+        verify_outcome=VerifyOutcome(accepted=True, checked_by="facilitator").model_dump(
+            mode="json"
+        ),
+        settle_outcome=build_settle_outcome().model_dump(mode="json"),
     )
     http_client = FakeHttpClient()
     facilitator_client = FakeFacilitatorClient()
@@ -370,8 +358,10 @@ async def test_paid_replay_of_a_settled_attempt_finishes_the_accounting_without_
         idempotency_key=IDEMPOTENCY_KEY,
         payment_identifier=PAYMENT_IDENTIFIER,
         status=PaymentAttemptStatus.SETTLED,
-        verify_outcome={"ok": True, "reference": "verify-1"},
-        settle_outcome={"ok": True, "reference": "settle-1"},
+        verify_outcome=VerifyOutcome(accepted=True, checked_by="facilitator").model_dump(
+            mode="json"
+        ),
+        settle_outcome=build_settle_outcome().model_dump(mode="json"),
         facilitator_reference="settle-1",
     )
     http_client = FakeHttpClient()
