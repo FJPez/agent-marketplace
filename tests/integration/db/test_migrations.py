@@ -130,7 +130,14 @@ def test_head_migration_indexes_moderation_actions_by_latest_action(
     assert "ix_moderation_actions_service_id_id_desc" in indexes
 
 
-async def _seed_endpoint(db_engine: AsyncEngine, *, service_id: int, key: str) -> int:
+async def _insert_endpoint(
+    db_engine: AsyncEngine,
+    *,
+    service_id: int,
+    key: str,
+    request_schema: str = "{}",
+    response_schema: str = "{}",
+) -> int:
     async with db_engine.begin() as connection:
         return (
             await connection.execute(
@@ -141,45 +148,20 @@ async def _seed_endpoint(db_engine: AsyncEngine, *, service_id: int, key: str) -
                         request_schema, response_schema, timeout_seconds
                     )
                     VALUES (
-                        :service_id, :key, 'Check Endpoint', 'free', '{}'::jsonb, '{}'::jsonb, 30
+                        :service_id, :key, 'Check Endpoint', 'free',
+                        CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb), 30
                     )
                     RETURNING id
                     """
                 ),
-                {"service_id": service_id, "key": key},
+                {
+                    "service_id": service_id,
+                    "key": key,
+                    "request_schema": request_schema,
+                    "response_schema": response_schema,
+                },
             )
         ).scalar_one()
-
-
-async def _insert_service_endpoint_with_schemas(
-    db_engine: AsyncEngine,
-    *,
-    service_id: int,
-    key: str,
-    request_schema: str,
-    response_schema: str,
-) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text(
-                """
-                INSERT INTO service_endpoints (
-                    service_id, key, name, access_mode,
-                    request_schema, response_schema, timeout_seconds
-                )
-                VALUES (
-                    :service_id, :key, 'Check Endpoint', 'free',
-                    CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb), 30
-                )
-                """
-            ),
-            {
-                "service_id": service_id,
-                "key": key,
-                "request_schema": request_schema,
-                "response_schema": response_schema,
-            },
-        )
 
 
 async def _insert_provider_upstream_config(
@@ -199,24 +181,6 @@ async def _insert_provider_upstream_config(
                 """
             ),
             {"endpoint_id": endpoint_id, "config": config},
-        )
-
-
-async def _insert_service_revision_snapshot(
-    db_engine: AsyncEngine,
-    *,
-    service_id: int,
-    snapshot: str,
-) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text(
-                """
-                INSERT INTO service_revisions (service_id, revision_number, change_token, snapshot)
-                VALUES (:service_id, 1, :change_token, CAST(:snapshot AS jsonb))
-                """
-            ),
-            {"service_id": service_id, "change_token": "c" * 64, "snapshot": snapshot},
         )
 
 
@@ -303,38 +267,30 @@ def test_head_migration_cascades_health_checks_when_service_is_deleted(
     assert asyncio.run(_read_health_check_service_ids(db_engine)) == []
 
 
-def test_head_migration_rejects_non_object_service_endpoint_request_schema(
+@pytest.mark.parametrize(
+    ("request_schema", "response_schema", "constraint_name"),
+    [
+        ("[1, 2]", "{}", "ck_service_endpoints_request_schema_json_object"),
+        ("{}", "[1, 2]", "ck_service_endpoints_response_schema_json_object"),
+    ],
+)
+def test_head_migration_rejects_non_object_service_endpoint_schema(
     clean_database: None,
     db_engine: AsyncEngine,
+    request_schema: str,
+    response_schema: str,
+    constraint_name: str,
 ) -> None:
-    service_id = asyncio.run(_seed_service(db_engine, slug="request-schema-check"))
+    service_id = asyncio.run(_seed_service(db_engine, slug="endpoint-schema-check"))
 
-    with pytest.raises(IntegrityError, match="ck_service_endpoints_request_schema_json_object"):
+    with pytest.raises(IntegrityError, match=constraint_name):
         asyncio.run(
-            _insert_service_endpoint_with_schemas(
+            _insert_endpoint(
                 db_engine,
                 service_id=service_id,
-                key="request-schema-check",
-                request_schema="[1, 2]",
-                response_schema="{}",
-            )
-        )
-
-
-def test_head_migration_rejects_non_object_service_endpoint_response_schema(
-    clean_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    service_id = asyncio.run(_seed_service(db_engine, slug="response-schema-check"))
-
-    with pytest.raises(IntegrityError, match="ck_service_endpoints_response_schema_json_object"):
-        asyncio.run(
-            _insert_service_endpoint_with_schemas(
-                db_engine,
-                service_id=service_id,
-                key="response-schema-check",
-                request_schema="{}",
-                response_schema="[1, 2]",
+                key="endpoint-schema-check",
+                request_schema=request_schema,
+                response_schema=response_schema,
             )
         )
 
@@ -345,7 +301,7 @@ def test_head_migration_rejects_non_object_provider_upstream_config(
 ) -> None:
     service_id = asyncio.run(_seed_service(db_engine, slug="upstream-config-check"))
     endpoint_id = asyncio.run(
-        _seed_endpoint(db_engine, service_id=service_id, key="upstream-config-check")
+        _insert_endpoint(db_engine, service_id=service_id, key="upstream-config-check")
     )
 
     with pytest.raises(IntegrityError, match="ck_provider_upstreams_config_json_object"):
@@ -361,12 +317,15 @@ def test_head_migration_rejects_non_object_service_revision_snapshot(
     service_id = asyncio.run(_seed_service(db_engine, slug="revision-snapshot-check"))
 
     with pytest.raises(IntegrityError, match="ck_service_revisions_snapshot_json_object"):
-        asyncio.run(
-            _insert_service_revision_snapshot(db_engine, service_id=service_id, snapshot="[1, 2]")
-        )
+        asyncio.run(_insert_service_revision(db_engine, service_id=service_id, snapshot="[1, 2]"))
 
 
-async def _insert_service_revision(db_engine: AsyncEngine, *, service_id: int) -> int:
+async def _insert_service_revision(
+    db_engine: AsyncEngine,
+    *,
+    service_id: int,
+    snapshot: str = "{}",
+) -> int:
     async with db_engine.begin() as connection:
         return (
             await connection.execute(
@@ -375,11 +334,11 @@ async def _insert_service_revision(db_engine: AsyncEngine, *, service_id: int) -
                     INSERT INTO service_revisions (
                         service_id, revision_number, change_token, snapshot
                     )
-                    VALUES (:service_id, 1, :change_token, '{}'::jsonb)
+                    VALUES (:service_id, 1, :change_token, CAST(:snapshot AS jsonb))
                     RETURNING id
                     """
                 ),
-                {"service_id": service_id, "change_token": "c" * 64},
+                {"service_id": service_id, "change_token": "c" * 64, "snapshot": snapshot},
             )
         ).scalar_one()
 
@@ -402,7 +361,6 @@ def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
 ) -> None:
     config = migration_database.config
     engine = migration_database.engine
-    command.downgrade(config, "base")
     command.upgrade(config, "head")
     service_id = asyncio.run(_seed_service(engine, slug="downgrade-check"))
     asyncio.run(_insert_health_check(engine, service_id=service_id))

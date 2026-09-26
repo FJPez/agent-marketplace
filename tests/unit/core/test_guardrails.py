@@ -51,9 +51,18 @@ def _build_request(
     return Request(scope, receive)
 
 
-async def _respond_ok(request: Request) -> Response:
-    _ = request
+async def _respond_ok(_request: Request) -> Response:
     return JSONResponse({"status": "ok"})
+
+
+def _build_authenticated_request(*, authorization: bytes) -> Request:
+    @asynccontextmanager
+    async def session_factory() -> AsyncIterator[object]:
+        yield object()
+
+    app = FastAPI()
+    app.state.app_state = SimpleNamespace(db_session_factory=session_factory)
+    return _build_request(headers=[(b"authorization", authorization)], app=app)
 
 
 async def test_protect_rejects_v1_requests_over_the_global_limit() -> None:
@@ -86,20 +95,12 @@ async def test_protect_ignores_requests_outside_v1() -> None:
     assert backend.hits == []
 
 
-async def test_resolve_owner_key_uses_validated_actor_context(
+async def test_protect_uses_validated_actor_context_as_the_rate_limit_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    @asynccontextmanager
-    async def session_factory() -> AsyncIterator[object]:
-        yield object()
-
-    app = FastAPI()
-    app.state.app_state = SimpleNamespace(db_session_factory=session_factory)
-    guardrails = ApiGuardrails(
-        api_rate_limit="10/minute",
-        rate_limits_backend=_FakeRateLimitsBackend(allow=True),
-    )
-    request = _build_request(headers=[(b"authorization", b"Bearer token")], app=app)
+    backend = _FakeRateLimitsBackend(allow=True)
+    guardrails = ApiGuardrails(api_rate_limit="10/minute", rate_limits_backend=backend)
+    request = _build_authenticated_request(authorization=b"Bearer token")
 
     async def fake_resolve_actor(
         *, session: object, settings: object, authorization: str, touch_api_key: bool = True
@@ -109,25 +110,18 @@ async def test_resolve_owner_key_uses_validated_actor_context(
 
     monkeypatch.setattr("app.core.guardrails.resolve_actor", fake_resolve_actor)
 
-    owner_key = await guardrails._resolve_owner_key(request)
+    response = await guardrails.protect(request, _respond_ok)
 
-    assert owner_key == "account:42"
+    assert response.status_code == 200
+    assert backend.hits == [("10/minute", "account:42", "global")]
 
 
-async def test_resolve_owner_key_falls_back_to_client_key_for_unresolved_bearer_tokens(
+async def test_protect_falls_back_to_client_key_for_unresolved_bearer_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    @asynccontextmanager
-    async def session_factory() -> AsyncIterator[object]:
-        yield object()
-
-    app = FastAPI()
-    app.state.app_state = SimpleNamespace(db_session_factory=session_factory)
-    guardrails = ApiGuardrails(
-        api_rate_limit="10/minute",
-        rate_limits_backend=_FakeRateLimitsBackend(allow=True),
-    )
-    request = _build_request(headers=[(b"authorization", b"Bearer stale-token")], app=app)
+    backend = _FakeRateLimitsBackend(allow=True)
+    guardrails = ApiGuardrails(api_rate_limit="10/minute", rate_limits_backend=backend)
+    request = _build_authenticated_request(authorization=b"Bearer stale-token")
 
     async def fake_resolve_actor(
         *, session: object, settings: object, authorization: str, touch_api_key: bool = True
@@ -137,6 +131,7 @@ async def test_resolve_owner_key_falls_back_to_client_key_for_unresolved_bearer_
 
     monkeypatch.setattr("app.core.guardrails.resolve_actor", fake_resolve_actor)
 
-    owner_key = await guardrails._resolve_owner_key(request)
+    response = await guardrails.protect(request, _respond_ok)
 
-    assert owner_key == "client:127.0.0.1"
+    assert response.status_code == 200
+    assert backend.hits == [("10/minute", "client:127.0.0.1", "global")]

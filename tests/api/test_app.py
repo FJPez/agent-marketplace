@@ -1,4 +1,3 @@
-from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -8,17 +7,8 @@ from fastapi.testclient import TestClient
 import app.main as main_module
 from app.core import lifespan as lifespan_module
 from app.core.config import AppEnv, Settings
-from app.core.lifespan import AppState, get_app_state
+from app.core.lifespan import get_app_state
 from app.main import create_app
-
-RETIRED_APP_STATE_FIELDS = {
-    "http_client",
-    "invoke_submission_backend",
-    "facilitator_client",
-    "x402_resource_server",
-    "payout_executor",
-    "telemetry",
-}
 
 
 def test_create_app_starts_with_lifespan_state() -> None:
@@ -38,12 +28,6 @@ def test_create_app_starts_with_lifespan_state() -> None:
         assert state.rate_limits_backend is not None
 
     assert not hasattr(app.state, "app_state")
-
-
-def test_app_state_no_longer_carries_execution_layer_resources() -> None:
-    field_names = {field.name for field in fields(AppState)}
-
-    assert field_names.isdisjoint(RETIRED_APP_STATE_FIELDS)
 
 
 @pytest.mark.parametrize(

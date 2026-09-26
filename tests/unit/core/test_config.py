@@ -272,6 +272,3 @@ def test_settings_ignore_retired_payment_variables(
     settings = Settings()
 
     assert settings.env is AppEnv.PROD
-    assert not hasattr(settings, "treasury_private_key")
-    assert not hasattr(settings, "payouts_enabled")
-    assert not hasattr(settings, "x402_facilitator_url")

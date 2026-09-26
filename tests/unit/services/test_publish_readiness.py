@@ -2,7 +2,7 @@ import pytest
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
-from app.core.json_types import JsonValue
+from app.core.json_types import JsonObject
 from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -112,19 +112,6 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_p
     validate_service_for_publish(service)
 
 
-def test_validate_service_for_publish_rejects_missing_hmac_auth_config() -> None:
-    endpoint = _build_endpoint()
-    assert endpoint.upstream is not None
-    endpoint.upstream.config = {}
-    service = _build_service(endpoints=[endpoint])
-
-    with pytest.raises(
-        InvalidInputError,
-        match="must define hmac auth config before publish",
-    ):
-        validate_service_for_publish(service)
-
-
 def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoints() -> None:
     service = _build_service(
         endpoints=[_build_endpoint(is_enabled=False)],
@@ -138,18 +125,21 @@ def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoin
 
 
 @pytest.mark.parametrize(
-    "auth",
+    "config",
     [
-        {"type": "basic", "key_id": "gateway-key", "secret": "super-secret"},
-        {"type": "hmac_sha256", "key_id": 7, "secret": "super-secret"},
-        {"type": "hmac_sha256", "key_id": "gateway-key"},
-        "hmac_sha256",
+        {},
+        {"auth": "hmac_sha256"},
+        {"auth": {"type": "basic", "key_id": "gateway-key", "secret": "super-secret"}},
+        {"auth": {"type": "hmac_sha256", "key_id": 7, "secret": "super-secret"}},
+        {"auth": {"type": "hmac_sha256", "key_id": "gateway-key"}},
     ],
 )
-def test_validate_service_for_publish_rejects_incomplete_hmac_auth_config(auth: JsonValue) -> None:
+def test_validate_service_for_publish_rejects_missing_or_incomplete_hmac_auth_config(
+    config: JsonObject,
+) -> None:
     endpoint = _build_endpoint()
     assert endpoint.upstream is not None
-    endpoint.upstream.config = {"auth": auth}
+    endpoint.upstream.config = config
     service = _build_service(endpoints=[endpoint])
 
     with pytest.raises(

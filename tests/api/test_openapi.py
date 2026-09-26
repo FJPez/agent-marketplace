@@ -1,7 +1,14 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 import pytest
 
 from app.core.config import get_settings
 from app.main import create_app
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 RETIRED_PATH_PREFIXES = (
     "/v1/invoke",
@@ -12,30 +19,31 @@ RETIRED_PATH_PREFIXES = (
 )
 
 
-def test_openapi_documents_provider_service_creation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
+@pytest.fixture
+def openapi_paths() -> Iterator[dict[str, Any]]:
     get_settings.cache_clear()
-    schema = create_app().openapi()
+    try:
+        yield create_app().openapi()["paths"]
+    finally:
+        get_settings.cache_clear()
 
-    provider_spec = schema["paths"]["/v1/provider/services"]["post"]
+
+def test_openapi_documents_provider_service_creation(
+    openapi_paths: dict[str, Any],
+) -> None:
+    provider_spec = openapi_paths["/v1/provider/services"]["post"]
 
     assert provider_spec["summary"] == "Create a draft provider service"
     assert provider_spec["requestBody"]["content"]["application/json"]["examples"]
-    get_settings.cache_clear()
 
 
 def test_openapi_no_longer_documents_retired_execution_routes(
-    monkeypatch: pytest.MonkeyPatch,
+    openapi_paths: dict[str, Any],
 ) -> None:
-    monkeypatch.setenv("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
-    get_settings.cache_clear()
-    paths = create_app().openapi()["paths"]
-
     retired = [
-        path for path in paths if path.startswith(RETIRED_PATH_PREFIXES) or path.endswith("/quote")
+        path
+        for path in openapi_paths
+        if path.startswith(RETIRED_PATH_PREFIXES) or path.endswith("/quote")
     ]
 
     assert retired == []
-    get_settings.cache_clear()

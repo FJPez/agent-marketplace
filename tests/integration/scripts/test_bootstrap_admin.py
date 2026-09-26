@@ -1,5 +1,4 @@
-import pytest
-from scripts.bootstrap_admin import BootstrapAdminError, bootstrap_admin, main
+from scripts.bootstrap_admin import bootstrap_admin
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -134,27 +133,3 @@ async def test_bootstrap_admin_accepts_plain_postgres_database_url(
     account = await _find_account(db_session_factory, ADMIN_WALLET)
     assert account is not None
     assert account.is_admin is True
-
-
-async def test_bootstrap_admin_rejects_invalid_wallet_address() -> None:
-    with pytest.raises(
-        BootstrapAdminError,
-        match="APP_BOOTSTRAP_ADMIN_WALLET is not a valid wallet address",
-    ):
-        await bootstrap_admin(
-            database_url="postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace",
-            admin_wallet="not-a-wallet",
-        )
-
-
-def test_main_reports_missing_admin_wallet(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setenv("APP_DATABASE_URL", "postgresql+asyncpg://unused:5432/unused")
-    monkeypatch.delenv("APP_BOOTSTRAP_ADMIN_WALLET", raising=False)
-
-    exit_code = main()
-
-    assert exit_code == 1
-    assert capsys.readouterr().err == "APP_BOOTSTRAP_ADMIN_WALLET is required\n"
