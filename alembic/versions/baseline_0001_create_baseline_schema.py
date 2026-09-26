@@ -141,12 +141,9 @@ def upgrade() -> None:
     op.create_index(
         op.f("ix_service_revisions_service_id"), "service_revisions", ["service_id"], unique=False
     )
-    # services.current_revision_id and service_revisions.service_id form a genuine
-    # two-table cycle: services references service_revisions via current_revision_id,
-    # and service_revisions references services via service_id. The model declares
-    # the FK back to service_revisions with use_alter=True so SQLAlchemy can resolve
-    # the cycle, which is why it is added here as a separate ALTER TABLE once both
-    # tables exist rather than inline on the services table definition.
+    # services.current_revision_id and service_revisions.service_id form a two-table FK
+    # cycle. The model marks the back-reference use_alter=True, so it is added here as a
+    # separate ALTER TABLE once both tables exist.
     op.create_foreign_key(
         op.f("fk_services_current_revision_id_service_revisions"),
         "services",
