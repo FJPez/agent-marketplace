@@ -22,11 +22,6 @@ def test_validate_upstream_base_url_rejects_loopback_http_in_prod(
             "APP_ENV": "prod",
             "APP_DATABASE_URL": "postgresql+asyncpg://db.example.com:5432/agent_marketplace",
             "APP_REDIS_URL": "redis://cache.example.com:6379/0",
-            "APP_PAYOUTS_ENABLED": "true",
-            "APP_PAYOUTS_RPC_URL": "https://rpc.example.com",
-            "APP_TREASURY_PRIVATE_KEY": (
-                "0x59c6995e998f97a5a0044966f0945382d7f6b1f07296a3f80b5b85ddf0f0f001"
-            ),
             "APP_SIWE_DOMAIN": "api.example.com",
         }
     )
