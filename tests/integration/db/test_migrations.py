@@ -366,6 +366,37 @@ def test_head_migration_rejects_non_object_service_revision_snapshot(
         )
 
 
+async def _insert_service_revision(db_engine: AsyncEngine, *, service_id: int) -> int:
+    async with db_engine.begin() as connection:
+        return (
+            await connection.execute(
+                text(
+                    """
+                    INSERT INTO service_revisions (
+                        service_id, revision_number, change_token, snapshot
+                    )
+                    VALUES (:service_id, 1, :change_token, '{}'::jsonb)
+                    RETURNING id
+                    """
+                ),
+                {"service_id": service_id, "change_token": "c" * 64},
+            )
+        ).scalar_one()
+
+
+async def _set_current_revision(
+    db_engine: AsyncEngine,
+    *,
+    service_id: int,
+    revision_id: int,
+) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text("UPDATE services SET current_revision_id = :revision_id WHERE id = :service_id"),
+            {"service_id": service_id, "revision_id": revision_id},
+        )
+
+
 def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
     migration_database: MigrationDatabase,
 ) -> None:
@@ -375,6 +406,8 @@ def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
     command.upgrade(config, "head")
     service_id = asyncio.run(_seed_service(engine, slug="downgrade-check"))
     asyncio.run(_insert_health_check(engine, service_id=service_id))
+    revision_id = asyncio.run(_insert_service_revision(engine, service_id=service_id))
+    asyncio.run(_set_current_revision(engine, service_id=service_id, revision_id=revision_id))
 
     try:
         command.downgrade(config, "base")

@@ -253,18 +253,21 @@ def test_settings_accept_valid_deployment_configuration(
 
 def test_settings_ignore_retired_payment_variables(
     settings_env_factory: SettingsEnvFactory,
+    tmp_path: Path,
 ) -> None:
-    settings_env_factory(
-        env=_valid_deployment_env(
-            {
-                "APP_X402_FACILITATOR_URL": "https://api.cdp.coinbase.com/platform/v2/x402",
-                "APP_X402_CDP_API_KEY_ID": None,
-                "APP_PAYOUTS_ENABLED": "false",
-                "APP_TREASURY_PRIVATE_KEY": "not-a-key",
-                "APP_INVOKE_RATE_LIMIT": "1/minute",
-            }
-        )
+    retired_dotenv_path = tmp_path / ".env.retired"
+    retired_dotenv_path.write_text(
+        "\n".join(
+            [
+                "APP_X402_FACILITATOR_URL=https://api.cdp.coinbase.com/platform/v2/x402",
+                "APP_PAYOUTS_ENABLED=false",
+                "APP_TREASURY_PRIVATE_KEY=not-a-key",
+                "APP_INVOKE_RATE_LIMIT=1/minute",
+            ]
+        ),
+        encoding="utf-8",
     )
+    settings_env_factory(env=_valid_deployment_env({"APP_ENV_FILE": str(retired_dotenv_path)}))
 
     settings = Settings()
 
