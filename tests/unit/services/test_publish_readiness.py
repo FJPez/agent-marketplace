@@ -134,3 +134,25 @@ def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoin
         match="service must enable at least one endpoint before publish",
     ):
         validate_service_for_publish(service)
+
+
+@pytest.mark.parametrize(
+    "auth",
+    [
+        {"type": "basic", "key_id": "gateway-key", "secret": "super-secret"},
+        {"type": "hmac_sha256", "key_id": 7, "secret": "super-secret"},
+        {"type": "hmac_sha256", "key_id": "gateway-key"},
+        "hmac_sha256",
+    ],
+)
+def test_validate_service_for_publish_rejects_incomplete_hmac_auth_config(auth: object) -> None:
+    endpoint = _build_endpoint()
+    assert endpoint.upstream is not None
+    endpoint.upstream.config = {"auth": auth}
+    service = _build_service(endpoints=[endpoint])
+
+    with pytest.raises(
+        InvalidInputError,
+        match="must define hmac auth config before publish",
+    ):
+        validate_service_for_publish(service)
