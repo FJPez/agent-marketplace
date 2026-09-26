@@ -4,14 +4,15 @@ import asyncio
 import os
 import sys
 
-from eth_account import Account as EthAccount
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import normalize_database_url
+from app.core.security import normalize_wallet_address
 from app.db.models import Account
 
-TREASURY_ADMIN_DISPLAY_NAME = "Treasury Admin"
+ADMIN_WALLET_ENV_VAR = "APP_BOOTSTRAP_ADMIN_WALLET"
+ADMIN_DISPLAY_NAME = "Admin"
 
 
 class BootstrapAdminError(RuntimeError):
@@ -25,48 +26,49 @@ def _get_required_env_var(env_name: str) -> str:
     raise BootstrapAdminError(f"{env_name} is required")
 
 
-def _wallet_address_from_private_key(private_key: str) -> str:
+def _normalize_admin_wallet(admin_wallet: str) -> str:
     try:
-        return EthAccount.from_key(private_key).address
-    except (TypeError, ValueError) as exc:
-        msg = "APP_TREASURY_PRIVATE_KEY is not a valid EVM private key"
+        return normalize_wallet_address(admin_wallet)
+    except ValueError as exc:
+        msg = f"{ADMIN_WALLET_ENV_VAR} is not a valid wallet address"
         raise BootstrapAdminError(msg) from exc
 
 
-async def bootstrap_admin(*, database_url: str, treasury_private_key: str) -> str:
-    treasury_wallet = _wallet_address_from_private_key(treasury_private_key)
+async def bootstrap_admin(*, database_url: str, admin_wallet: str) -> str:
+    wallet_address = _normalize_admin_wallet(admin_wallet)
     engine = create_async_engine(normalize_database_url(database_url), pool_pre_ping=True)
     session_factory = async_sessionmaker(bind=engine, expire_on_commit=False)
 
     try:
         async with session_factory.begin() as session:
             account = await session.scalar(
-                select(Account).where(Account.wallet_address == treasury_wallet).with_for_update(),
+                select(Account).where(Account.wallet_address == wallet_address).with_for_update(),
             )
             if account is None:
-                account = Account(
-                    wallet_address=treasury_wallet,
-                    display_name=TREASURY_ADMIN_DISPLAY_NAME,
-                    account_type="human",
-                    is_admin=True,
+                session.add(
+                    Account(
+                        wallet_address=wallet_address,
+                        display_name=ADMIN_DISPLAY_NAME,
+                        account_type="human",
+                        is_admin=True,
+                    )
                 )
-                session.add(account)
                 await session.flush()
-                return treasury_wallet
+                return wallet_address
 
             account.is_admin = True
             await session.flush()
-            return treasury_wallet
+            return wallet_address
     finally:
         await engine.dispose()
 
 
 async def _async_main() -> int:
-    treasury_wallet = await bootstrap_admin(
+    wallet_address = await bootstrap_admin(
         database_url=_get_required_env_var("APP_DATABASE_URL"),
-        treasury_private_key=_get_required_env_var("APP_TREASURY_PRIVATE_KEY"),
+        admin_wallet=_get_required_env_var(ADMIN_WALLET_ENV_VAR),
     )
-    sys.stdout.write(f"{treasury_wallet}\n")
+    sys.stdout.write(f"{wallet_address}\n")
     return 0
 
 
