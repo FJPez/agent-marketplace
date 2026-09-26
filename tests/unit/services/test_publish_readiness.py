@@ -2,6 +2,7 @@ import pytest
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
+from app.core.json_types import JsonValue
 from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -145,7 +146,7 @@ def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoin
         "hmac_sha256",
     ],
 )
-def test_validate_service_for_publish_rejects_incomplete_hmac_auth_config(auth: object) -> None:
+def test_validate_service_for_publish_rejects_incomplete_hmac_auth_config(auth: JsonValue) -> None:
     endpoint = _build_endpoint()
     assert endpoint.upstream is not None
     endpoint.upstream.config = {"auth": auth}
