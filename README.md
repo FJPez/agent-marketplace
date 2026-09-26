@@ -61,9 +61,10 @@ uv run alembic upgrade head
 `scripts/bootstrap_admin.py` makes the wallet in `APP_BOOTSTRAP_ADMIN_WALLET` an
 administrator, creating its account if needed. Railway runs it before every
 deploy, so set `APP_BOOTSTRAP_ADMIN_WALLET` there alongside `APP_DATABASE_URL`.
+The script reads both variables from the environment, not from `.env`.
 
 ```bash
-APP_BOOTSTRAP_ADMIN_WALLET=0xYourAdminWallet make bootstrap-admin
+APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace APP_BOOTSTRAP_ADMIN_WALLET=0xYourAdminWallet make bootstrap-admin
 ```
 
 ## Environment Notes
