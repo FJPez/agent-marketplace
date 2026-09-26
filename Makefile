@@ -6,7 +6,7 @@ COMPOSE ?= docker compose
 DOCKER_HOST ?= 127.0.0.1
 DOCKER_PORT ?= 18000
 
-.PHONY: sync run test test-unit test-serial lint lint-fix format typecheck migrate migrate-check seed bootstrap-admin demo-upstream demo-api demo-client demo-provider docker-build docker-run docker-stop docker-smoke
+.PHONY: sync run test test-unit test-serial lint lint-fix format typecheck migrate migrate-check seed bootstrap-admin demo-api docker-build docker-run docker-stop docker-smoke
 
 sync:
 	uv sync
@@ -48,17 +48,8 @@ seed:
 bootstrap-admin:
 	uv run $(PYTHON) scripts/bootstrap_admin.py
 
-demo-upstream:
-	uv run $(PYTHON) examples/mock_upstream.py
-
 demo-api:
 	uv run uvicorn app.main:app --host $(HOST) --port $(PORT)
-
-demo-client:
-	uv run $(PYTHON) examples/client.py
-
-demo-provider:
-	uv run $(PYTHON) examples/provider_client.py
 
 docker-build:
 	docker build -t $(IMAGE) .
