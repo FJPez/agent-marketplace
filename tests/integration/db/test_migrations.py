@@ -1,5 +1,4 @@
 import asyncio
-from datetime import UTC, datetime
 
 import pytest
 from alembic import command
@@ -9,17 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.db.support import MigrationDatabase
 
+ALEMBIC_VERSION_TABLE = "alembic_version"
 DOMAIN_TABLES = {
     "accounts",
     "api_keys",
     "endpoint_prices",
-    "invocations",
-    "ledger_entries",
     "moderation_actions",
-    "payment_attempts",
-    "payouts",
     "provider_upstreams",
-    "quotes",
     "service_endpoints",
     "service_health_checks",
     "service_revisions",
@@ -57,28 +52,6 @@ async def get_foreign_key_specs(
         )
 
 
-async def get_check_constraint_names(
-    db_engine: AsyncEngine,
-    table_name: str,
-) -> set[str]:
-    async with db_engine.connect() as connection:
-        constraints = await connection.run_sync(
-            lambda sync_conn: inspect(sync_conn).get_check_constraints(table_name),
-        )
-    return {constraint["name"] for constraint in constraints}
-
-
-async def get_unique_constraint_names(
-    db_engine: AsyncEngine,
-    table_name: str,
-) -> set[str]:
-    async with db_engine.connect() as connection:
-        constraints = await connection.run_sync(
-            lambda sync_conn: inspect(sync_conn).get_unique_constraints(table_name),
-        )
-    return {constraint["name"] for constraint in constraints}
-
-
 async def get_index_specs(
     db_engine: AsyncEngine,
     table_name: str,
@@ -90,15 +63,13 @@ async def get_index_specs(
     return {name: index for index in indexes if (name := index["name"]) is not None}
 
 
-def test_head_migration_creates_expected_unified_tables(
+def test_head_migration_creates_exactly_the_domain_tables(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
     table_names = asyncio.run(get_table_names(db_engine))
 
-    assert DOMAIN_TABLES.issubset(table_names)
-    assert "provider_profiles" not in table_names
-    assert "consumer_profiles" not in table_names
+    assert table_names - {ALEMBIC_VERSION_TABLE} == DOMAIN_TABLES
 
 
 def test_head_migration_expands_accounts_table(
@@ -150,111 +121,23 @@ def test_head_migration_cascades_moderation_actions_from_services(
     assert service_fk["options"] == {"ondelete": "CASCADE"}
 
 
-def test_head_migration_uses_bigint_for_payout_amount_minor(
+def test_head_migration_indexes_moderation_actions_by_latest_action(
     migrated_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    columns = asyncio.run(get_column_specs(db_engine, "payouts"))
+    indexes = asyncio.run(get_index_specs(db_engine, "moderation_actions"))
 
-    assert type(columns["amount_minor"]["type"]).__name__.upper() == "BIGINT"
-
-
-def test_head_migration_adds_request_payout_columns(
-    migrated_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    columns = asyncio.run(get_column_specs(db_engine, "payouts"))
-
-    assert columns["destination_wallet"]["nullable"] is True
-    assert {
-        "request_idempotency_key",
-        "failure_code",
-        "prepared_raw_transaction",
-        "chain_nonce",
-    }.issubset(
-        columns,
-    )
-    assert type(columns["chain_nonce"]["type"]).__name__.upper() == "BIGINT"
+    assert "ix_moderation_actions_service_id_id_desc" in indexes
 
 
-def test_head_migration_adds_payment_attempt_lifecycle_columns(
-    migrated_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    columns = asyncio.run(get_column_specs(db_engine, "payment_attempts"))
-
-    assert {"status", "updated_at"}.issubset(columns)
-    assert columns["status"]["nullable"] is False
-    assert columns["updated_at"]["nullable"] is False
-
-
-async def _seed_head_state_for_downgrade(db_engine: AsyncEngine) -> None:
-    async with db_engine.begin() as connection:
-        result = await connection.execute(
-            text(
-                """
-                INSERT INTO accounts (display_name, wallet_address)
-                VALUES (:display_name, :wallet_address)
-                RETURNING id
-                """
-            ),
-            {
-                "display_name": "Downgrade Provider",
-                "wallet_address": "0x0000000000000000000000000000000000000042",
-            },
-        )
-        account_id = result.scalar_one()
-        await connection.execute(
-            text(
-                """
-                INSERT INTO services (
-                    provider_account_id,
-                    slug,
-                    name,
-                    summary,
-                    lifecycle
-                )
-                VALUES (
-                    :provider_account_id,
-                    :slug,
-                    :name,
-                    :summary,
-                    :lifecycle
-                )
-                """
-            ),
-            {
-                "provider_account_id": account_id,
-                "slug": "downgrade-check",
-                "name": "Downgrade Check",
-                "summary": "Ensures legacy profile downgrade can restore service FKs.",
-                "lifecycle": "draft",
-            },
-        )
-
-
-def test_head_migration_downgrades_cleanly_with_service_rows(
-    migration_database: MigrationDatabase,
-) -> None:
-    config = migration_database.config
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
-    asyncio.run(_seed_head_state_for_downgrade(migration_database.engine))
-
-    try:
-        command.downgrade(config, "base")
-    finally:
-        command.upgrade(config, "head")
-
-
-async def _seed_service_for_health_checks(db_engine: AsyncEngine, *, slug: str) -> int:
+async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
     async with db_engine.begin() as connection:
         account_id = (
             await connection.execute(
                 text(
                     """
                     INSERT INTO accounts (display_name, wallet_address)
-                    VALUES ('Health Provider', '0x0000000000000000000000000000000000000019')
+                    VALUES ('Migration Provider', '0x0000000000000000000000000000000000000019')
                     RETURNING id
                     """
                 )
@@ -268,8 +151,8 @@ async def _seed_service_for_health_checks(db_engine: AsyncEngine, *, slug: str) 
                     VALUES (
                         :provider_account_id,
                         :slug,
-                        'Health Check Service',
-                        'Health check summary',
+                        'Migration Check Service',
+                        'Migration check summary',
                         'draft'
                     )
                     RETURNING id
@@ -321,7 +204,7 @@ def test_head_migration_cascades_health_checks_when_service_is_deleted(
     clean_database: None,
     db_engine: AsyncEngine,
 ) -> None:
-    service_id = asyncio.run(_seed_service_for_health_checks(db_engine, slug="cascade-health"))
+    service_id = asyncio.run(_seed_service(db_engine, slug="cascade-health"))
     asyncio.run(_insert_health_check(db_engine, service_id=service_id))
     assert asyncio.run(_read_health_check_service_ids(db_engine)) == [service_id]
 
@@ -330,620 +213,19 @@ def test_head_migration_cascades_health_checks_when_service_is_deleted(
     assert asyncio.run(_read_health_check_service_ids(db_engine)) == []
 
 
-def test_health_check_service_fk_migration_drops_orphan_rows(
-    migration_database: MigrationDatabase,
-) -> None:
-    config = migration_database.config
-    engine = migration_database.engine
-    command.downgrade(config, "base")
-    try:
-        command.upgrade(config, "moderation_actions_0018")
-        service_id = asyncio.run(_seed_service_for_health_checks(engine, slug="orphan-health"))
-        asyncio.run(_insert_health_check(engine, service_id=service_id))
-        asyncio.run(_insert_health_check(engine, service_id=987654))
-
-        command.upgrade(config, "head")
-
-        assert asyncio.run(_read_health_check_service_ids(engine)) == [service_id]
-    finally:
-        command.downgrade(config, "base")
-
-
-def test_health_check_service_fk_migration_round_trips_at_head(
+def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
     migration_database: MigrationDatabase,
 ) -> None:
     config = migration_database.config
     engine = migration_database.engine
     command.downgrade(config, "base")
     command.upgrade(config, "head")
+    service_id = asyncio.run(_seed_service(engine, slug="downgrade-check"))
+    asyncio.run(_insert_health_check(engine, service_id=service_id))
+
     try:
-        command.downgrade(config, "moderation_actions_0018")
-
-        foreign_keys = asyncio.run(get_foreign_key_specs(engine, "service_health_checks"))
-        assert foreign_keys == []
-
-        command.upgrade(config, "head")
-
-        foreign_keys = asyncio.run(get_foreign_key_specs(engine, "service_health_checks"))
-        service_fk = next(fk for fk in foreign_keys if fk["constrained_columns"] == ["service_id"])
-        assert service_fk["referred_table"] == "services"
-        assert service_fk["options"] == {"ondelete": "CASCADE"}
-    finally:
         command.downgrade(config, "base")
 
-
-def test_schema_alignment_migration_round_trips_drifted_column_types(
-    migration_database: MigrationDatabase,
-) -> None:
-    config = migration_database.config
-    engine = migration_database.engine
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
-    try:
-        invocation_columns = asyncio.run(get_column_specs(engine, "invocations"))
-        quote_columns = asyncio.run(get_column_specs(engine, "quotes"))
-        assert str(invocation_columns["response_payload"]["type"]) == "JSONB"
-        assert str(quote_columns["pricing_type"]["type"]) == "VARCHAR(14)"
-
-        command.downgrade(config, "service_health_0019")
-
-        invocation_columns = asyncio.run(get_column_specs(engine, "invocations"))
-        quote_columns = asyncio.run(get_column_specs(engine, "quotes"))
-        assert str(invocation_columns["response_payload"]["type"]) == "JSON"
-        assert str(quote_columns["pricing_type"]["type"]) == "VARCHAR(50)"
+        assert asyncio.run(get_table_names(engine)) <= {ALEMBIC_VERSION_TABLE}
     finally:
-        command.downgrade(config, "base")
-
-
-async def _seed_legacy_pricing_state(db_engine: AsyncEngine) -> None:
-    async with db_engine.begin() as connection:
-        account_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO accounts (display_name, wallet_address)
-                    VALUES ('Pricing Provider', '0x0000000000000000000000000000000000000017')
-                    RETURNING id
-                    """
-                )
-            )
-        ).scalar_one()
-        service_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO services (provider_account_id, slug, name, summary, lifecycle)
-                    VALUES (
-                        :provider_account_id,
-                        'pricing-check',
-                        'Pricing Check',
-                        'Pricing summary',
-                        'draft'
-                    )
-                    RETURNING id
-                    """
-                ),
-                {"provider_account_id": account_id},
-            )
-        ).scalar_one()
-        for key, access_mode in (("free-endpoint", "free"), ("paid-endpoint", "paid")):
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO service_endpoints (
-                        service_id,
-                        key,
-                        name,
-                        access_mode,
-                        request_schema,
-                        response_schema,
-                        timeout_seconds
-                    )
-                    VALUES (
-                        :service_id,
-                        :key,
-                        :key,
-                        :access_mode,
-                        CAST('{}' AS jsonb),
-                        CAST('{}' AS jsonb),
-                        30
-                    )
-                    """
-                ),
-                {"service_id": service_id, "key": key, "access_mode": access_mode},
-            )
-        await connection.execute(
-            text(
-                """
-                INSERT INTO pricing_models (endpoint_id, pricing_type, amount_minor, currency)
-                SELECT id, 'free', NULL, NULL
-                FROM service_endpoints
-                WHERE key = 'free-endpoint'
-                """
-            )
-        )
-        await connection.execute(
-            text(
-                """
-                INSERT INTO pricing_models (endpoint_id, pricing_type, amount_minor, currency)
-                SELECT id, 'fixed_per_call', 500, 'USD'
-                FROM service_endpoints
-                WHERE key = 'paid-endpoint'
-                """
-            )
-        )
-
-
-async def _read_endpoint_prices(db_engine: AsyncEngine) -> list[tuple[str, int, str]]:
-    async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                """
-                SELECT se.key, ep.amount_minor, ep.currency
-                FROM endpoint_prices ep
-                JOIN service_endpoints se ON se.id = ep.endpoint_id
-                ORDER BY se.key
-                """
-            )
-        )
-        return [(row[0], row[1], row[2]) for row in result]
-
-
-async def _read_legacy_pricing_models(db_engine: AsyncEngine) -> list[tuple[str, str]]:
-    async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                """
-                SELECT se.key, pm.pricing_type
-                FROM pricing_models pm
-                JOIN service_endpoints se ON se.id = pm.endpoint_id
-                ORDER BY se.key
-                """
-            )
-        )
-        return [(row[0], row[1]) for row in result]
-
-
-async def _insert_endpoint_price_without_currency(db_engine: AsyncEngine) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text(
-                """
-                INSERT INTO endpoint_prices (endpoint_id, amount_minor, currency)
-                SELECT id, 500, NULL
-                FROM service_endpoints
-                WHERE key = 'free-endpoint'
-                """
-            )
-        )
-
-
-def test_endpoint_prices_migration_round_trips_legacy_pricing_rows(
-    migration_database: MigrationDatabase,
-) -> None:
-    config = migration_database.config
-    engine = migration_database.engine
-    command.downgrade(config, "base")
-    try:
-        command.upgrade(config, "auth_wallet_binding_0016")
-        asyncio.run(_seed_legacy_pricing_state(engine))
-
         command.upgrade(config, "head")
-
-        table_names = asyncio.run(get_table_names(engine))
-        assert "endpoint_prices" in table_names
-        assert "pricing_models" not in table_names
-
-        columns = asyncio.run(get_column_specs(engine, "endpoint_prices"))
-        assert "pricing_type" not in columns
-        assert columns["amount_minor"]["nullable"] is False
-        assert columns["currency"]["nullable"] is False
-
-        assert asyncio.run(_read_endpoint_prices(engine)) == [("paid-endpoint", 500, "USD")]
-
-        with pytest.raises(IntegrityError):
-            asyncio.run(_insert_endpoint_price_without_currency(engine))
-
-        command.downgrade(config, "auth_wallet_binding_0016")
-
-        table_names = asyncio.run(get_table_names(engine))
-        assert "pricing_models" in table_names
-        assert "endpoint_prices" not in table_names
-        assert asyncio.run(_read_legacy_pricing_models(engine)) == [
-            ("free-endpoint", "free"),
-            ("paid-endpoint", "fixed_per_call"),
-        ]
-
-        command.upgrade(config, "head")
-        assert asyncio.run(_read_endpoint_prices(engine)) == [("paid-endpoint", 500, "USD")]
-    finally:
-        command.downgrade(config, "base")
-
-
-async def _seed_invocation_context(db_engine: AsyncEngine) -> tuple[int, int, int]:
-    async with db_engine.begin() as connection:
-        provider_account_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO accounts (display_name, wallet_address)
-                    VALUES ('Lease Provider', '0x0000000000000000000000000000000000000021')
-                    RETURNING id
-                    """
-                )
-            )
-        ).scalar_one()
-        consumer_account_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO accounts (display_name, wallet_address)
-                    VALUES ('Lease Consumer', '0x0000000000000000000000000000000000000022')
-                    RETURNING id
-                    """
-                )
-            )
-        ).scalar_one()
-        service_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO services (provider_account_id, slug, name, summary, lifecycle)
-                    VALUES (
-                        :provider_account_id,
-                        'lease-service',
-                        'Lease Service',
-                        'Lease summary',
-                        'active'
-                    )
-                    RETURNING id
-                    """
-                ),
-                {"provider_account_id": provider_account_id},
-            )
-        ).scalar_one()
-        endpoint_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO service_endpoints (
-                        service_id,
-                        key,
-                        name,
-                        access_mode,
-                        request_schema,
-                        response_schema,
-                        timeout_seconds
-                    )
-                    VALUES (
-                        :service_id,
-                        'translate',
-                        'Translate',
-                        'free',
-                        CAST('{}' AS jsonb),
-                        CAST('{}' AS jsonb),
-                        30
-                    )
-                    RETURNING id
-                    """
-                ),
-                {"service_id": service_id},
-            )
-        ).scalar_one()
-    return consumer_account_id, service_id, endpoint_id
-
-
-async def _insert_invocation_with_lease(
-    db_engine: AsyncEngine,
-    *,
-    consumer_account_id: int,
-    service_id: int,
-    endpoint_id: int,
-    idempotency_key: str,
-    status: str,
-    in_progress_until: datetime | None,
-) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text(
-                """
-                INSERT INTO invocations (
-                    consumer_account_id,
-                    service_id,
-                    endpoint_id,
-                    endpoint_key,
-                    access_mode,
-                    idempotency_key,
-                    request_hash,
-                    status,
-                    in_progress_until
-                )
-                VALUES (
-                    :consumer_account_id,
-                    :service_id,
-                    :endpoint_id,
-                    'translate',
-                    'free',
-                    :idempotency_key,
-                    :request_hash,
-                    :status,
-                    :in_progress_until
-                )
-                """
-            ),
-            {
-                "consumer_account_id": consumer_account_id,
-                "service_id": service_id,
-                "endpoint_id": endpoint_id,
-                "idempotency_key": idempotency_key,
-                "request_hash": "a" * 64,
-                "status": status,
-                "in_progress_until": in_progress_until,
-            },
-        )
-
-
-async def _read_invocation_leases(db_engine: AsyncEngine) -> list[tuple[str, str, datetime | None]]:
-    async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text(
-                """
-                SELECT idempotency_key, status, in_progress_until
-                FROM invocations
-                ORDER BY idempotency_key
-                """
-            )
-        )
-        return [(row[0], row[1], row[2]) for row in result]
-
-
-def test_head_migration_rejects_a_lease_on_a_terminal_invocation(
-    clean_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    consumer_account_id, service_id, endpoint_id = asyncio.run(
-        _seed_invocation_context(db_engine),
-    )
-
-    with pytest.raises(IntegrityError):
-        asyncio.run(
-            _insert_invocation_with_lease(
-                db_engine,
-                consumer_account_id=consumer_account_id,
-                service_id=service_id,
-                endpoint_id=endpoint_id,
-                idempotency_key="terminal-with-lease",
-                status="succeeded",
-                in_progress_until=datetime(2030, 1, 1, tzinfo=UTC),
-            )
-        )
-
-
-def test_head_migration_accepts_in_progress_invocations_with_and_without_a_lease(
-    clean_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    consumer_account_id, service_id, endpoint_id = asyncio.run(
-        _seed_invocation_context(db_engine),
-    )
-    leased_until = datetime(2030, 1, 1, tzinfo=UTC)
-
-    asyncio.run(
-        _insert_invocation_with_lease(
-            db_engine,
-            consumer_account_id=consumer_account_id,
-            service_id=service_id,
-            endpoint_id=endpoint_id,
-            idempotency_key="in-progress-leased",
-            status="in_progress",
-            in_progress_until=leased_until,
-        )
-    )
-    asyncio.run(
-        _insert_invocation_with_lease(
-            db_engine,
-            consumer_account_id=consumer_account_id,
-            service_id=service_id,
-            endpoint_id=endpoint_id,
-            idempotency_key="in-progress-unleased",
-            status="in_progress",
-            in_progress_until=None,
-        )
-    )
-
-    assert asyncio.run(_read_invocation_leases(db_engine)) == [
-        ("in-progress-leased", "in_progress", leased_until),
-        ("in-progress-unleased", "in_progress", None),
-    ]
-
-
-async def _seed_settling_payment_attempt(db_engine: AsyncEngine) -> None:
-    consumer_account_id, service_id, endpoint_id = await _seed_invocation_context(db_engine)
-    async with db_engine.begin() as connection:
-        quote_id = (
-            await connection.execute(
-                text(
-                    """
-                    INSERT INTO quotes (
-                        service_id,
-                        endpoint_id,
-                        endpoint_key,
-                        request_hash,
-                        pricing_type,
-                        amount_minor,
-                        currency,
-                        expires_at
-                    )
-                    VALUES (
-                        :service_id,
-                        :endpoint_id,
-                        'translate',
-                        :request_hash,
-                        'fixed_per_call',
-                        500,
-                        'USD',
-                        now()
-                    )
-                    RETURNING id
-                    """
-                ),
-                {
-                    "service_id": service_id,
-                    "endpoint_id": endpoint_id,
-                    "request_hash": "c" * 64,
-                },
-            )
-        ).scalar_one()
-        await connection.execute(
-            text(
-                """
-                INSERT INTO payment_attempts (
-                    consumer_account_id,
-                    quote_id,
-                    idempotency_key,
-                    payment_identifier,
-                    status,
-                    payment_requirement,
-                    payment_payload,
-                    settle_in_progress_until
-                )
-                VALUES (
-                    :consumer_account_id,
-                    :quote_id,
-                    'settling-key',
-                    'settling-payment',
-                    'settling',
-                    CAST('{}' AS jsonb),
-                    CAST('{}' AS jsonb),
-                    :settle_in_progress_until
-                )
-                """
-            ),
-            {
-                "consumer_account_id": consumer_account_id,
-                "quote_id": quote_id,
-                "settle_in_progress_until": datetime(2030, 1, 1, tzinfo=UTC),
-            },
-        )
-
-
-async def _update_payment_attempt_status(db_engine: AsyncEngine, *, status: str) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text("UPDATE payment_attempts SET status = :status"),
-            {"status": status},
-        )
-
-
-async def _read_payment_attempt_statuses(db_engine: AsyncEngine) -> list[str]:
-    async with db_engine.connect() as connection:
-        result = await connection.execute(
-            text("SELECT status FROM payment_attempts ORDER BY id"),
-        )
-        return [row[0] for row in result]
-
-
-def test_head_migration_adds_the_payment_settlement_claim(
-    migrated_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    columns = asyncio.run(get_column_specs(db_engine, "payment_attempts"))
-    check_constraints = asyncio.run(get_check_constraint_names(db_engine, "payment_attempts"))
-    ledger_unique_constraints = asyncio.run(
-        get_unique_constraint_names(db_engine, "ledger_entries"),
-    )
-    indexes = asyncio.run(get_index_specs(db_engine, "payment_attempts"))
-    active_request_index = indexes["uq_payment_attempts_active_request"]
-    predicate = active_request_index["dialect_options"]["postgresql_where"]
-
-    assert "settle_in_progress_until" in columns
-    assert "ck_payment_attempts_lease_only_settling" in check_constraints
-    assert "ck_payment_attempts_payment_attempt_status" in check_constraints
-    assert "uq_ledger_entries_payment_attempt_entry_type" in ledger_unique_constraints
-    assert active_request_index["unique"] is True
-    assert active_request_index["column_names"] == ["consumer_account_id", "idempotency_key"]
-    # The predicate comes back in the database's own rendering, so it is read for the two
-    # rejected statuses it must leave out rather than compared as text.
-    assert "verify_failed" in predicate
-    assert "settle_failed" in predicate
-
-
-def test_head_migration_rejects_a_settlement_lease_on_a_non_settling_attempt(
-    clean_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    asyncio.run(_seed_settling_payment_attempt(db_engine))
-
-    with pytest.raises(IntegrityError):
-        asyncio.run(
-            _update_payment_attempt_status(db_engine, status="settled"),
-        )
-
-
-def test_settlement_claim_migration_round_trips_at_head(
-    migration_database: MigrationDatabase,
-) -> None:
-    config = migration_database.config
-    engine = migration_database.engine
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
-    try:
-        asyncio.run(_seed_settling_payment_attempt(engine))
-        assert asyncio.run(_read_payment_attempt_statuses(engine)) == ["settling"]
-
-        # The downgrade is schema-reversible only: a settling attempt cannot be expressed
-        # by the older schema, so it is deleted rather than silently relabelled.
-        command.downgrade(config, "invocations_0021")
-
-        columns = asyncio.run(get_column_specs(engine, "payment_attempts"))
-        check_constraints = asyncio.run(get_check_constraint_names(engine, "payment_attempts"))
-        ledger_unique_constraints = asyncio.run(
-            get_unique_constraint_names(engine, "ledger_entries"),
-        )
-        indexes = asyncio.run(get_index_specs(engine, "payment_attempts"))
-        assert asyncio.run(_read_payment_attempt_statuses(engine)) == []
-        assert "settle_in_progress_until" not in columns
-        assert "ck_payment_attempts_lease_only_settling" not in check_constraints
-        assert "uq_ledger_entries_payment_attempt_entry_type" not in ledger_unique_constraints
-        assert "uq_payment_attempts_active_request" not in indexes
-
-        command.upgrade(config, "head")
-
-        columns = asyncio.run(get_column_specs(engine, "payment_attempts"))
-        check_constraints = asyncio.run(get_check_constraint_names(engine, "payment_attempts"))
-        indexes = asyncio.run(get_index_specs(engine, "payment_attempts"))
-        assert "settle_in_progress_until" in columns
-        assert "ck_payment_attempts_lease_only_settling" in check_constraints
-        assert "uq_payment_attempts_active_request" in indexes
-    finally:
-        command.downgrade(config, "base")
-
-
-def test_execution_lease_migration_round_trips_at_head(
-    migration_database: MigrationDatabase,
-) -> None:
-    config = migration_database.config
-    engine = migration_database.engine
-    command.downgrade(config, "base")
-    command.upgrade(config, "head")
-    try:
-        columns = asyncio.run(get_column_specs(engine, "invocations"))
-        constraints = asyncio.run(get_check_constraint_names(engine, "invocations"))
-        assert "in_progress_until" in columns
-        assert "ck_invocations_lease_only_in_progress" in constraints
-
-        command.downgrade(config, "schema_alignment_0020")
-
-        columns = asyncio.run(get_column_specs(engine, "invocations"))
-        constraints = asyncio.run(get_check_constraint_names(engine, "invocations"))
-        assert "in_progress_until" not in columns
-        assert "ck_invocations_lease_only_in_progress" not in constraints
-
-        command.upgrade(config, "head")
-
-        columns = asyncio.run(get_column_specs(engine, "invocations"))
-        constraints = asyncio.run(get_check_constraint_names(engine, "invocations"))
-        assert "in_progress_until" in columns
-        assert "ck_invocations_lease_only_in_progress" in constraints
-    finally:
-        command.downgrade(config, "base")
