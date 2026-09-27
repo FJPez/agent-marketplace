@@ -1,4 +1,6 @@
 import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import pytest
@@ -30,6 +32,16 @@ async def _stored(
         stored = await session.get(ProviderSigningSecret, account_id)
     assert stored is not None
     return stored
+
+
+async def _ciphertext(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    account_id: int,
+) -> str | None:
+    """The account's current ciphertext; None when it has no secret."""
+    async with db_session_factory() as session:
+        stored = await session.get(ProviderSigningSecret, account_id)
+    return None if stored is None else stored.ciphertext
 
 
 async def _create(db_session_factory: async_sessionmaker[AsyncSession], account_id: int) -> str:
@@ -125,21 +137,36 @@ async def test_concurrent_creates_issue_exactly_one_secret(
     assert await _load(db_session_factory, account_id) == issued
 
 
-async def test_issuing_a_secret_without_an_encryption_key_is_an_invalid_state(
+@pytest.mark.parametrize(
+    ("operation", "has_secret"),
+    [
+        pytest.param(provider_signing_secrets.create_signing_secret, False, id="create"),
+        pytest.param(provider_signing_secrets.rotate_signing_secret, True, id="rotate"),
+        pytest.param(provider_signing_secrets.load_signing_secrets, True, id="load"),
+    ],
+)
+async def test_signing_secrets_without_an_encryption_key_are_an_invalid_state(
     db_session_factory: async_sessionmaker[AsyncSession],
+    operation: Callable[..., Awaitable[object]],
+    has_secret: bool,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
+    if has_secret:
+        await _create(db_session_factory, account_id)
+    before = await _ciphertext(db_session_factory, account_id)
 
     async with db_session_factory() as session:
-        with pytest.raises(InvalidStateError, match="APP_PROVIDER_SECRET_ENCRYPTION_KEYS"):
-            await provider_signing_secrets.create_signing_secret(
+        with pytest.raises(
+            InvalidStateError,
+            match="unavailable until APP_PROVIDER_SECRET_ENCRYPTION_KEYS is configured",
+        ):
+            await operation(
                 session=session,
                 settings=_settings_with_keys(),
                 account_id=account_id,
             )
 
-    async with db_session_factory() as session:
-        assert await session.get(ProviderSigningSecret, account_id) is None
+    assert await _ciphertext(db_session_factory, account_id) == before
 
 
 async def test_a_secret_in_use_before_a_rotation_keeps_signing_during_the_grace_window(
@@ -240,3 +267,33 @@ async def test_a_changed_encryption_key_fails_closed_until_the_old_key_is_listed
     stored = await _stored(db_session_factory, account_id)
     assert Fernet(new_key).decrypt(stored.ciphertext).decode() == second
     assert await _load(db_session_factory, account_id, settings=both_keys) == [second, first]
+
+
+async def test_a_previous_secret_under_a_removed_key_is_skipped_and_logged(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The old key was removed (after a compromise, say) and the provider rotated, as the
+    # recovery asks: the secret it replaced cannot be decrypted, but the new one signs.
+    account_id = await create_provider_account_record(db_session_factory)
+    await _create(db_session_factory, account_id)
+    new_key_only = _settings_with_keys(Fernet.generate_key().decode())
+    new = await _rotate(db_session_factory, account_id, settings=new_key_only)
+    stored = await _stored(db_session_factory, account_id)
+
+    with caplog.at_level(logging.WARNING, logger="app.services.provider_signing_secrets"):
+        signing = await _load(db_session_factory, account_id, settings=new_key_only)
+
+    assert signing == [new]
+    (record,) = [
+        record
+        for record in caplog.records
+        if record.name == "app.services.provider_signing_secrets"
+    ]
+    assert (record.levelno, record.getMessage()) == (
+        logging.WARNING,
+        "previous signing secret cannot be decrypted; it no longer signs",
+    )
+    assert getattr(record, "account_id", None) == account_id
+    assert stored.previous_ciphertext is not None
+    assert stored.previous_ciphertext not in caplog.text

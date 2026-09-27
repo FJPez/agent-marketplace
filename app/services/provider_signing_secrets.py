@@ -16,7 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidStateError, NotFoundError
+from app.core.logging import get_logger
 from app.db.models import ProviderSigningSecret
+
+logger = get_logger(__name__)
 
 
 async def create_signing_secret(
@@ -26,15 +29,10 @@ async def create_signing_secret(
     account_id: int,
 ) -> tuple[ProviderSigningSecret, str]:
     """Issue the account's first signing secret; return its row and the plaintext."""
-    cipher = _cipher(settings)
-    secret = _new_secret()
+    secret, ciphertext = _issue(_cipher(settings))
     created = await session.scalar(
         insert(ProviderSigningSecret)
-        .values(
-            account_id=account_id,
-            ciphertext=cipher.encrypt(secret.encode()).decode(),
-            issued_at=datetime.now(UTC),
-        )
+        .values(account_id=account_id, ciphertext=ciphertext, issued_at=datetime.now(UTC))
         # A concurrent create inserts nothing here instead of raising.
         .on_conflict_do_nothing(index_elements=[ProviderSigningSecret.account_id])
         .returning(ProviderSigningSecret),
@@ -64,11 +62,11 @@ async def rotate_signing_secret(
     if stored is None:
         raise NotFoundError("the account has no signing secret; create one first")
 
-    secret = _new_secret()
+    secret, ciphertext = _issue(cipher)
     now = datetime.now(UTC)
     stored.previous_ciphertext = stored.ciphertext
     stored.previous_expires_at = now + timedelta(seconds=settings.provider_secret_grace_seconds)
-    stored.ciphertext = cipher.encrypt(secret.encode()).decode()
+    stored.ciphertext = ciphertext
     stored.issued_at = now
     await session.commit()
     return stored, secret
@@ -87,26 +85,31 @@ async def load_signing_secrets(
     settings: Settings,
     account_id: int,
 ) -> list[str]:
-    """Every secret a request to the provider is signed with now, the current one first."""
+    """Every secret a request to the provider is signed with now, the current one first.
+
+    The current secret must decrypt. A previous secret that no longer does (its key was
+    removed from the list) is skipped, as the grace for it cannot be honoured anyway.
+    """
     cipher = _cipher(settings)
     stored = await session.get(ProviderSigningSecret, account_id)
     if stored is None:
         raise InvalidStateError("the provider has no signing secret")
 
-    ciphertexts = [stored.ciphertext]
+    signing = [_decrypt(cipher, stored.ciphertext)]
     if (
         stored.previous_ciphertext is not None
         and stored.previous_expires_at is not None
         and stored.previous_expires_at > datetime.now(UTC)
     ):
-        ciphertexts.append(stored.previous_ciphertext)
-    try:
-        return [cipher.decrypt(ciphertext).decode() for ciphertext in ciphertexts]
-    except InvalidToken as exc:
-        raise InvalidStateError(
-            "the provider's signing secret cannot be decrypted with "
-            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS",
-        ) from exc
+        try:
+            signing.append(cipher.decrypt(stored.previous_ciphertext).decode())
+        except InvalidToken:
+            # Logged without the ciphertext, which is the secret, encrypted.
+            logger.warning(
+                "previous signing secret cannot be decrypted; it no longer signs",
+                extra={"account_id": account_id},
+            )
+    return signing
 
 
 def _cipher(settings: Settings) -> MultiFernet:
@@ -121,6 +124,20 @@ def _cipher(settings: Settings) -> MultiFernet:
     )
 
 
-def _new_secret() -> str:
-    # 32 random bytes; the prefix tells it apart from an API key.
-    return f"amp_sig_{token_urlsafe(32)}"
+def _issue(cipher: MultiFernet) -> tuple[str, str]:
+    """A new secret and its ciphertext.
+
+    The secret is 32 random bytes; its prefix tells it apart from an API key.
+    """
+    secret = f"amp_sig_{token_urlsafe(32)}"
+    return secret, cipher.encrypt(secret.encode()).decode()
+
+
+def _decrypt(cipher: MultiFernet, ciphertext: str) -> str:
+    try:
+        return cipher.decrypt(ciphertext).decode()
+    except InvalidToken as exc:
+        raise InvalidStateError(
+            "the provider's signing secret cannot be decrypted with "
+            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS",
+        ) from exc
