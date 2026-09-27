@@ -792,6 +792,39 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
 
 
 @pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_the_retired_config_field(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    # An old client still sends the per-endpoint config that held an HMAC secret.
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": TEST_UPSTREAM_BASE_URL,
+            "path": "/translate",
+            "http_method": "POST",
+            "config": {"hmac_secret": "provider-chosen"},
+        },
+    )
+
+    assert response.status_code == 422
+    (error,) = response.json()["errors"]
+    assert (error["loc"], error["type"]) == (["body", "config"], "extra_forbidden")
+
+
+@pytest.mark.asyncio
 async def test_put_endpoint_upstream_rejects_disallowed_http_method(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
