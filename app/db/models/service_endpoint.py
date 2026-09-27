@@ -29,7 +29,7 @@ from app.core.service_fields import (
     SERVICE_SUMMARY_MAX_LENGTH,
     SLUG_MAX_LENGTH,
 )
-from app.db.base import Base
+from app.db.base import Base, utc_now
 
 if TYPE_CHECKING:
     from app.db.models.endpoint_price import EndpointPrice
@@ -108,7 +108,7 @@ class ServiceEndpoint(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
-        onupdate=datetime.now,
+        onupdate=utc_now,
     )
 
     service: Mapped[Service] = relationship(back_populates="endpoints")

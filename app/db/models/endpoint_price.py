@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base
+from app.db.base import Base, utc_now
 
 if TYPE_CHECKING:
     from app.db.models.service_endpoint import ServiceEndpoint
@@ -35,7 +35,7 @@ class EndpointPrice(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
-        onupdate=datetime.now,
+        onupdate=utc_now,
     )
 
     endpoint: Mapped[ServiceEndpoint] = relationship(back_populates="price")
