@@ -19,6 +19,7 @@ Core capabilities:
 - provider service authoring and publish control
 - marketplace-issued provider signing secrets, rotatable with a grace period
 - DNS proof that a provider controls its upstream hosts, checked at every publish
+- provider payout addresses proven by signature, with payouts held after a change
 - public discovery, schemas, and pricing lookups
 - moderation for administrators
 
