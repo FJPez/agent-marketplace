@@ -81,10 +81,10 @@ Railway runs two services from this repository, both built from the
 
 - **API.** Configured by `railway.toml`: the `/health/ready` health check and a
   pre-deploy command that migrates the database and bootstraps the admin. Set
-  the `APP_*` variables and `FORWARDED_ALLOW_IPS=*`. Railway's edge proxy is
-  the only way into the container and replaces any `X-Forwarded-For` a client
-  sends, so trusting it gives every client its own rate limit instead of one
-  shared by all requests from the proxy.
+  the `APP_*` variables, `FORWARDED_ALLOW_IPS=*` (only while the check below
+  passes) and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends
+  SIGKILL right after SIGTERM, cutting off the requests in flight at every
+  deploy; with 30 seconds, uvicorn finishes them before it exits.
 - **Worker.** Create a second service from the same repository. New services
   cannot use a Railway config file, so set it up in the service settings: start
   command `python -m app.worker`, no health check path, no pre-deploy command
@@ -94,6 +94,41 @@ Railway runs two services from this repository, both built from the
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends SIGKILL
   right after SIGTERM; 30 seconds covers the worker's 25-second shutdown
   timeout.
+
+Railway's config as code (`railway.toml`) is deprecated, and Railway stops
+reading it on 2026-12-01. After that the API would deploy without its health
+check and without the pre-deploy migration, so a deploy could go live on an
+unmigrated schema. Before then, move both services to Railway's infrastructure
+as code (`.railway/railway.ts`), after confirming it can express the pre-deploy
+command and the draining time.
+
+#### Checking the proxy trust after a deploy
+
+With `FORWARDED_ALLOW_IPS=*`, uvicorn takes the client address from the
+leftmost `X-Forwarded-For` entry, so each client gets its own rate limit rather
+than one shared by every request from Railway's edge proxy. That is safe only
+if the edge replaces the `X-Forwarded-For` a client sends, and Railway's own
+statements conflict: its staff said in 2024 that the edge appends to the
+header, and in 2026-06 that it strips it. If it appends, any client can forge a
+new address on every request and escape the rate limit. So this check is
+required on a staging deploy before production relies on
+`FORWARDED_ALLOW_IPS=*`:
+
+1. Set `APP_API_RATE_LIMIT=2/minute` and deploy.
+2. Send 5 unauthenticated `/v1` requests, each with a different forged
+   `X-Forwarded-For`:
+
+   ```bash
+   for i in 1 2 3 4 5; do
+     curl -s -o /dev/null -w '%{http_code}\n' \
+       -H "X-Forwarded-For: 203.0.113.$i" "https://$STAGING_DOMAIN/v1/services"
+   done
+   ```
+
+3. Expect `429` from the third request on. If the requests are not limited,
+   the forged header reaches uvicorn: do not keep `FORWARDED_ALLOW_IPS=*`. The
+   rate limit then has to key on a header the edge overwrites, which is a
+   follow-up.
 
 ## Resetting a Local Database
 
