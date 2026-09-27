@@ -33,7 +33,11 @@ def upgrade() -> None:
             jsonschema_rs.Draft202012Validator(
                 json.loads(request_schema),
                 offline=True,
-                pattern_options=jsonschema_rs.RegexOptions(),
+                # PATTERN_SIZE_LIMIT and PATTERN_DFA_SIZE_LIMIT at this revision.
+                pattern_options=jsonschema_rs.RegexOptions(
+                    size_limit=10 * 1024,
+                    dfa_size_limit=64 * 1024,
+                ),
             )
         # ValidationError, or ValueError past the library's recursion limit.
         except ValueError:

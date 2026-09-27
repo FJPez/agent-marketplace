@@ -577,10 +577,21 @@ def test_request_schema_check_refuses_stored_schemas_the_invoke_path_cannot_comp
                 request_schema='{"$ref": "https://schemas.example.com/input.json"}',
             )
         )
+        oversized_pattern_id = asyncio.run(
+            _insert_endpoint(
+                engine,
+                service_id=service_id,
+                key="oversized-pattern",
+                request_schema='{"pattern": "((a{50}){50}){50}x"}',
+            )
+        )
 
         with pytest.raises(
             RuntimeError,
-            match=rf"service endpoints \[{remote_ref_id}\] have request schemas",
+            match=(
+                rf"service endpoints \[{remote_ref_id}, {oversized_pattern_id}\] have request "
+                "schemas"
+            ),
         ):
             command.upgrade(config, "head")
     finally:
