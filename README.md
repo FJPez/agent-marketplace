@@ -271,7 +271,9 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   provider's account, the address and the network under a one-time nonce, which
   expires after `APP_PAYOUT_ADDRESS_CHALLENGE_SECONDS` (default 300). Then the
   provider signs the typed data with that address's key (`eth_signTypedData_v4`) and
-  submits the signature to `POST /v1/provider/payout-address`.
+  submits the signature to `POST /v1/provider/payout-address`. The signature must be
+  canonical, as standard wallets make it: a low s and a v of 27 or 28 (a v of 0 or 1,
+  as some hardware wallets return, is accepted and stored as 27 or 28).
   `GET /v1/provider/payout-address` returns the latest proof. Wallets such as
   MetaMask sign v4 typed data only while connected to the chain it names (84532, Base
   Sepolia, by default), so switch the wallet to that network first. The address must

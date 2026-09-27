@@ -62,13 +62,20 @@ async def request_payout_address_challenge(
     description=(
         "Records the pending challenge's address as the provider's payout address, given "
         "that address's signature of the challenge. It replaces any earlier one at once, "
-        "and payouts are held until its `effective_at`."
+        "and payouts are held until its `effective_at`. The signature must be canonical, "
+        "as standard wallets make it: 65 bytes with a low s and a v of 27 or 28 (a v of 0 "
+        "or 1 is accepted and stored as 27 or 28)."
     ),
     responses={
         201: {"description": "Payout address recorded; payouts are held until it is effective."},
         403: {"description": "A non-JWT bearer token was supplied."},
         409: {"description": "No challenge is pending, or it has expired."},
-        422: {"description": "The signature is not the address's signature of the challenge."},
+        422: {
+            "description": (
+                "The signature is malformed, not canonical, or not the address's signature "
+                "of the challenge."
+            ),
+        },
     },
 )
 async def prove_payout_address(
