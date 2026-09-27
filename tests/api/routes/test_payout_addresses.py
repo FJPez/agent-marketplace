@@ -3,15 +3,34 @@ from datetime import datetime, timedelta
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_typed_data
+from eth_account.signers.local import LocalAccount
 from httpx import AsyncClient
+from sqlalchemy import func, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import create_provider_account_record
 from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_account_id
+
+from app.db.models import PayoutAddressChallenge
 
 CHALLENGE_PATH = "/v1/provider/payout-address/challenge"
 PAYOUT_ADDRESS_PATH = "/v1/provider/payout-address"
 # The shape of a canonical signature (a low s, v 27), though no key made it.
 SIGNATURE = "0x" + "ab" * 32 + "3c" * 32 + "1b"
+
+
+async def _signed_challenge(
+    async_client: AsyncClient,
+    headers: dict[str, str],
+    wallet: LocalAccount,
+) -> str:
+    """Request a challenge for the wallet's address and return the wallet's signature of it."""
+    challenge = await async_client.post(
+        CHALLENGE_PATH,
+        headers=headers,
+        json={"address": wallet.address, "network": "eip155:84532"},
+    )
+    signable = encode_typed_data(full_message=challenge.json()["typed_data"])
+    return wallet.sign_message(signable).signature.to_0x_hex()
 
 
 async def test_a_payout_address_is_proven_through_the_api_and_held(
@@ -151,3 +170,59 @@ async def test_payout_address_routes_without_a_challenge_or_a_proof(
 
     assert response.status_code == status
     assert response.json()["detail"] == detail
+
+
+async def test_a_malformed_signature_is_a_validation_error_and_keeps_the_challenge(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    headers = auth_headers_for_account_id(await create_provider_account_record(db_session_factory))
+    wallet = Account.create()
+    signature = await _signed_challenge(async_client, headers, wallet)
+
+    malformed = await async_client.post(
+        PAYOUT_ADDRESS_PATH,
+        headers=headers,
+        json={"signature": "0x1234"},
+    )
+    proven = await async_client.post(
+        PAYOUT_ADDRESS_PATH,
+        headers=headers,
+        json={"signature": signature},
+    )
+
+    assert malformed.status_code == 422
+    assert malformed.json()["type"] == "/problems/invalid_input"
+    assert [(error["loc"], error["type"]) for error in malformed.json()["errors"]] == [
+        (["body", "signature"], "string_pattern_mismatch"),
+    ]
+    assert (proven.status_code, proven.json()["address"]) == (201, wallet.address)
+
+
+async def test_an_expired_challenge_is_an_invalid_state_problem(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    headers = auth_headers_for_account_id(account_id)
+    signature = await _signed_challenge(async_client, headers, Account.create())
+    async with db_session_factory.begin() as session:
+        await session.execute(
+            update(PayoutAddressChallenge)
+            .where(PayoutAddressChallenge.account_id == account_id)
+            .values(expires_at=func.now() - timedelta(seconds=1)),
+        )
+
+    response = await async_client.post(
+        PAYOUT_ADDRESS_PATH,
+        headers=headers,
+        json={"signature": signature},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "type": "/problems/invalid_state",
+        "title": "Invalid state",
+        "status": 409,
+        "detail": "the payout address challenge has expired; request a new one",
+    }
