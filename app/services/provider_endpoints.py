@@ -146,13 +146,11 @@ async def update_endpoint(
         else _new_price_version(settings=settings, amount=resulting_amount)
     )
 
-    # Stamped after the lock wait so the timestamp reflects when the row was
-    # actually mutated.
-    now = datetime.now(UTC)
-
     for attribute_name, value in column_changes.items():
         setattr(endpoint, attribute_name, value)
-    endpoint.updated_at = now
+    # Stamped after the lock wait so the timestamp reflects when the row was
+    # actually mutated.
+    endpoint.updated_at = datetime.now(UTC)
 
     if new_price is not None:
         await _make_current_price(session=session, endpoint=endpoint, price=new_price)
@@ -297,7 +295,7 @@ async def _make_current_price(
     )
     price.endpoint_id = endpoint.id
     price.version = (latest_version or 0) + 1
-    session.add(price)
+    # Assigning the relationship of an endpoint in the session adds the version.
     endpoint.current_price = price
     try:
         await session.flush()

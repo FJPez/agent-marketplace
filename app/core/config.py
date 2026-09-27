@@ -3,6 +3,7 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
+from eth_utils import is_checksum_address, is_checksum_formatted_address
 from pydantic import AfterValidator, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
@@ -26,12 +27,10 @@ def _checksum_address(value: str) -> str:
     mixed-case one must already be correctly checksummed: a wrong checksum means a
     mistyped address, and these addresses decide where payments go.
     """
-    checksummed = normalize_wallet_address(value)
-    digits = value[-40:]
-    if digits not in {digits.lower(), digits.upper()} and digits != checksummed[2:]:
+    if is_checksum_formatted_address(value) and not is_checksum_address(value):
         msg = "address has an invalid EIP-55 checksum"
         raise ValueError(msg)
-    return checksummed
+    return normalize_wallet_address(value)
 
 
 EvmAddress = Annotated[str, AfterValidator(_checksum_address)]

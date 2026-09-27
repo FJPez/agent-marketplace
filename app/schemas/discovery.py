@@ -1,10 +1,9 @@
 from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.core.enums import AccessMode
 from app.core.json_types import to_json_object
-from app.db.models.listing_price import ListingPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.service import Description, SchemaObject, ServiceName, Slug, Summary
@@ -45,21 +44,13 @@ class PublicEndpointSchema(BaseModel):
 class PublicListingPrice(BaseModel):
     """The public terms of a price version: what a paid call to the listing costs."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     version: int
     amount: int
     asset: str
     network: str
     pay_to: str
-
-    @classmethod
-    def from_model(cls, price: ListingPrice) -> Self:
-        return cls(
-            version=price.version,
-            amount=price.amount,
-            asset=price.asset,
-            network=price.network,
-            pay_to=price.pay_to,
-        )
 
 
 class PublicEndpointPricing(BaseModel):
@@ -80,7 +71,7 @@ class PublicEndpointPricing(BaseModel):
             price=(
                 None
                 if endpoint.current_price is None
-                else PublicListingPrice.from_model(endpoint.current_price)
+                else PublicListingPrice.model_validate(endpoint.current_price)
             ),
         )
 
