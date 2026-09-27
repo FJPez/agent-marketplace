@@ -240,6 +240,12 @@ async def publish_provider_service(
         404: {"description": "The parent service does not exist or is not owned by the actor."},
         409: {"description": "The endpoint cannot be created in the current service state."},
         422: {"description": "The endpoint payload was invalid."},
+        503: {
+            "description": (
+                "The request schema could not be compiled now: no worker was free, workers "
+                "cannot start, or the API is shutting down. Retry after `Retry-After`."
+            ),
+        },
     },
 )
 async def create_provider_endpoint(
@@ -308,6 +314,12 @@ async def create_provider_endpoint(
         404: {"description": "The requested endpoint does not exist or is not owned by the actor."},
         409: {"description": "The endpoint cannot be updated in the current state."},
         422: {"description": "The endpoint payload was invalid."},
+        503: {
+            "description": (
+                "A new request schema could not be compiled now: no worker was free, workers "
+                "cannot start, or the API is shutting down. Retry after `Retry-After`."
+            ),
+        },
     },
 )
 async def update_provider_endpoint(
