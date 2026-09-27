@@ -6,7 +6,7 @@ resources as the API lifespan without importing FastAPI or `app.main`.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,15 +38,22 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
     """Build the resources and close them on exit.
 
     Nothing connects here: the engine and the Redis clients connect on first use, so
-    opening succeeds even while a dependency is down (readiness reports it).
+    opening succeeds even while a dependency is down (readiness reports it). Each
+    resource's cleanup is registered immediately after it is created, so a failure
+    partway through startup still releases whatever was already opened.
     """
-    db_engine = create_engine(settings)
-    redis_client = (
-        coredis.Redis.from_url(settings.redis_url, decode_responses=True)
-        if settings.redis_url
-        else None
-    )
-    try:
+    async with AsyncExitStack() as stack:
+        db_engine = create_engine(settings)
+        stack.push_async_callback(db_engine.dispose)
+
+        redis_client = (
+            coredis.Redis.from_url(settings.redis_url, decode_responses=True)
+            if settings.redis_url
+            else None
+        )
+        if redis_client is not None:
+            stack.callback(redis_client.connection_pool.disconnect)
+
         yield Resources(
             settings=settings,
             db_engine=db_engine,
@@ -54,7 +61,3 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             redis_client=redis_client,
             rate_limits_backend=create_rate_limits_backend(settings),
         )
-    finally:
-        if redis_client is not None:
-            redis_client.connection_pool.disconnect()
-        await db_engine.dispose()
