@@ -91,6 +91,8 @@ async def test_an_unsafe_url_is_rejected_before_any_lookup(base_url: str, reason
         "0.0.0.0",
         "255.255.255.255",
         "192.0.2.1",
+        # Special-purpose only since the table CPython 3.12.4 corrected (CVE-2024-4032).
+        "192.0.0.192",
         "224.0.0.1",
         "239.255.255.250",
         "::1",
@@ -108,6 +110,47 @@ async def test_an_unsafe_url_is_rejected_before_any_lookup(base_url: str, reason
         "::127.0.0.1",
         "64:ff9b::7f00:1",
         "64:ff9b::a9fe:a9fe",
+        # Deprecated site-local.
+        "fec0::1",
+        "fed0::1",
+        "feff::1",
+        # IPv4-translated (SIIT) forms of private addresses.
+        "::ffff:0:a00:1",
+        "::ffff:0:7f00:1",
+        "::ffff:0:a9fe:a9fe",
+        # Beside the well-known NAT64 prefix, outside it.
+        "64:ff9b::ffff:a00:1",
+        "64:ff9b::1:a00:1",
+        "64:ff9b:0:1::a00:1",
+        "64:ff9b:2::a00:1",
+        "64:ff9b:a00:1::",
+        # The rest of ::/8.
+        "::1:a00:1",
+        "::fffe:a00:1",
+        "::ffff:1:a00:1",
+        "0:0:1::a00:1",
+        "::1:0:0:1",
+        # Reserved beside the discard-only 100::/64, and segment routing SIDs.
+        "100:0:0:1::1",
+        "5f00::1",
+        # Unallocated.
+        "180::1",
+        "200::1",
+        "400::1",
+        "4000::1",
+        "8000::1",
+        "e000::1",
+        "f000::1",
+        "fe00::1",
+        # ISATAP interface ids carrying a private IPv4 address.
+        "2606:4700::5efe:a00:1",
+        "2606:4700::200:5efe:a00:1",
+        "2001:4860::5efe:a9fe:a9fe",
+        # Special-purpose blocks inside 2001::/23.
+        "2001:20::1",
+        "2001:3::1",
+        "2001:4:112::1",
+        "2001:30::1",
     ],
 )
 async def test_a_host_with_any_non_public_address_is_rejected(address: str) -> None:
@@ -119,8 +162,8 @@ async def test_a_host_with_any_non_public_address_is_rejected(address: str) -> N
 
 @pytest.mark.parametrize(
     "address",
-    ["::ffff:93.184.215.14", "64:ff9b::5db8:d70e"],
-    ids=["ipv4_mapped", "nat64"],
+    ["::ffff:93.184.215.14", "64:ff9b::5db8:d70e", "2606:4700::5efe:5db8:d70e"],
+    ids=["ipv4_mapped", "nat64", "isatap"],
 )
 async def test_ipv6_forms_of_a_public_ipv4_address_are_accepted(address: str) -> None:
     resolver = FakeResolver({HOST: [address]})

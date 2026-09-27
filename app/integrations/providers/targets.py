@@ -8,7 +8,7 @@ and a DNS answer that changes after validation cannot redirect the request.
 
 import re
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv6Address, IPv6Network
+from ipaddress import IPv4Address, IPv6Network
 from urllib.parse import urlsplit
 
 from app.integrations.providers.dns import DnsLookupError, DnsResolver, IpAddress
@@ -18,10 +18,15 @@ _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 # so no IPv4 form (dotted, decimal or hex) and no single-label name such as localhost.
 _DNS_NAME = re.compile(rf"(?:{_LABEL}\.)+(?=[a-z]){_LABEL}")
 _DNS_NAME_MAX_LENGTH = 253
-# IPv6 prefixes that carry an IPv4 address in their low 32 bits: the deprecated
-# IPv4-compatible form, which Python counts as global, and NAT64's well-known prefix.
-_IPV4_COMPATIBLE = IPv6Network("::/96")
+# NAT64's well-known prefix carries an IPv4 address in its low 32 bits.
 _NAT64 = IPv6Network("64:ff9b::/96")
+# Any other IPv6 address must be global unicast outside the special-purpose blocks
+# allocated inside it: an allowlist, because Python's `is_global` is True for every
+# reserved or unallocated address missing from the special-purpose registry.
+_GLOBAL_UNICAST = IPv6Network("2000::/3")
+_SPECIAL_IN_GLOBAL_UNICAST = tuple(
+    IPv6Network(block) for block in ("2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20")
+)
 
 
 class UnsafeUpstreamTargetError(ValueError):
@@ -85,12 +90,18 @@ def _not_public(host: str) -> UnsafeUpstreamTargetError:
 
 
 def _is_public(address: IpAddress) -> bool:
-    if isinstance(address, IPv6Address):
-        if address.ipv4_mapped is not None:
-            return _is_public(address.ipv4_mapped)
-        if address in _NAT64:
-            return _is_public(IPv4Address(int(address) & 0xFFFF_FFFF))
-        if address in _IPV4_COMPATIBLE:
-            return False
-    # Multicast addresses count as global, but no upstream is one.
-    return address.is_global and not address.is_multicast
+    if isinstance(address, IPv4Address):
+        # Multicast addresses count as global, but no upstream is one.
+        return address.is_global and not address.is_multicast
+    if address.ipv4_mapped is not None:
+        return _is_public(address.ipv4_mapped)
+    if address in _NAT64:
+        return _is_public(IPv4Address(int(address) & 0xFFFF_FFFF))
+    if address not in _GLOBAL_UNICAST or any(
+        address in block for block in _SPECIAL_IN_GLOBAL_UNICAST
+    ):
+        return False
+    # An ISATAP interface id (RFC 5214) carries an IPv4 address in its low 32 bits.
+    if (int(address) >> 32) & 0xFCFF_FFFF == 0x0000_5EFE:
+        return _is_public(IPv4Address(int(address) & 0xFFFF_FFFF))
+    return True
