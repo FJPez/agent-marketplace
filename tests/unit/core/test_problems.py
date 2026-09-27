@@ -57,9 +57,12 @@ def test_extensions_never_replace_standard_members() -> None:
         extensions={"type": "spoofed", "title": "spoofed", "status": 200, "detail": "spoofed"},
     )
 
-    assert _body(response) == {
+    body = _body(response)
+    assert body == {
         "type": "/problems/conflict",
         "title": "Conflict",
         "status": 409,
         "detail": "real detail",
     }
+    assert isinstance(body, dict)
+    assert list(body.keys())[:4] == ["type", "title", "status", "detail"]

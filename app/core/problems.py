@@ -36,12 +36,17 @@ def problem_response(
     else:
         type_uri = f"/problems/{problem_type}"
         title = problem_type.replace("_", " ").capitalize()
+    standard_members = {"type", "title", "status", "detail"}
     content: dict[str, JsonValue] = {
-        **(extensions or {}),
         "type": type_uri,
         "title": title,
         "status": status_code,
         "detail": detail,
+        **{
+            name: value
+            for name, value in (extensions or {}).items()
+            if name not in standard_members
+        },
     }
     return JSONResponse(
         content,
