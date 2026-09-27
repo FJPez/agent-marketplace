@@ -1,6 +1,6 @@
 import pytest
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from tests.fixtures.domain import (
@@ -191,3 +191,16 @@ async def test_deleting_an_endpoint_deletes_its_price_versions(
         remaining = await session.scalar(select(func.count()).select_from(ListingPrice))
 
     assert remaining == 0
+
+
+async def test_current_price_is_never_lazy_loaded(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    endpoint_id = await _create_endpoint(db_session_factory)
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert endpoint is not None
+        with pytest.raises(InvalidRequestError, match="lazy='raise'"):
+            _ = endpoint.current_price

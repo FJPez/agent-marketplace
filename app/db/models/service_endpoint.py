@@ -119,8 +119,10 @@ class ServiceEndpoint(Base):
         uselist=False,
     )
     # The composite key above also names `id`, so the join and its foreign key
-    # are spelled out.
+    # are spelled out. lazy="raise": a reader that forgot to eager-load the price
+    # fails loudly instead of attempting IO.
     current_price: Mapped[ListingPrice | None] = relationship(
         primaryjoin="ServiceEndpoint.current_price_id == ListingPrice.id",
         foreign_keys=[current_price_id],
+        lazy="raise",
     )
