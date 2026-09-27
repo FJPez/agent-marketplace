@@ -145,8 +145,10 @@ USD-cent `endpoint_prices` with `listing_prices` refuses to run while
 `endpoint_prices` still holds rows (for example from an earlier `make seed`),
 because a cent price has no asset, network or treasury to become a price version.
 The migration that starts checking request schemas refuses to run while an
-endpoint stores a request schema the invoke path cannot compile. In any of these
-cases, drop and recreate the database:
+endpoint stores a request schema the invoke path cannot compile. The migration
+that retires the `suspended` and `delisted` service lifecycle values (moderation
+actions record those states) refuses to run while a service still holds one. In
+any of these cases, drop and recreate the database:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"

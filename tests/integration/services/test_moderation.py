@@ -42,6 +42,7 @@ DERIVED_STATES = [
     (["suspend"], ModerationServiceState.SUSPENDED),
     (["delist"], ModerationServiceState.DELISTED),
     (["suspend", "restore"], ModerationServiceState.CLEAR),
+    (["delist", "restore"], ModerationServiceState.CLEAR),
     (["suspend", "delist"], ModerationServiceState.DELISTED),
     (["delist", "restore", "suspend"], ModerationServiceState.SUSPENDED),
 ]

@@ -19,8 +19,22 @@ depends_on: Sequence[str] | None = None
 
 def upgrade() -> None:
     # Suspending and delisting are moderation actions (moderation_actions); the
-    # lifecycle's own suspended and delisted values were never written. The narrower
-    # column and check refuse any row that holds one.
+    # lifecycle's own suspended and delisted values were never written. Refuse a row
+    # that holds one instead of failing on the narrower column; nothing is deployed,
+    # so only a local database can hold such a row (see the README).
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM services WHERE lifecycle NOT IN ('draft', 'active')) THEN
+                RAISE EXCEPTION 'services holds the retired lifecycle values suspended or '
+                    'delisted, which only moderation actions record now; reset the local '
+                    'database (README, Resetting a Local Database)';
+            END IF;
+        END
+        $$
+        """,
+    )
     _replace_lifecycle_column(length=6, values="'draft', 'active'")
 
 

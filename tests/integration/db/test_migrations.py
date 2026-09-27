@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import pytest
 from alembic import command
@@ -604,6 +605,39 @@ def test_request_schema_check_refuses_stored_schemas_the_invoke_path_cannot_comp
             ),
         ):
             command.upgrade(config, "head")
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+
+
+async def _read_revision(db_engine: AsyncEngine) -> str:
+    async with db_engine.connect() as connection:
+        return (
+            await connection.execute(text("SELECT version_num FROM alembic_version"))
+        ).scalar_one()
+
+
+def test_narrowing_the_lifecycle_refuses_a_stored_retired_value(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "request_schemas_0008")
+    try:
+        asyncio.run(_seed_service(engine, slug="retired-lifecycle", lifecycle="suspended"))
+
+        with pytest.raises(
+            DBAPIError,
+            match=re.escape(
+                "services holds the retired lifecycle values suspended or delisted, which "
+                "only moderation actions record now; reset the local database "
+                "(README, Resetting a Local Database)"
+            ),
+        ):
+            command.upgrade(config, "head")
+
+        assert asyncio.run(_read_revision(engine)) == "request_schemas_0008"
     finally:
         command.downgrade(config, "base")
         command.upgrade(config, "head")
