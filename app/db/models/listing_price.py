@@ -29,7 +29,9 @@ class ListingPrice(Base):
     A price change inserts a new version; `ServiceEndpoint.current_price_id` points
     at the version on sale. The payment terms (asset, network, pay_to, validity
     window, fee) are copied from the settings when the version is created, so a
-    purchase is always checked against the terms it was offered.
+    purchase is always checked against the terms it was offered. The database
+    refuses to update a version (trigger `listing_prices_immutable`, created by
+    migration listing_prices_0003).
     """
 
     __tablename__ = "listing_prices"

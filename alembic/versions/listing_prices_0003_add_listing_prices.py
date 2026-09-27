@@ -59,6 +59,27 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("endpoint_id", "id", name="uq_listing_prices_endpoint_id_id"),
     )
+    # Versions are immutable: revisions, and later purchases, pin them by id, so a
+    # price change inserts a new version. Deletes stay allowed for the endpoint
+    # cascade. Autogenerate does not compare triggers, so only this migration
+    # knows about them.
+    op.execute(
+        """
+        CREATE FUNCTION reject_listing_price_update() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'listing_prices rows are immutable; insert a new version instead';
+        END
+        $$
+        """,
+    )
+    op.execute(
+        """
+        CREATE TRIGGER listing_prices_immutable
+        BEFORE UPDATE ON listing_prices
+        FOR EACH ROW EXECUTE FUNCTION reject_listing_price_update()
+        """,
+    )
     op.add_column(
         "service_endpoints",
         sa.Column("current_price_id", sa.BigInteger(), nullable=True),
@@ -90,4 +111,6 @@ def downgrade() -> None:
         type_="foreignkey",
     )
     op.drop_column("service_endpoints", "current_price_id")
+    op.execute("DROP TRIGGER listing_prices_immutable ON listing_prices")
+    op.execute("DROP FUNCTION reject_listing_price_update()")
     op.drop_table("listing_prices")

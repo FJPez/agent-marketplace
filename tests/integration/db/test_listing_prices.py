@@ -1,6 +1,6 @@
 import pytest
 from sqlalchemy import delete, func, select, update
-from sqlalchemy.exc import IntegrityError, InvalidRequestError
+from sqlalchemy.exc import DBAPIError, IntegrityError, InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from tests.fixtures.domain import (
@@ -8,6 +8,7 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
+    read_price_versions,
 )
 from tests.fixtures.settings import TEST_PRICE_TERMS, TEST_TREASURY_ADDRESS
 
@@ -129,6 +130,27 @@ async def test_price_versions_reject_out_of_range_terms(
         session.add(ListingPrice(endpoint_id=endpoint_id, **row))
         with pytest.raises(IntegrityError, match=constraint):
             await session.flush()
+
+
+async def test_price_versions_cannot_be_updated(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    endpoint_id = await _create_endpoint(db_session_factory)
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    with pytest.raises(DBAPIError, match="listing_prices rows are immutable"):
+        async with db_session_factory.begin() as session:
+            await session.execute(
+                update(ListingPrice).values(
+                    amount=1,
+                    pay_to="0x3333333333333333333333333333333333333333",
+                ),
+            )
+
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        1,
+        [(1, 250_000)],
+    )
 
 
 async def test_deleting_a_service_deletes_its_price_versions(
