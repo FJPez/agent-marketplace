@@ -13,6 +13,7 @@ DOMAIN_TABLES = {
     "accounts",
     "api_keys",
     "endpoint_prices",
+    "listing_prices",
     "moderation_actions",
     "provider_upstreams",
     "service_endpoints",
@@ -135,6 +136,7 @@ async def _insert_endpoint(
     *,
     service_id: int,
     key: str,
+    access_mode: str = "free",
     request_schema: str = "{}",
     response_schema: str = "{}",
     timeout_seconds: int = 30,
@@ -149,7 +151,7 @@ async def _insert_endpoint(
                         request_schema, response_schema, timeout_seconds
                     )
                     VALUES (
-                        :service_id, :key, 'Check Endpoint', 'free',
+                        :service_id, :key, 'Check Endpoint', :access_mode,
                         CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb),
                         :timeout_seconds
                     )
@@ -159,6 +161,7 @@ async def _insert_endpoint(
                 {
                     "service_id": service_id,
                     "key": key,
+                    "access_mode": access_mode,
                     "request_schema": request_schema,
                     "response_schema": response_schema,
                     "timeout_seconds": timeout_seconds,
@@ -218,6 +221,30 @@ async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
                 {"provider_account_id": account_id, "slug": slug},
             )
         ).scalar_one()
+
+
+async def _insert_current_listing_price(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                WITH price AS (
+                    INSERT INTO listing_prices (
+                        endpoint_id, version, amount, asset, network, pay_to,
+                        max_timeout_seconds, fee_bps
+                    )
+                    VALUES (
+                        :endpoint_id, 1, 10000, '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                        'eip155:84532', '0x1111111111111111111111111111111111111111', 120, 1000
+                    )
+                    RETURNING id
+                )
+                UPDATE service_endpoints SET current_price_id = (SELECT id FROM price)
+                WHERE id = :endpoint_id
+                """
+            ),
+            {"endpoint_id": endpoint_id},
+        )
 
 
 async def _insert_health_check(db_engine: AsyncEngine, *, service_id: int) -> None:
@@ -378,7 +405,7 @@ async def _set_current_revision(
         )
 
 
-def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
+def test_migrations_downgrade_cleanly_with_catalogue_rows(
     migration_database: MigrationDatabase,
 ) -> None:
     config = migration_database.config
@@ -388,6 +415,10 @@ def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
     asyncio.run(_insert_health_check(engine, service_id=service_id))
     revision_id = asyncio.run(_insert_service_revision(engine, service_id=service_id))
     asyncio.run(_set_current_revision(engine, service_id=service_id, revision_id=revision_id))
+    endpoint_id = asyncio.run(
+        _insert_endpoint(engine, service_id=service_id, key="priced", access_mode="paid")
+    )
+    asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
 
     try:
         command.downgrade(config, "base")

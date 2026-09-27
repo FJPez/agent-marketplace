@@ -1,6 +1,7 @@
 from app.db.models.account import Account
 from app.db.models.api_key import ApiKey
 from app.db.models.endpoint_price import EndpointPrice
+from app.db.models.listing_price import ListingPrice
 from app.db.models.moderation_action import ModerationAction
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -14,6 +15,7 @@ __all__ = [
     "Account",
     "ApiKey",
     "EndpointPrice",
+    "ListingPrice",
     "ModerationAction",
     "ProviderUpstream",
     "Service",

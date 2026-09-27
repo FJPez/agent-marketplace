@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.db.types import AtomicAmount
 
-# No model uses the type yet, so the tests store amounts in a temporary table
-# that disappears with the test's connection.
+# The tests store amounts in a temporary table that disappears with the test's
+# connection, so the type is checked over its whole range (listing_prices only
+# admits positive amounts).
 amounts = Table(
     "atomic_amounts",
     MetaData(),

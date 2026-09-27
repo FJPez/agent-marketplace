@@ -33,6 +33,7 @@ from app.db.base import Base
 
 if TYPE_CHECKING:
     from app.db.models.endpoint_price import EndpointPrice
+    from app.db.models.listing_price import ListingPrice
     from app.db.models.provider_upstream import ProviderUpstream
     from app.db.models.service import Service
 
@@ -52,6 +53,12 @@ class ServiceEndpoint(Base):
         CheckConstraint(
             f"timeout_seconds BETWEEN 1 AND {ENDPOINT_TIMEOUT_MAX_SECONDS}",
             name="timeout_seconds_range",
+        ),
+        # A paid endpoint may lack a price while its service is a draft (publish
+        # readiness requires one); a free endpoint never has one.
+        CheckConstraint(
+            "access_mode = 'paid' OR current_price_id IS NULL",
+            name="free_has_no_price",
         ),
     )
 
@@ -85,6 +92,15 @@ class ServiceEndpoint(Base):
     # Provider-declared: a request re-sent with the same Idempotency-Key is safe.
     supports_idempotency: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     is_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    current_price_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        # use_alter: listing_prices also references service_endpoints.
+        ForeignKey(
+            "listing_prices.id",
+            name="fk_service_endpoints_current_price_id_listing_prices",
+            use_alter=True,
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
@@ -106,3 +122,4 @@ class ServiceEndpoint(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    current_price: Mapped[ListingPrice | None] = relationship(foreign_keys=[current_price_id])

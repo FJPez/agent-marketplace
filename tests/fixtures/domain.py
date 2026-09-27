@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
+from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import create_account
 
 from app.core.enums import (
@@ -12,6 +13,7 @@ from app.core.enums import (
 )
 from app.db.models import (
     EndpointPrice,
+    ListingPrice,
     ModerationAction,
     ProviderUpstream,
     Service,
@@ -326,6 +328,33 @@ async def create_endpoint_price_record(
         session.add(pricing)
         await session.flush()
         return endpoint_id
+
+
+async def create_listing_price_record(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+    amount: int = 250_000,
+    version: int = 1,
+) -> int:
+    """Store a price version with the default test payment terms and make it current."""
+    async with db_session_factory.begin() as session:
+        price = ListingPrice(
+            endpoint_id=endpoint_id,
+            version=version,
+            amount=amount,
+            asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+            network="eip155:84532",
+            pay_to=TEST_TREASURY_ADDRESS,
+            max_timeout_seconds=120,
+            fee_bps=1_000,
+        )
+        session.add(price)
+        await session.flush()
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert endpoint is not None
+        endpoint.current_price_id = price.id
+        return price.id
 
 
 async def create_upstream_record(
