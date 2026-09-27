@@ -94,22 +94,30 @@ def test_request_validation_error_lists_errors_as_extension() -> None:
 
 
 @pytest.mark.parametrize(
-    ("body", "expected_error_type", "expected_error_loc"),
+    ("body", "content_type", "expected_error_type", "expected_error_loc"),
     [
-        (b'{"name": ', "json_invalid", ["body", 9]),
-        (b'{"name": "   "}', "value_error", ["body", "name"]),
+        (b'{"name": ', "application/json", "json_invalid", ["body", 9]),
+        (b'{"name": "   "}', "application/json", "value_error", ["body", "name"]),
+        (b"\xff", "text/plain", "model_attributes_type", ["body"]),
+        (b'{"name": NaN}', "application/json", "string_type", ["body", "name"]),
     ],
-    ids=["malformed_json", "validator_exception_in_context"],
+    ids=[
+        "malformed_json",
+        "validator_exception_in_context",
+        "non_utf8_body",
+        "non_finite_number",
+    ],
 )
 def test_invalid_bodies_render_invalid_input_problems(
     body: bytes,
+    content_type: str,
     expected_error_type: str,
     expected_error_loc: list[str | int],
 ) -> None:
     response = _build_client().post(
         "/items",
         content=body,
-        headers={"content-type": "application/json"},
+        headers={"content-type": content_type},
     )
 
     assert response.status_code == 422

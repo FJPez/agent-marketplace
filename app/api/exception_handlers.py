@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
 from typing import NamedTuple
 
@@ -88,9 +89,20 @@ def install_exception_handlers(app: FastAPI) -> None:
         request: Request,
         exc: RequestValidationError,
     ) -> Response:
+        # A malformed body can put raw non-UTF-8 bytes or a non-finite float (NaN,
+        # Infinity) into an error's `input`; the default encoder can't render either
+        # (`bytes.decode()` raises, and `JSONResponse` disallows non-finite floats), so
+        # both are coerced into JSON-safe values here instead of crashing to a 500.
+        errors = jsonable_encoder(
+            exc.errors(),
+            custom_encoder={
+                bytes: lambda value: value.decode("utf-8", "replace"),
+                float: lambda value: value if math.isfinite(value) else str(value),
+            },
+        )
         return problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             problem_type="invalid_input",
             detail="request validation failed; see errors",
-            extensions={"errors": jsonable_encoder(exc.errors())},
+            extensions={"errors": errors},
         )
