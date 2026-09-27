@@ -280,7 +280,11 @@ async def create_provider_endpoint(
     summary="Update a provider endpoint",
     description=(
         "Updates an owned provider endpoint. A new `price.amount` creates a new immutable "
-        "price version on the marketplace's current payment terms; earlier versions are kept."
+        "price version on the marketplace's current payment terms; earlier versions are kept. "
+        "Resending the current amount after the marketplace's payment terms changed also "
+        "creates a version on the new terms, so it must meet the current minimum price and, "
+        "on a suspended service, is refused like any other change; omit `price` to leave it "
+        "untouched."
     ),
     responses={
         200: {"description": "Endpoint updated successfully."},

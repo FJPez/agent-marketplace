@@ -8,12 +8,12 @@ from tests.fixtures.settings import TEST_JWT_SECRET_KEY, TEST_TREASURY_ADDRESS
 
 from app.core.config import AppEnv, Settings, get_settings
 
-ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-
 if TYPE_CHECKING:
     from pathlib import Path
 
     from tests.fixtures.settings import SettingsEnvFactory
+
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
 def _write_dotenv(path: Path, *, jwt_secret: str, siwe_domain: str) -> None:

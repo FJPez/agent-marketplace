@@ -314,7 +314,8 @@ async def put_price_on_sale(
 
     The editing services hold the service row lock, so max + 1 is normally free;
     the unique (endpoint_id, version) key turns a writer without it (the demo
-    seed) into a conflict instead of a silently reused version number.
+    seed) into a conflict instead of a silently reused version number. On any
+    integrity error it rolls back the caller's whole transaction before raising.
     """
     latest_version = await session.scalar(
         select(func.max(ListingPrice.version)).where(ListingPrice.endpoint_id == endpoint.id),
