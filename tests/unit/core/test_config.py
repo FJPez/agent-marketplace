@@ -85,6 +85,7 @@ def test_settings_use_default_values(
     assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
     assert settings.log_level == "INFO"
+    assert settings.worker_shutdown_timeout_seconds == 25.0
 
 
 def test_settings_require_jwt_secret_key(
@@ -292,6 +293,10 @@ def test_settings_ignore_retired_payment_variables(
             id="idle-in-transaction-timeout-negative",
         ),
         pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
+        pytest.param(
+            {"APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS": "0"},
+            id="worker-shutdown-timeout-zero",
+        ),
     ],
 )
 def test_settings_reject_non_positive_timeout_and_touch_interval_settings(

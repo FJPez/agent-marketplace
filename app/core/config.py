@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    worker_shutdown_timeout_seconds: float = Field(default=25.0, gt=0)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"

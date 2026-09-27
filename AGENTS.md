@@ -38,6 +38,11 @@ Layer responsibilities:
   backend) without FastAPI; the API lifespan and the worker both open them with
   `open_resources(settings)`. Add a new shared client there, not to the lifespan.
 - `app/integrations` owns external protocol and provider behavior.
+- `app/worker` is the background worker process (`python -m app.worker`). A
+  worker loop is a `Loop` in `LOOPS` whose iteration calls a plain service
+  function that processes one bounded batch. Several worker processes may run
+  at once, so a loop claims its rows (`FOR UPDATE SKIP LOCKED` plus the lease
+  and fence) before acting on them.
 
 ### No repository layer
 

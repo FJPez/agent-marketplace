@@ -53,6 +53,15 @@ at start drops those left behind by runs that were killed before teardown.
 Tests marked `e2e` run against live services and are deselected by default; run
 them with `uv run pytest -m e2e`.
 
+## Worker
+
+`make worker` runs the background worker (`python -m app.worker`) against the
+same settings as the API. It runs the registered loops until SIGTERM or SIGINT;
+no loop is registered yet (the recovery loops arrive with the paid invocation
+lifecycle). On a signal it starts no new iteration and gives a running one
+`APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS` (default 25) to finish before cancelling
+it.
+
 ## Resetting a Local Database
 
 The migration history was squashed into a single baseline on 2026-09-26. A
