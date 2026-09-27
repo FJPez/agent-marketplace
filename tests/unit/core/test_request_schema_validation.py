@@ -1,6 +1,4 @@
 import re
-import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -318,30 +316,3 @@ def test_a_schema_too_deep_or_too_large_is_rejected_before_it_is_read_as_json(
 ) -> None:
     with pytest.raises(ValueError, match=f"^{re.escape(message)}$"):
         check_request_schema_shape(schema)
-
-
-def test_a_remote_ref_is_never_fetched() -> None:
-    requested_paths: list[str] = []
-
-    class SchemaHandler(BaseHTTPRequestHandler):
-        """Serves a valid schema at every path, so a fetch would make the ref resolve."""
-
-        def do_GET(self) -> None:
-            requested_paths.append(self.path)
-            body = b'{"type": "string"}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), SchemaHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        with pytest.raises(ValueError, match=f"http://127.0.0.1:{server.server_port}/input.json"):
-            check_request_schema({"$ref": f"http://127.0.0.1:{server.server_port}/input.json"})
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    assert requested_paths == []

@@ -6,8 +6,10 @@ Every test runs on asyncio's event loop and on uvloop, which uvicorn uses in pro
 
 import asyncio
 import json
+import math
 import os
 import re
+import resource
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -46,14 +48,9 @@ COMPILE_DEADLINE_SECONDS = 0.1
 # Each of 100,000 items is compared with 10,000 enum entries: seconds of work.
 SLOW_SCHEMA: JsonObject = {"items": {"not": {"enum": [[] for _ in range(10_000)]}}}
 SLOW_BODY = json.dumps([[0]] * 100_000).encode()
-# A chain of 1,000 `$ref`s applied at each of 128 levels overflows the worker's stack.
-CRASHING_SCHEMA: JsonObject = {
-    "$defs": {
-        **{f"l{index}": {"$ref": f"#/$defs/l{index + 1}"} for index in range(999)},
-        "l999": {"items": {"$ref": "#/$defs/l0"}},
-    },
-    "$ref": "#/$defs/l0",
-}
+# A worker inherits this process's stack limit. A chain of 1,000 `$ref`s applied at each
+# of 128 levels overflows an 8 MiB stack (at about 65 levels), so the chain grows with it.
+STACK_BYTES = resource.getrlimit(resource.RLIMIT_STACK)[0]
 CRASHING_BODY = b"[" * 128 + b"]" * 128
 TIME_LIMIT = "the request body could not be validated within the time limit"
 FAILED = "the request body could not be validated"
@@ -370,35 +367,21 @@ async def test_a_body_matching_the_schema_is_accepted_without_stalling_the_event
     finally:
         stop.set()
 
+    # A stall of the class uvloop once caused (about 1 s for each large body) exceeds
+    # this bound by far, while a run with no stall stays near a millisecond.
     assert await ticker < 0.1
 
 
-@pytest.mark.parametrize(
-    ("schema", "body", "message"),
-    [
-        pytest.param(
-            {"properties": {"a/b": {"items": {"type": "integer"}}}},
-            b'{"a/b": [1, "x"]}',
-            f'{MISMATCH}: "x" is not of type "integer" at /a~1b/1',
-            id="first_error_located",
-        ),
-        pytest.param({}, b'{"a": ', "request body is not valid JSON", id="malformed"),
-        pytest.param(
-            {"minimum": 0},
-            b"1e400",
-            "request body holds a number that is not finite",
-            id="beyond_a_double",
-        ),
-    ],
-)
-async def test_a_body_is_refused_naming_the_problem(
-    open_pool: OpenPool,
-    schema: JsonObject,
-    body: bytes,
-    message: str,
-) -> None:
+async def test_a_refused_body_crosses_the_pipe_with_its_location(open_pool: OpenPool) -> None:
+    # The worker's unit tests pin every refusal; this one shows a refusal arrives whole.
+    message = f'{MISMATCH}: "x" is not of type "integer" at /a~1b/1'
+
     with pytest.raises(InvalidInputError, match=f"^{re.escape(message)}$") as refused:
-        await validate_request_body(pool=open_pool(), schema=schema, body=body)
+        await validate_request_body(
+            pool=open_pool(),
+            schema={"properties": {"a/b": {"items": {"type": "integer"}}}},
+            body=b'{"a/b": [1, "x"]}',
+        )
 
     assert refused.value.problem_type is None
 
@@ -442,10 +425,22 @@ async def test_a_validation_past_the_deadline_is_refused_and_its_worker_replaced
     assert not _exists(overrunning)
 
 
+@pytest.mark.skipif(
+    STACK_BYTES == resource.RLIM_INFINITY,
+    reason="nothing overflows an unlimited stack",
+)
 async def test_a_body_that_ends_its_worker_is_refused_and_the_worker_replaced(
     open_pool: OpenPool,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    links = 1_000 * math.ceil(STACK_BYTES / (8 * 1024 * 1024))
+    crashing_schema: JsonObject = {
+        "$defs": {
+            **{f"l{index}": {"$ref": f"#/$defs/l{index + 1}"} for index in range(links - 1)},
+            f"l{links - 1}": {"items": {"$ref": "#/$defs/l0"}},
+        },
+        "$ref": "#/$defs/l0",
+    }
     pool = open_pool(workers=1)
     await validate_request_body(pool=pool, schema={}, body=b"{}")
     (crashing,) = pool.pids
@@ -454,7 +449,7 @@ async def test_a_body_that_ends_its_worker_is_refused_and_the_worker_replaced(
         InvalidInputError,
         match=f"^{re.escape(FAILED)}$",
     ) as refused:
-        await validate_request_body(pool=pool, schema=CRASHING_SCHEMA, body=CRASHING_BODY)
+        await validate_request_body(pool=pool, schema=crashing_schema, body=CRASHING_BODY)
 
     assert refused.value.problem_type == "request_validation_failed"
     (record,) = [record for record in caplog.records if record.name == LOGGER]

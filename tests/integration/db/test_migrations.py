@@ -309,6 +309,13 @@ async def _read_health_check_service_ids(db_engine: AsyncEngine) -> list[int]:
         return [row[0] for row in result]
 
 
+async def _read_revision(db_engine: AsyncEngine) -> str:
+    async with db_engine.connect() as connection:
+        return (
+            await connection.execute(text("SELECT version_num FROM alembic_version"))
+        ).scalar_one()
+
+
 def test_head_migration_rejects_health_check_for_unknown_service(
     clean_database: None,
     db_engine: AsyncEngine,
@@ -608,13 +615,6 @@ def test_request_schema_check_refuses_stored_schemas_the_invoke_path_cannot_comp
     finally:
         command.downgrade(config, "base")
         command.upgrade(config, "head")
-
-
-async def _read_revision(db_engine: AsyncEngine) -> str:
-    async with db_engine.connect() as connection:
-        return (
-            await connection.execute(text("SELECT version_num FROM alembic_version"))
-        ).scalar_one()
 
 
 def test_narrowing_the_lifecycle_refuses_a_stored_retired_value(
