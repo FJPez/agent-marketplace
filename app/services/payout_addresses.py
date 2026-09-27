@@ -94,6 +94,7 @@ def proof_typed_data(challenge: PayoutAddressChallenge) -> JsonObject:
         "domain": {
             "name": "Agent Marketplace",
             "version": "1",
+            # The network is the payment network, which Settings keeps to eip155:<chain id>.
             "chainId": int(challenge.network.removeprefix("eip155:")),
         },
         "message": {

@@ -282,7 +282,7 @@ async def _insert_domain_token(db_engine: AsyncEngine, *, service_id: int) -> No
         )
 
 
-async def _insert_payout_address(db_engine: AsyncEngine, *, service_id: int) -> None:
+async def _insert_payout_address_and_challenge(db_engine: AsyncEngine, *, service_id: int) -> None:
     async with db_engine.begin() as connection:
         for statement in (
             """
@@ -511,7 +511,7 @@ def test_migrations_downgrade_cleanly_with_catalogue_rows(
     asyncio.run(_insert_upstream(engine, endpoint_id=endpoint_id))
     asyncio.run(_insert_signing_secret(engine, service_id=service_id))
     asyncio.run(_insert_domain_token(engine, service_id=service_id))
-    asyncio.run(_insert_payout_address(engine, service_id=service_id))
+    asyncio.run(_insert_payout_address_and_challenge(engine, service_id=service_id))
 
     try:
         command.downgrade(config, "base")

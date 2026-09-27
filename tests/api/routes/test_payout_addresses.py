@@ -96,7 +96,7 @@ async def test_payout_address_routes_take_a_jwt_only(
     assert response.json()["detail"] == "jwt authentication required"
 
 
-async def test_a_mistyped_checksum_in_a_challenge_is_an_invalid_input_problem(
+async def test_a_mistyped_checksum_in_a_challenge_is_a_validation_error(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
