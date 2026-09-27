@@ -210,7 +210,13 @@ async def test_provider_service_routes_require_bearer_token(
     response = await async_client.get("/v1/provider/services")
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "Authorization header is required"}
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": "/problems/unauthenticated",
+        "title": "Unauthenticated",
+        "status": 401,
+        "detail": "Authorization header is required",
+    }
 
 
 @pytest.mark.asyncio
@@ -761,7 +767,12 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
     )
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "upstream target is not allowed"}
+    assert response.json() == {
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
+        "status": 422,
+        "detail": "upstream target is not allowed",
+    }
 
 
 @pytest.mark.asyncio
@@ -850,7 +861,12 @@ async def test_provider_service_routes_hide_cross_owner_service_access(
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "service not found"}
+    assert response.json() == {
+        "type": "/problems/not_found",
+        "title": "Not found",
+        "status": 404,
+        "detail": "service not found",
+    }
 
 
 @pytest.mark.asyncio
@@ -942,9 +958,14 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
 
     assert suspend_response.status_code == 201
     assert timeout_response.status_code == 409
-    assert timeout_response.json() == {"detail": "service is suspended"}
+    assert timeout_response.json() == {
+        "type": "/problems/invalid_state",
+        "title": "Invalid state",
+        "status": 409,
+        "detail": "service is suspended",
+    }
     assert pricing_response.status_code == 409
-    assert pricing_response.json() == {"detail": "service is suspended"}
+    assert pricing_response.json() == timeout_response.json()
 
 
 @pytest.mark.asyncio
@@ -1132,6 +1153,9 @@ async def test_patch_active_provider_endpoint_rejects_paid_transition_without_pr
 
     assert response.status_code == 422
     assert response.json() == {
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
+        "status": 422,
         "detail": "active paid endpoints must define a price",
     }
 
@@ -1164,6 +1188,9 @@ async def test_publish_service_rejects_service_without_endpoints(
 
     assert response.status_code == 422
     assert response.json() == {
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
+        "status": 422,
         "detail": "service must define at least one endpoint before publish",
     }
     assert latest_check is not None
@@ -1196,6 +1223,9 @@ async def test_publish_service_rejects_paid_endpoint_without_pricing(
 
     assert response.status_code == 422
     assert response.json() == {
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
+        "status": 422,
         "detail": "paid endpoint 'translate' must define a price before publish",
     }
 
@@ -1356,6 +1386,9 @@ async def test_publish_service_rejects_already_active_service(
 
     assert response.status_code == 409
     assert response.json() == {
+        "type": "/problems/invalid_state",
+        "title": "Invalid state",
+        "status": 409,
         "detail": "service is not publishable outside draft",
     }
 
@@ -1391,6 +1424,9 @@ async def test_publish_service_rejects_suspended_service(
     assert moderation_response.status_code == 201
     assert response.status_code == 409
     assert response.json() == {
+        "type": "/problems/invalid_state",
+        "title": "Invalid state",
+        "status": 409,
         "detail": "service is suspended",
     }
 

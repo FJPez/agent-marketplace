@@ -180,7 +180,12 @@ async def test_wallet_change_routes_require_jwt_and_complete_rotation(
     )
 
     assert stale_token_response.status_code == 401
-    assert stale_token_response.json() == {"detail": "access token is no longer valid"}
+    assert stale_token_response.json() == {
+        "type": "/problems/unauthenticated",
+        "title": "Unauthenticated",
+        "status": 401,
+        "detail": "access token is no longer valid",
+    }
 
 
 @pytest.mark.asyncio

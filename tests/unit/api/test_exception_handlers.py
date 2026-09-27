@@ -11,7 +11,11 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UpstreamError,
+    UpstreamTimeoutError,
 )
+from app.core.request_schema_validation import PayloadSchemaMismatchError
+from app.services.health_service import ReadinessCheckError
 
 
 class ChildNotFoundError(NotFoundError):
@@ -19,43 +23,110 @@ class ChildNotFoundError(NotFoundError):
 
 
 @pytest.mark.parametrize(
-    ("exc", "expected_status", "expected_detail"),
+    ("exc", "expected_status", "expected_type", "expected_title"),
     [
-        (NotFoundError("thing missing"), status.HTTP_404_NOT_FOUND, "thing missing"),
+        (NotFoundError("boom"), status.HTTP_404_NOT_FOUND, "/problems/not_found", "Not found"),
         (
-            UnauthenticatedError("credentials required"),
-            status.HTTP_401_UNAUTHORIZED,
-            "credentials required",
+            ChildNotFoundError("boom"),
+            status.HTTP_404_NOT_FOUND,
+            "/problems/not_found",
+            "Not found",
         ),
-        (ConflictError("conflicting change"), status.HTTP_409_CONFLICT, "conflicting change"),
-        (InvalidInputError("bad input"), status.HTTP_422_UNPROCESSABLE_CONTENT, "bad input"),
-        (PermissionDeniedError("not allowed"), status.HTTP_403_FORBIDDEN, "not allowed"),
-        (InvalidStateError("wrong state"), status.HTTP_409_CONFLICT, "wrong state"),
+        (
+            UnauthenticatedError("boom"),
+            status.HTTP_401_UNAUTHORIZED,
+            "/problems/unauthenticated",
+            "Unauthenticated",
+        ),
+        (ConflictError("boom"), status.HTTP_409_CONFLICT, "/problems/conflict", "Conflict"),
+        (
+            InvalidInputError("boom"),
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "/problems/invalid_input",
+            "Invalid input",
+        ),
+        (
+            PermissionDeniedError("boom"),
+            status.HTTP_403_FORBIDDEN,
+            "/problems/permission_denied",
+            "Permission denied",
+        ),
+        (
+            InvalidStateError("boom"),
+            status.HTTP_409_CONFLICT,
+            "/problems/invalid_state",
+            "Invalid state",
+        ),
+        (
+            UpstreamError("boom"),
+            status.HTTP_502_BAD_GATEWAY,
+            "/problems/upstream_error",
+            "Upstream error",
+        ),
+        (
+            UpstreamTimeoutError("boom"),
+            status.HTTP_504_GATEWAY_TIMEOUT,
+            "/problems/upstream_timeout",
+            "Upstream timeout",
+        ),
+        (
+            PayloadSchemaMismatchError("boom"),
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "/problems/invalid_input",
+            "Invalid input",
+        ),
+        (
+            ReadinessCheckError("boom"),
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "/problems/not_ready",
+            "Not ready",
+        ),
     ],
 )
-def test_base_taxonomy_exceptions_translate_to_http(
+def test_mapped_exceptions_render_problem_details(
     handler_app_factory: AppFactory,
     exc: Exception,
     expected_status: int,
-    expected_detail: str,
+    expected_type: str,
+    expected_title: str,
 ) -> None:
     client = TestClient(handler_app_factory(exc))
 
     response = client.get("/boom")
 
     assert response.status_code == expected_status
-    assert response.json() == {"detail": expected_detail}
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": expected_type,
+        "title": expected_title,
+        "status": expected_status,
+        "detail": "boom",
+    }
 
 
-def test_unregistered_subclass_falls_back_to_base_handler(
+def test_application_error_carries_problem_type_headers_and_extensions(
     handler_app_factory: AppFactory,
 ) -> None:
-    client = TestClient(handler_app_factory(ChildNotFoundError("child missing")))
+    exc = ConflictError(
+        "purchase is still in progress",
+        problem_type="in_progress",
+        headers={"Retry-After": "2"},
+        extensions={"invocation_id": 7},
+    )
+    client = TestClient(handler_app_factory(exc))
 
     response = client.get("/boom")
 
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json() == {"detail": "child missing"}
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers["retry-after"] == "2"
+    assert response.json() == {
+        "type": "/problems/in_progress",
+        "title": "In progress",
+        "status": 409,
+        "detail": "purchase is still in progress",
+        "invocation_id": 7,
+    }
 
 
 def test_specific_registration_beats_base_fallback(

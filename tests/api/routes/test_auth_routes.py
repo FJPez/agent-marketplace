@@ -208,7 +208,12 @@ async def test_api_key_crud_routes_require_jwt_and_support_create_list_revoke(
     )
 
     assert revoked_response.status_code == 401
-    assert revoked_response.json() == {"detail": "invalid api key"}
+    assert revoked_response.json() == {
+        "type": "/problems/unauthenticated",
+        "title": "Unauthenticated",
+        "status": 401,
+        "detail": "invalid api key",
+    }
 
 
 @pytest.mark.asyncio

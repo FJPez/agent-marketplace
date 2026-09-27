@@ -78,6 +78,11 @@ Layer responsibilities:
   when they provide a useful message or distinct handling.
 - Global FastAPI exception handlers translate application exceptions into HTTP
   responses. Services never import FastAPI HTTP types.
+- Every error response is `application/problem+json` (RFC 9457), rendered by
+  `app/core/problems.py`. `app/api/exception_handlers.py` maps each exception
+  class to a status and a default problem type; pass `problem_type=`,
+  `headers=` (for example `Retry-After`) or `extensions=` when raising to
+  describe a more specific problem.
 - Use route-local `HTTPException` only for errors genuinely local to one HTTP
   operation.
 - Do not wrap every route in `try`/`except` and do not log the same exception
