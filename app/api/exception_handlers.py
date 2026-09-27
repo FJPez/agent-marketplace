@@ -4,7 +4,10 @@ from collections.abc import Awaitable, Callable
 from typing import NamedTuple
 
 from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
+from starlette.exceptions import HTTPException
 
 from app.core.errors import (
     ApplicationError,
@@ -69,3 +72,25 @@ def _build_handler(mapping: ProblemMapping) -> Handler:
 def install_exception_handlers(app: FastAPI) -> None:
     for exc_type, mapping in PROBLEM_MAPPINGS.items():
         app.add_exception_handler(exc_type, _build_handler(mapping))
+
+    @app.exception_handler(HTTPException)
+    async def handle_http_exception(request: Request, exc: HTTPException) -> Response:
+        # Framework errors (unknown route, method not allowed, route-local HTTPException)
+        # carry no meaning beyond their status code, so they render as about:blank.
+        return problem_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_request_validation_error(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> Response:
+        return problem_response(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            problem_type="invalid_input",
+            detail="request validation failed; see errors",
+            extensions={"errors": jsonable_encoder(exc.errors())},
+        )

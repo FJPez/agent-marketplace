@@ -363,6 +363,9 @@ async def test_get_service_detail_rejects_malformed_identifier(
     response = await async_client.get(f"/v1/services/{identifier}")
 
     assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert isinstance(detail, list)
-    assert all("service_id_or_slug" in error["loc"] for error in detail)
+    body = response.json()
+    assert body["type"] == "/problems/invalid_input"
+    errors = body["errors"]
+    assert isinstance(errors, list)
+    assert errors
+    assert all("service_id_or_slug" in error["loc"] for error in errors)

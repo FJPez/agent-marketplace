@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from http import HTTPStatus
 
 import pytest
 from eth_account import Account
@@ -101,7 +102,13 @@ async def test_patch_account_me_rejects_explicit_null_display_name(
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "display_name cannot be null"
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": "about:blank",
+        "title": HTTPStatus.UNPROCESSABLE_ENTITY.phrase,
+        "status": 422,
+        "detail": "display_name cannot be null",
+    }
 
 
 @pytest.mark.asyncio
@@ -202,10 +209,10 @@ async def test_wallet_change_initiate_rejects_invalid_wallet_address(
 
     assert response.status_code == 422
     body = response.json()
-    assert isinstance(body["detail"], list)
+    assert isinstance(body["errors"], list)
     matching_errors = [
         error
-        for error in body["detail"]
+        for error in body["errors"]
         if error["loc"][-1] == "wallet_address" and "invalid wallet address" in error["msg"]
     ]
     assert matching_errors

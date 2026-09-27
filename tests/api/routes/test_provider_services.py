@@ -447,7 +447,7 @@ async def test_patch_provider_service_rejects_explicit_null_for_name(
     )
 
     assert response.status_code == 422
-    first_error = response.json()["detail"][0]
+    first_error = response.json()["errors"][0]
     assert first_error["loc"] == ["body", "name"]
     assert "cannot be null" in first_error["msg"]
 
@@ -471,7 +471,7 @@ async def test_patch_provider_service_rejects_unknown_field(
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"][-1] == "unknown_field"
+    assert response.json()["errors"][0]["loc"][-1] == "unknown_field"
 
 
 @pytest.mark.asyncio
@@ -516,10 +516,10 @@ async def test_replace_service_tags_rejects_non_slug_token_values(
 
     assert response.status_code == 422
     body = response.json()
-    assert isinstance(body["detail"], list)
+    assert isinstance(body["errors"], list)
     matching_errors = [
         error
-        for error in body["detail"]
+        for error in body["errors"]
         if "tags" in error["loc"] and "tags must be lowercase slug tokens" in error["msg"]
     ]
     assert matching_errors
@@ -545,9 +545,9 @@ async def test_replace_service_tags_rejects_more_than_max_tags(
 
     assert response.status_code == 422
     body = response.json()
-    assert isinstance(body["detail"], list)
+    assert isinstance(body["errors"], list)
     matching_errors = [
-        error for error in body["detail"] if "tags" in error["loc"] and "at most" in error["msg"]
+        error for error in body["errors"] if "tags" in error["loc"] and "at most" in error["msg"]
     ]
     assert matching_errors
 
@@ -664,7 +664,7 @@ async def test_patch_provider_endpoint_rejects_explicit_null_for_name(
     )
 
     assert response.status_code == 422
-    first_error = response.json()["detail"][0]
+    first_error = response.json()["errors"][0]
     assert first_error["loc"] == ["body", "name"]
     assert "cannot be null" in first_error["msg"]
 
@@ -692,7 +692,7 @@ async def test_patch_provider_endpoint_rejects_unknown_field(
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"][-1] == "unknown_field"
+    assert response.json()["errors"][0]["loc"][-1] == "unknown_field"
 
 
 @pytest.mark.asyncio
@@ -803,7 +803,7 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"] == ["body", "path"]
+    assert response.json()["errors"][0]["loc"] == ["body", "path"]
 
 
 @pytest.mark.asyncio
@@ -834,7 +834,7 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
     )
 
     assert response.status_code == 422
-    error = response.json()["detail"][0]
+    error = response.json()["errors"][0]
     assert error["loc"] == ["body", "http_method"]
     assert error["msg"] == "Input should be 'POST', 'PUT' or 'PATCH'"
 
@@ -1467,4 +1467,4 @@ async def test_patch_provider_endpoint_rejects_invalid_pricing_payload(
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"][0]["loc"][-1] == rejected_field
+    assert response.json()["errors"][0]["loc"][-1] == rejected_field

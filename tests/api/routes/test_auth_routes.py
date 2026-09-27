@@ -254,10 +254,10 @@ async def test_create_api_key_rejects_past_expiration(async_client: AsyncClient)
 
     assert response.status_code == 422
     body = response.json()
-    assert isinstance(body["detail"], list)
+    assert isinstance(body["errors"], list)
     matching_errors = [
         error
-        for error in body["detail"]
+        for error in body["errors"]
         if error["loc"][-1] == "expires_at" and "expires_at must be in the future" in error["msg"]
     ]
     assert matching_errors
@@ -272,10 +272,10 @@ async def test_get_auth_nonce_rejects_invalid_wallet_address(async_client: Async
 
     assert response.status_code == 422
     body = response.json()
-    assert isinstance(body["detail"], list)
+    assert isinstance(body["errors"], list)
     matching_errors = [
         error
-        for error in body["detail"]
+        for error in body["errors"]
         if error["loc"][-1] == "address" and "invalid wallet address" in error["msg"]
     ]
     assert matching_errors
