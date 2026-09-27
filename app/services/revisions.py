@@ -7,9 +7,7 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.enums import AccessMode, PricingModelType
 from app.db.models.service import Service
-from app.db.models.service_endpoint import ServiceEndpoint
 from app.db.models.service_revision import ServiceRevision
 
 MATERIAL_ENDPOINT_FIELDS = frozenset(
@@ -18,7 +16,7 @@ MATERIAL_ENDPOINT_FIELDS = frozenset(
         "request_schema",
         "response_schema",
         "response_content_type",
-        "pricing",
+        "price",
         "timeout_seconds",
         "supports_idempotency",
         "is_enabled",
@@ -55,34 +53,21 @@ def build_contract_snapshot(service: Service) -> dict[str, object]:
                 "request_schema": endpoint.request_schema,
                 "response_schema": endpoint.response_schema,
                 "response_content_type": endpoint.response_content_type,
-                "pricing": _build_pricing_snapshot(endpoint),
+                # Price versions are immutable, so the id pins every term.
+                "price": (
+                    None
+                    if endpoint.current_price is None
+                    else {
+                        "id": endpoint.current_price.id,
+                        "version": endpoint.current_price.version,
+                    }
+                ),
                 "timeout_seconds": endpoint.timeout_seconds,
                 "supports_idempotency": endpoint.supports_idempotency,
                 "is_enabled": endpoint.is_enabled,
             }
             for endpoint in ordered_endpoints
         ],
-    }
-
-
-def _build_pricing_snapshot(endpoint: ServiceEndpoint) -> dict[str, object | None]:
-    if endpoint.access_mode is AccessMode.FREE:
-        return {
-            "pricing_type": PricingModelType.FREE.value,
-            "amount_minor": None,
-            "currency": None,
-        }
-    price = endpoint.price
-    if price is not None:
-        return {
-            "pricing_type": PricingModelType.FIXED_PER_CALL.value,
-            "amount_minor": price.amount_minor,
-            "currency": price.currency,
-        }
-    return {
-        "pricing_type": None,
-        "amount_minor": None,
-        "currency": None,
     }
 
 

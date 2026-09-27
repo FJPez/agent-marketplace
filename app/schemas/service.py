@@ -15,7 +15,7 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
 from app.core.service_fields import (
     DEFAULT_RESPONSE_CONTENT_TYPE,
@@ -32,11 +32,10 @@ from app.core.service_fields import (
     normalize_tag,
     normalize_upstream_path,
 )
-from app.db.models.endpoint_price import EndpointPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.common import Id, Timestamp
-from app.schemas.pricing import FixedPrice
+from app.schemas.pricing import ListingPriceRequest, ListingPriceResponse
 
 Slug = Annotated[
     str,
@@ -194,11 +193,11 @@ class EndpointCreateRequest(BaseModel):
     timeout_seconds: TimeoutSeconds
     supports_idempotency: StrictBool = False
     is_enabled: StrictBool = True
-    pricing: FixedPrice | None = None
+    price: ListingPriceRequest | None = None
 
     @model_validator(mode="after")
     def reject_price_on_free_endpoint(self) -> Self:
-        if self.access_mode is AccessMode.FREE and self.pricing is not None:
+        if self.access_mode is AccessMode.FREE and self.price is not None:
             msg = "free endpoints cannot have a price"
             raise ValueError(msg)
         return self
@@ -208,9 +207,10 @@ class EndpointUpdateRequest(BaseModel):
     """Partial endpoint update.
 
     Omitted fields are left unchanged. ``summary``, ``description``, and
-    ``pricing`` are clearable and accept an explicit null. Every other field is
+    ``price`` are clearable and accept an explicit null. Every other field is
     non-clearable: sending an explicit null is a client error rather than a
-    request to unset the value.
+    request to unset the value. A new ``price`` amount creates a new immutable
+    price version.
     """
 
     model_config = ConfigDict(
@@ -221,7 +221,7 @@ class EndpointUpdateRequest(BaseModel):
                     "summary": "Updated paid endpoint summary.",
                     "timeout_seconds": 20,
                     "is_enabled": True,
-                    "pricing": {"amount_minor": 250, "currency": "USD"},
+                    "price": {"amount": 25_000},
                 }
             ]
         },
@@ -237,7 +237,7 @@ class EndpointUpdateRequest(BaseModel):
     timeout_seconds: TimeoutSeconds | SkipJsonSchema[None] = None
     supports_idempotency: StrictBool | SkipJsonSchema[None] = None
     is_enabled: StrictBool | SkipJsonSchema[None] = None
-    pricing: FixedPrice | None = None
+    price: ListingPriceRequest | None = None
 
     validate_non_clearable = field_validator(
         "name",
@@ -283,32 +283,6 @@ class EndpointUpstreamRequest(BaseModel):
     config: SchemaObject = Field(default_factory=dict)
 
 
-class EndpointPricingResponse(BaseModel):
-    pricing_type: PricingModelType
-    amount_minor: int | None
-    currency: str | None
-
-    @classmethod
-    def from_model(cls, pricing: EndpointPrice) -> Self:
-        return cls(
-            pricing_type=PricingModelType.FIXED_PER_CALL,
-            amount_minor=pricing.amount_minor,
-            currency=pricing.currency,
-        )
-
-    @classmethod
-    def from_endpoint(cls, endpoint: ServiceEndpoint) -> Self | None:
-        if endpoint.access_mode is AccessMode.FREE:
-            return cls(
-                pricing_type=PricingModelType.FREE,
-                amount_minor=None,
-                currency=None,
-            )
-        if endpoint.price is not None:
-            return cls.from_model(endpoint.price)
-        return None
-
-
 class EndpointResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -324,7 +298,7 @@ class EndpointResponse(BaseModel):
     timeout_seconds: int
     supports_idempotency: bool
     is_enabled: bool
-    pricing: EndpointPricingResponse | None
+    price: ListingPriceResponse | None
     has_upstream: bool
     created_at: Timestamp
     updated_at: Timestamp
@@ -344,7 +318,11 @@ class EndpointResponse(BaseModel):
             timeout_seconds=endpoint.timeout_seconds,
             supports_idempotency=endpoint.supports_idempotency,
             is_enabled=endpoint.is_enabled,
-            pricing=EndpointPricingResponse.from_endpoint(endpoint),
+            price=(
+                None
+                if endpoint.current_price is None
+                else ListingPriceResponse.model_validate(endpoint.current_price)
+            ),
             has_upstream=endpoint.upstream is not None,
             created_at=endpoint.created_at,
             updated_at=endpoint.updated_at,

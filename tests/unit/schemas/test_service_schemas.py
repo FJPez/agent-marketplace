@@ -3,7 +3,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.enums import AccessMode
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
-from app.schemas.pricing import FixedPrice
+from app.schemas.pricing import ListingPriceRequest
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
@@ -104,7 +104,7 @@ def test_endpoint_update_request_rejects_explicit_null(field: str) -> None:
     assert "cannot be null" in first_error["msg"]
 
 
-@pytest.mark.parametrize("field", ["summary", "description", "pricing"])
+@pytest.mark.parametrize("field", ["summary", "description", "price"])
 def test_endpoint_update_request_accepts_explicit_null_for_clearable_field(field: str) -> None:
     request = EndpointUpdateRequest.model_validate({field: None})
 
@@ -287,7 +287,7 @@ def test_endpoint_create_request_rejects_price_on_free_endpoint() -> None:
             request_schema={"type": "object"},
             response_schema={"type": "object"},
             timeout_seconds=30,
-            pricing=FixedPrice(amount_minor=100, currency="USD"),
+            price=ListingPriceRequest(amount=10_000),
         )
 
 
@@ -299,10 +299,10 @@ def test_endpoint_create_request_allows_price_on_paid_endpoint() -> None:
         request_schema={"type": "object"},
         response_schema={"type": "object"},
         timeout_seconds=30,
-        pricing=FixedPrice(amount_minor=100, currency="USD"),
+        price=ListingPriceRequest(amount=10_000),
     )
 
-    assert request.pricing == FixedPrice(amount_minor=100, currency="USD")
+    assert request.price == ListingPriceRequest(amount=10_000)
 
 
 @pytest.mark.parametrize("http_method", ["POST", "PUT", "PATCH"])

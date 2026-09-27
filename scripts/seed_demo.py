@@ -7,13 +7,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from eth_account import Account as EthAccount
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.core.config import get_settings
-from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
+from app.core.config import Settings, get_settings
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models import (
     Account,
-    EndpointPrice,
+    ListingPrice,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -35,6 +35,8 @@ DEMO_SERVICE_DESCRIPTION = (
 DEMO_CHANGE_TOKEN = "d" * 64
 FREE_ENDPOINT_KEY = "free-ping"
 PAID_ENDPOINT_KEY = "paid-summary"
+# 0.25 USDC in atomic units.
+PAID_ENDPOINT_AMOUNT = 250_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,27 +230,38 @@ async def _upsert_upstream(
     await session.flush()
 
 
-async def _upsert_pricing(
+async def _ensure_paid_price(
     session: AsyncSession,
     *,
-    endpoint_id: int,
-    amount_minor: int,
-    currency: str,
-) -> None:
-    pricing = await session.get(EndpointPrice, endpoint_id)
-    if pricing is None:
-        pricing = EndpointPrice(
-            endpoint_id=endpoint_id,
-            amount_minor=amount_minor,
-            currency=currency,
-        )
-        session.add(pricing)
-        await session.flush()
-        return
+    settings: Settings,
+    endpoint: ServiceEndpoint,
+) -> ListingPrice:
+    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT, adding a version if needed."""
+    if settings.treasury_address is None:
+        raise RuntimeError("APP_TREASURY_ADDRESS is required to price the paid demo endpoint")
+    if endpoint.current_price_id is not None:
+        current = await session.get(ListingPrice, endpoint.current_price_id)
+        if current is not None and current.amount == PAID_ENDPOINT_AMOUNT:
+            return current
 
-    pricing.amount_minor = amount_minor
-    pricing.currency = currency
+    latest_version = await session.scalar(
+        select(func.max(ListingPrice.version)).where(ListingPrice.endpoint_id == endpoint.id),
+    )
+    price = ListingPrice(
+        endpoint_id=endpoint.id,
+        version=(latest_version or 0) + 1,
+        amount=PAID_ENDPOINT_AMOUNT,
+        asset=settings.payment_asset,
+        network=settings.payment_network,
+        pay_to=settings.treasury_address,
+        max_timeout_seconds=settings.payment_max_timeout_seconds,
+        fee_bps=settings.platform_fee_bps,
+    )
+    session.add(price)
     await session.flush()
+    endpoint.current_price_id = price.id
+    await session.flush()
+    return price
 
 
 def _build_snapshot(
@@ -256,6 +269,7 @@ def _build_snapshot(
     *,
     free_endpoint_id: int,
     paid_endpoint_id: int,
+    paid_price: ListingPrice,
 ) -> dict[str, object]:
     return {
         "service": {
@@ -276,11 +290,7 @@ def _build_snapshot(
                 "id": paid_endpoint_id,
                 "key": PAID_ENDPOINT_KEY,
                 "access_mode": AccessMode.PAID.value,
-                "pricing": {
-                    "pricing_type": PricingModelType.FIXED_PER_CALL.value,
-                    "amount_minor": 25,
-                    "currency": "USD",
-                },
+                "price": {"id": paid_price.id, "version": paid_price.version},
             },
         ],
         "tags": ["demo", "manual-testing"],
@@ -293,6 +303,7 @@ async def _ensure_revision(
     service: Service,
     free_endpoint_id: int,
     paid_endpoint_id: int,
+    paid_price: ListingPrice,
 ) -> None:
     revision = await session.scalar(
         select(ServiceRevision)
@@ -314,6 +325,7 @@ async def _ensure_revision(
         service,
         free_endpoint_id=free_endpoint_id,
         paid_endpoint_id=paid_endpoint_id,
+        paid_price=paid_price,
     )
     service.current_revision_id = revision.id
     service.current_change_token = revision.change_token
@@ -367,17 +379,17 @@ async def seed_demo_data() -> SeedResult:
                 endpoint_id=paid_endpoint.id,
                 path=settings.demo_paid_upstream_path,
             )
-            await _upsert_pricing(
+            paid_price = await _ensure_paid_price(
                 session,
-                endpoint_id=paid_endpoint.id,
-                amount_minor=25,
-                currency="USD",
+                settings=settings,
+                endpoint=paid_endpoint,
             )
             await _ensure_revision(
                 session,
                 service=service,
                 free_endpoint_id=free_endpoint.id,
                 paid_endpoint_id=paid_endpoint.id,
+                paid_price=paid_price,
             )
             return SeedResult(
                 provider_account_id=provider.id,

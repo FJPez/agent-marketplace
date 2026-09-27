@@ -20,7 +20,6 @@ ENDPOINT_TIMEOUT_MAX_SECONDS = 30
 DEFAULT_RESPONSE_CONTENT_TYPE = "application/json"
 UPSTREAM_PATH_MAX_LENGTH = 2000
 HTTP_METHOD_MAX_LENGTH = 16
-CURRENCY_CODE_PATTERN = re.compile(r"^[A-Z]{3}$")
 # An RFC 6838 type/subtype (each at most 127 characters) without parameters; a
 # wildcard such as text/* is not a concrete response type.
 MEDIA_TYPE_PATTERN = re.compile(
@@ -75,13 +74,5 @@ def normalize_media_type(value: str) -> str:
     normalized_value = value.strip().lower()
     if MEDIA_TYPE_PATTERN.fullmatch(normalized_value) is None:
         msg = "response_content_type must be a media type such as text/plain, without parameters"
-        raise ValueError(msg)
-    return normalized_value
-
-
-def normalize_currency_code(value: str) -> str:
-    normalized_value = value.strip()
-    if CURRENCY_CODE_PATTERN.fullmatch(normalized_value) is None:
-        msg = "currency must be a 3-letter uppercase currency code"
         raise ValueError(msg)
     return normalized_value

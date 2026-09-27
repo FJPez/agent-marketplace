@@ -1,12 +1,15 @@
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     AdminAccountFactory,
     EndpointFactory,
     ModerationActionFactory,
     ProviderAccountFactory,
     ServiceFactory,
+    create_listing_price_record,
 )
+from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, ServiceLifecycle
@@ -109,8 +112,9 @@ async def test_get_service_schema_returns_public_endpoint_schemas(
 
 
 @pytest.mark.asyncio
-async def test_get_service_pricing_returns_free_pricing_without_internal_fields(
+async def test_get_service_pricing_returns_the_public_price_catalogue(
     async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
     provider_account_factory: ProviderAccountFactory,
     service_factory: ServiceFactory,
     endpoint_factory: EndpointFactory,
@@ -120,21 +124,48 @@ async def test_get_service_pricing_returns_free_pricing_without_internal_fields(
         provider_account_id=provider_account_id,
         slug="pricing-service",
     )
-    await endpoint_factory(
+    free_endpoint_id = await endpoint_factory(
+        service_id=service_id,
+        key="ping",
+        access_mode=AccessMode.FREE,
+    )
+    paid_endpoint_id = await endpoint_factory(
         service_id=service_id,
         key="translate",
-        access_mode=AccessMode.FREE,
+        access_mode=AccessMode.PAID,
+    )
+    await create_listing_price_record(db_session_factory, endpoint_id=paid_endpoint_id)
+    await create_listing_price_record(
+        db_session_factory,
+        endpoint_id=paid_endpoint_id,
+        amount=25_000,
+        version=2,
     )
 
     response = await async_client.get(f"/v1/services/{service_id}/pricing")
 
     assert response.status_code == 200
-    assert response.json()["endpoints"][0] == {
-        "key": "translate",
-        "access_mode": "free",
-        "pricing_type": "free",
-        "amount_minor": None,
-        "currency": None,
+    assert {endpoint["key"]: endpoint for endpoint in response.json()["endpoints"]} == {
+        "ping": {
+            "endpoint_id": free_endpoint_id,
+            "key": "ping",
+            "access_mode": "free",
+            "invoke_url": "/v1/invoke/pricing-service/ping",
+            "price": None,
+        },
+        "translate": {
+            "endpoint_id": paid_endpoint_id,
+            "key": "translate",
+            "access_mode": "paid",
+            "invoke_url": "/v1/invoke/pricing-service/translate",
+            "price": {
+                "version": 2,
+                "amount": 25_000,
+                "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                "network": "eip155:84532",
+                "pay_to": TEST_TREASURY_ADDRESS,
+            },
+        },
     }
 
 

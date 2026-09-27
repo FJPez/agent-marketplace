@@ -1,35 +1,28 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.pricing import FixedPrice
+from app.schemas.pricing import ListingPriceRequest
+
+
+@pytest.mark.parametrize("amount", [1, 10_000, 2**256 - 1], ids=["one", "usual", "max_uint256"])
+def test_listing_price_request_accepts_positive_uint256_amounts(amount: int) -> None:
+    assert ListingPriceRequest.model_validate({"amount": amount}).amount == amount
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"amount_minor": 0, "currency": "USD"},
-        {"amount_minor": True, "currency": "USD"},
-        {"amount_minor": "100", "currency": "USD"},
-        {"amount_minor": 100, "currency": "usd"},
-        {"amount_minor": 100, "currency": "US"},
-        {"amount_minor": 100, "currency": "USD", "pricing_type": "fixed_per_call"},
-        {"amount_minor": 100},
+        {"amount": 0},
+        {"amount": -1},
+        {"amount": 2**256},
+        {"amount": True},
+        {"amount": "10000"},
+        {"amount": 10000.0},
+        {"amount": 10_000, "currency": "USD"},
+        {},
     ],
+    ids=["zero", "negative", "above_uint256", "bool", "string", "float", "extra_field", "missing"],
 )
-def test_fixed_price_rejects_invalid_payload(payload: dict[str, object]) -> None:
+def test_listing_price_request_rejects_invalid_payload(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        FixedPrice.model_validate(payload)
-
-
-def test_fixed_price_normalizes_currency() -> None:
-    price = FixedPrice(amount_minor=100, currency=" USD ")
-
-    assert price.amount_minor == 100
-    assert price.currency == "USD"
-
-
-def test_fixed_price_is_frozen() -> None:
-    price = FixedPrice(amount_minor=100, currency="USD")
-
-    with pytest.raises(ValidationError):
-        price.amount_minor = 200
+        ListingPriceRequest.model_validate(payload)

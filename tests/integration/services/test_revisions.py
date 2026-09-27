@@ -54,7 +54,7 @@ async def test_create_revision_persists_snapshot_and_updates_current_token(
         )
         session.add(endpoint)
         await session.flush()
-        set_committed_value(endpoint, "price", None)
+        set_committed_value(endpoint, "current_price", None)
         set_committed_value(service, "endpoints", [endpoint])
 
         first_revision = await revisions.create_revision(session=session, service=service)
@@ -94,11 +94,7 @@ async def test_create_revision_persists_snapshot_and_updates_current_token(
                 "request_schema": {"type": "object"},
                 "response_schema": {"type": "object"},
                 "response_content_type": "application/json",
-                "pricing": {
-                    "pricing_type": "free",
-                    "amount_minor": None,
-                    "currency": None,
-                },
+                "price": None,
                 "timeout_seconds": 30,
                 "supports_idempotency": False,
                 "is_enabled": True,

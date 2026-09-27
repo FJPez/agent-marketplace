@@ -1,7 +1,7 @@
 import pytest
 
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.db.models.endpoint_price import EndpointPrice
+from app.db.models.listing_price import ListingPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.services.revisions import (
@@ -51,10 +51,16 @@ def _service() -> Service:
         supports_idempotency=True,
         is_enabled=False,
     )
-    second_endpoint.price = EndpointPrice(
+    second_endpoint.current_price = ListingPrice(
+        id=301,
         endpoint_id=second_endpoint.id,
-        amount_minor=2500,
-        currency="USD",
+        version=2,
+        amount=25_000,
+        asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        network="eip155:84532",
+        pay_to="0x1111111111111111111111111111111111111111",
+        max_timeout_seconds=120,
+        fee_bps=1_000,
     )
     service.endpoints = [second_endpoint, first_endpoint]
     return service
@@ -68,10 +74,8 @@ def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
     assert impact is UpdateImpact.MATERIAL
 
 
-def test_classify_endpoint_update_marks_pricing_as_material() -> None:
-    impact = classify_endpoint_update(
-        {"pricing": {"amount_minor": 100, "currency": "USD"}},
-    )
+def test_classify_endpoint_update_marks_price_as_material() -> None:
+    impact = classify_endpoint_update({"price": 25_000})
 
     assert impact is UpdateImpact.MATERIAL
 
@@ -111,11 +115,7 @@ def test_build_contract_snapshot_keeps_only_contract_affecting_fields() -> None:
                     "properties": {"language": {"type": "string"}},
                 },
                 "response_content_type": "text/plain",
-                "pricing": {
-                    "pricing_type": "fixed_per_call",
-                    "amount_minor": 2500,
-                    "currency": "USD",
-                },
+                "price": {"id": 301, "version": 2},
                 "timeout_seconds": 15,
                 "supports_idempotency": True,
                 "is_enabled": False,
@@ -133,11 +133,7 @@ def test_build_contract_snapshot_keeps_only_contract_affecting_fields() -> None:
                     "properties": {"translated": {"type": "string"}},
                 },
                 "response_content_type": "application/json",
-                "pricing": {
-                    "pricing_type": "free",
-                    "amount_minor": None,
-                    "currency": None,
-                },
+                "price": None,
                 "timeout_seconds": 30,
                 "supports_idempotency": False,
                 "is_enabled": True,

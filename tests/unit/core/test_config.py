@@ -69,7 +69,7 @@ def test_settings_normalize_plain_postgres_database_urls(
 def test_settings_use_default_values(
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    settings_env_factory()
+    settings_env_factory(env={"APP_TREASURY_ADDRESS": None})
 
     settings = Settings()
 

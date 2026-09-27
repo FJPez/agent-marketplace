@@ -240,4 +240,4 @@ async def test_discovery_reads_load_only_what_their_responses_render(
     assert "endpoints" in listed_unloaded
     assert "tags" not in listed_unloaded
     assert "upstream" in detail_unloaded
-    assert "price" not in detail_unloaded
+    assert "current_price" not in detail_unloaded

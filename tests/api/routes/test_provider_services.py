@@ -5,14 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_admin_account_record,
     create_consumer_account_record,
-    create_endpoint_price_record,
     create_endpoint_record,
     create_health_check_record,
+    create_listing_price_record,
     create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
 )
+from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
 
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
@@ -105,21 +106,6 @@ async def _seed_upstream(
     )
 
 
-async def _seed_pricing(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    *,
-    endpoint_id: int,
-    amount_minor: int = 1500,
-    currency: str = "USD",
-) -> None:
-    await create_endpoint_price_record(
-        db_session_factory,
-        endpoint_id=endpoint_id,
-        amount_minor=amount_minor,
-        currency=currency,
-    )
-
-
 async def _seed_health_check(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -167,7 +153,7 @@ async def _seed_api_key(
 
 
 @pytest.mark.asyncio
-async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
+async def test_create_paid_endpoint_returns_its_first_price_version(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -191,15 +177,22 @@ async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
             "response_schema": {"type": "object"},
             "timeout_seconds": 20,
             "is_enabled": True,
-            "pricing": {"amount_minor": 1500, "currency": "USD"},
+            "price": {"amount": 15_000},
         },
     )
 
     assert response.status_code == 201
-    assert response.json()["pricing"] == {
-        "pricing_type": "fixed_per_call",
-        "amount_minor": 1500,
-        "currency": "USD",
+    price = response.json()["price"]
+    assert isinstance(price.pop("id"), int)
+    assert isinstance(price.pop("created_at"), str)
+    assert price == {
+        "version": 1,
+        "amount": 15_000,
+        "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "network": "eip155:84532",
+        "pay_to": TEST_TREASURY_ADDRESS,
+        "max_timeout_seconds": 120,
+        "fee_bps": 1_000,
     }
 
 
@@ -942,7 +935,7 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
         service_id=service_id,
         access_mode=AccessMode.PAID,
     )
-    await _seed_pricing(db_session_factory, endpoint_id=endpoint_id)
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
 
     suspend_response = await async_client.post(
         f"/v1/admin/services/{service_id}/suspend",
@@ -954,12 +947,10 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
         headers=_auth_headers(account_id),
         json={"timeout_seconds": 20},
     )
-    pricing_response = await async_client.patch(
+    price_response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
-        json={
-            "pricing": {"amount_minor": 2500, "currency": "GBP"},
-        },
+        json={"price": {"amount": 25_000}},
     )
 
     assert suspend_response.status_code == 201
@@ -970,8 +961,8 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
         "status": 409,
         "detail": "service is suspended",
     }
-    assert pricing_response.status_code == 409
-    assert pricing_response.json() == timeout_response.json()
+    assert price_response.status_code == 409
+    assert price_response.json() == timeout_response.json()
 
 
 @pytest.mark.asyncio
@@ -1081,7 +1072,7 @@ async def test_patch_active_provider_endpoint_material_change_creates_revision_a
 
 
 @pytest.mark.asyncio
-async def test_patch_active_provider_endpoint_pricing_change_creates_revision_and_token(
+async def test_patch_active_provider_endpoint_price_change_creates_version_and_revision(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -1097,27 +1088,22 @@ async def test_patch_active_provider_endpoint_pricing_change_creates_revision_an
         service_id=service_id,
         access_mode=AccessMode.PAID,
     )
-    await _seed_pricing(
+    first_price_id = await create_listing_price_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        amount_minor=1500,
-        currency="USD",
+        amount=15_000,
     )
 
     response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
-        json={
-            "pricing": {"amount_minor": 2500, "currency": "GBP"},
-        },
+        json={"price": {"amount": 25_000}},
     )
 
     assert response.status_code == 200
-    assert response.json()["pricing"] == {
-        "pricing_type": "fixed_per_call",
-        "amount_minor": 2500,
-        "currency": "GBP",
-    }
+    assert response.json()["price"]["id"] != first_price_id
+    assert response.json()["price"]["version"] == 2
+    assert response.json()["price"]["amount"] == 25_000
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)
@@ -1260,11 +1246,7 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
 
     assert response.status_code == 200
     assert response.json()["lifecycle"] == "active"
-    assert response.json()["endpoints"][0]["pricing"] == {
-        "pricing_type": "free",
-        "amount_minor": None,
-        "currency": None,
-    }
+    assert response.json()["endpoints"][0]["price"] is None
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)
@@ -1439,19 +1421,19 @@ async def test_publish_service_rejects_suspended_service(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("pricing", "rejected_field"),
+    ("price", "rejected_field"),
     [
-        (
-            {"pricing_type": "fixed_per_call", "amount_minor": 250, "currency": "USD"},
-            "pricing_type",
-        ),
-        ({"amount_minor": True, "currency": "USD"}, "amount_minor"),
+        ({"amount": 10_000, "currency": "USD"}, "currency"),
+        ({"amount": True}, "amount"),
+        ({"amount": "10000"}, "amount"),
+        ({"amount": 2**256}, "amount"),
     ],
+    ids=["extra_field", "bool", "string", "above_uint256"],
 )
-async def test_patch_provider_endpoint_rejects_invalid_pricing_payload(
+async def test_patch_provider_endpoint_rejects_invalid_price_payload(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    pricing: dict[str, object],
+    price: dict[str, object],
     rejected_field: str,
 ) -> None:
     account_id = await _create_provider_account(db_session_factory)
@@ -1469,8 +1451,73 @@ async def test_patch_provider_endpoint_rejects_invalid_pricing_payload(
     response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
-        json={"pricing": pricing},
+        json={"price": price},
     )
 
     assert response.status_code == 422
     assert response.json()["errors"][0]["loc"][-1] == rejected_field
+
+
+@pytest.mark.asyncio
+async def test_patch_endpoint_price_below_the_minimum_is_an_invalid_input_problem(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="cheap-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"price": {"amount": 9_999}},
+    )
+
+    assert response.status_code == 422
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
+        "status": 422,
+        "detail": "price amount must be at least 10000 atomic units of the payment asset",
+    }
+
+
+@pytest.mark.asyncio
+async def test_price_beyond_int64_round_trips_through_provider_editing_and_discovery(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="whale-service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    patch_response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"price": {"amount": 2**64 + 1}},
+    )
+    catalogue_response = await async_client.get("/v1/services/whale-service/pricing")
+
+    assert patch_response.status_code == 200
+    assert patch_response.json()["price"]["amount"] == 2**64 + 1
+    assert catalogue_response.status_code == 200
+    assert catalogue_response.json()["endpoints"][0]["price"]["amount"] == 2**64 + 1

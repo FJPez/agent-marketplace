@@ -39,11 +39,13 @@ def base_test_env() -> Generator[None, None, None]:
         "APP_JWT_SECRET_KEY": os.environ.get("APP_JWT_SECRET_KEY"),
         "APP_SIWE_DOMAIN": os.environ.get("APP_SIWE_DOMAIN"),
         "APP_ENV_FILE": os.environ.get("APP_ENV_FILE"),
+        "APP_TREASURY_ADDRESS": os.environ.get("APP_TREASURY_ADDRESS"),
     }
 
     os.environ["APP_JWT_SECRET_KEY"] = TEST_JWT_SECRET_KEY
     os.environ["APP_SIWE_DOMAIN"] = TEST_SIWE_DOMAIN
     os.environ["APP_ENV_FILE"] = TEST_ENV_FILE
+    os.environ["APP_TREASURY_ADDRESS"] = TEST_TREASURY_ADDRESS
     get_settings.cache_clear()
 
     try:
@@ -73,6 +75,7 @@ def settings_env_factory(
             monkeypatch.setenv("APP_JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
             monkeypatch.setenv("APP_SIWE_DOMAIN", TEST_SIWE_DOMAIN)
             monkeypatch.setenv("APP_ENV_FILE", TEST_ENV_FILE)
+            monkeypatch.setenv("APP_TREASURY_ADDRESS", TEST_TREASURY_ADDRESS)
 
         for key, value in (env or {}).items():
             if value is None:

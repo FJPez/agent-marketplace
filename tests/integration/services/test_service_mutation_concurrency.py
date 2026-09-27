@@ -2,22 +2,24 @@ import asyncio
 
 import pytest
 from pydantic import HttpUrl
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from tests.fixtures.domain import (
     create_admin_account_record,
-    create_endpoint_price_record,
     create_endpoint_record,
+    create_listing_price_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
 )
+from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
-from app.core.errors import InvalidStateError
-from app.db.models import ModerationAction, Service, ServiceEndpoint, ServiceRevision
+from app.core.errors import ConflictError, InvalidStateError
+from app.db.models import ListingPrice, ModerationAction, Service, ServiceEndpoint, ServiceRevision
+from app.schemas.pricing import ListingPriceRequest
 from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
 from app.services import moderation, provider_endpoints, publishing, revisions, service_access
 
@@ -26,7 +28,7 @@ from app.services import moderation, provider_endpoints, publishing, revisions, 
 LOCK_WAIT_TIMEOUT_SECONDS = 0.5
 
 
-def _upstream_settings() -> Settings:
+def _settings() -> Settings:
     return Settings(env=AppEnv.TEST, jwt_secret_key="test-secret-key-with-32-bytes-123")
 
 
@@ -66,21 +68,6 @@ async def _seed_endpoint(
         service_id=service_id,
         key=key,
         access_mode=access_mode,
-    )
-
-
-async def _seed_fixed_price(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    *,
-    endpoint_id: int,
-    amount_minor: int = 1500,
-    currency: str = "USD",
-) -> None:
-    await create_endpoint_price_record(
-        db_session_factory,
-        endpoint_id=endpoint_id,
-        amount_minor=amount_minor,
-        currency=currency,
     )
 
 
@@ -152,6 +139,7 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
         async with db_session_factory() as session:
             await provider_endpoints.update_endpoint(
                 session=session,
+                settings=_settings(),
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
@@ -266,7 +254,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
             with pytest.raises(InvalidStateError, match="service is not mutable outside draft"):
                 await provider_endpoints.upsert_upstream(
                     session=session,
-                    settings=_upstream_settings(),
+                    settings=_settings(),
                     account_id=provider_account_id,
                     endpoint_id=endpoint_id,
                     request=EndpointUpstreamRequest(
@@ -362,6 +350,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
         async with db_session_factory() as session:
             await provider_endpoints.update_endpoint(
                 session=session,
+                settings=_settings(),
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -480,3 +469,167 @@ async def test_concurrent_suspends_serialise_on_the_service_row_lock(
     assert action_count == 1
     assert persisted_actions[0].action == moderation.ModerationActionType.SUSPEND.value
     assert persisted_actions[0].reason == "first"
+
+
+async def _price_versions(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+) -> tuple[int | None, list[tuple[int, int]]]:
+    """Return the endpoint's current price id and every stored (version, amount) pair."""
+    async with db_session_factory() as session:
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        rows = await session.execute(
+            select(ListingPrice.version, ListingPrice.amount)
+            .where(ListingPrice.endpoint_id == endpoint_id)
+            .order_by(ListingPrice.version),
+        )
+        versions = [(row.version, row.amount) for row in rows]
+    assert endpoint is not None
+    return endpoint.current_price_id, versions
+
+
+@pytest.mark.asyncio
+async def test_concurrent_price_edits_create_consecutive_versions(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="concurrent-price-service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    # The first edit pauses while holding the service row lock, so the second
+    # must wait for its commit and then number its version after it.
+    original_load_owned_endpoint = service_access.load_owned_endpoint
+    first_edit_has_lock = asyncio.Event()
+    release_first_edit = asyncio.Event()
+    loads = 0
+
+    async def delayed_load_owned_endpoint(
+        *,
+        session: AsyncSession,
+        account_id: int,
+        endpoint_id: int,
+    ) -> ServiceEndpoint:
+        nonlocal loads
+        endpoint = await original_load_owned_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+        )
+        loads += 1
+        if loads == 1:
+            first_edit_has_lock.set()
+            await release_first_edit.wait()
+        return endpoint
+
+    monkeypatch.setattr(service_access, "load_owned_endpoint", delayed_load_owned_endpoint)
+
+    async def edit_price(amount: int) -> None:
+        async with db_session_factory() as session:
+            await provider_endpoints.update_endpoint(
+                session=session,
+                settings=_settings(),
+                account_id=provider_account_id,
+                endpoint_id=endpoint_id,
+                changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=amount)),
+            )
+
+    first_edit = asyncio.create_task(edit_price(20_000))
+    await first_edit_has_lock.wait()
+    second_edit = asyncio.create_task(edit_price(30_000))
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(asyncio.shield(second_edit), timeout=LOCK_WAIT_TIMEOUT_SECONDS)
+    release_first_edit.set()
+    await asyncio.gather(first_edit, second_edit)
+
+    current_price_id, versions = await _price_versions(db_session_factory, endpoint_id=endpoint_id)
+    async with db_session_factory() as session:
+        current_price = await session.get(ListingPrice, current_price_id)
+    assert versions == [(1, 250_000), (2, 20_000), (3, 30_000)]
+    assert current_price is not None
+    assert current_price.version == 3
+
+
+async def _wait_for_a_lock_wait(db_session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Return once a backend of this test database is waiting for a lock."""
+    async with asyncio.timeout(5):
+        while True:
+            async with db_session_factory() as session:
+                waiting = await session.scalar(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                    ),
+                )
+            if waiting:
+                return
+            await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_price_version_race_without_the_service_lock_is_a_conflict(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="price-race-service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+        access_mode=AccessMode.PAID,
+    )
+    first_price_id = await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async def edit_price() -> None:
+        async with db_session_factory() as session:
+            await provider_endpoints.update_endpoint(
+                session=session,
+                settings=_settings(),
+                account_id=provider_account_id,
+                endpoint_id=endpoint_id,
+                changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=20_000)),
+            )
+
+    # A writer that skips the service row lock claims version 2 first; the edit
+    # reads version 1 as the latest, waits on the rival's uncommitted key, and
+    # must fail with a conflict once the rival commits.
+    async with db_session_factory() as rival:
+        rival.add(
+            ListingPrice(
+                endpoint_id=endpoint_id,
+                version=2,
+                amount=40_000,
+                asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                network="eip155:84532",
+                pay_to=TEST_TREASURY_ADDRESS,
+                max_timeout_seconds=120,
+                fee_bps=1_000,
+            ),
+        )
+        await rival.flush()
+        edit = asyncio.create_task(edit_price())
+        await _wait_for_a_lock_wait(db_session_factory)
+        await rival.commit()
+
+    with pytest.raises(ConflictError, match="price changed concurrently"):
+        await edit
+
+    assert await _price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        first_price_id,
+        [(1, 250_000), (2, 40_000)],
+    )

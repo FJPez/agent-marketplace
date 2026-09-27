@@ -3,7 +3,7 @@ import pytest
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
 from app.core.json_types import JsonObject
-from app.db.models.endpoint_price import EndpointPrice
+from app.db.models.listing_price import ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -29,7 +29,7 @@ def _build_endpoint(
     access_mode: AccessMode = AccessMode.FREE,
     is_enabled: bool = True,
     with_upstream: bool = True,
-    price: EndpointPrice | None = None,
+    price: ListingPrice | None = None,
 ) -> ServiceEndpoint:
     endpoint = ServiceEndpoint(
         service_id=1,
@@ -57,15 +57,20 @@ def _build_endpoint(
                 },
             },
         )
-    endpoint.price = price
+    endpoint.current_price = price
     return endpoint
 
 
-def _build_fixed_price() -> EndpointPrice:
-    return EndpointPrice(
+def _build_price() -> ListingPrice:
+    return ListingPrice(
         endpoint_id=1,
-        amount_minor=500,
-        currency="USD",
+        version=1,
+        amount=10_000,
+        asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        network="eip155:84532",
+        pay_to="0x1111111111111111111111111111111111111111",
+        max_timeout_seconds=120,
+        fee_bps=1_000,
     )
 
 
@@ -99,12 +104,12 @@ def test_validate_service_for_publish_rejects_paid_endpoint_without_price() -> N
         validate_service_for_publish(service)
 
 
-def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_price() -> None:
+def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price() -> None:
     service = _build_service(
         endpoints=[
             _build_endpoint(
                 access_mode=AccessMode.PAID,
-                price=_build_fixed_price(),
+                price=_build_price(),
             ),
         ],
     )
