@@ -211,6 +211,14 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `\p{L}+` or `[A-Za-z0-9+/]{0,256}`. Numbers must be integers of magnitude at most
   2^53 - 1, or decimals that are 0 or of magnitude 1e-05 to 1e15. `format` is an
   annotation only, as the draft specifies by default.
+- The invoke path validates a request body against its endpoint's request schema
+  only within a matching bound: at most 1024 values, nested at most 64 deep, at
+  most 65536 bytes of text in its strings and keys, and numbers in the schema's
+  range. It answers whether the body matches, not where it fails: describing the
+  first error costs jsonschema-rs up to ten times more. With both bounds, the
+  costliest validation measured takes about 42 ms on an Apple M2 (one pattern
+  scanning a 64 KB string); 32 subschemas and 4 fractional numbers on each of
+  1023 numbers take about 23 ms.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

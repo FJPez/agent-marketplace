@@ -5,8 +5,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from app.core.json_types import JsonObject
+from app.core.errors import InvalidInputError
+from app.core.json_types import JsonObject, JsonValue
 from app.core.request_schema_validation import (
+    REQUEST_BODY_MAX_DEPTH,
+    REQUEST_BODY_MAX_TEXT_BYTES,
+    REQUEST_BODY_MAX_VALUES,
     REQUEST_SCHEMA_MAX_APPLICATOR_NESTING,
     REQUEST_SCHEMA_MAX_BYTES,
     REQUEST_SCHEMA_MAX_DEPTH,
@@ -14,9 +18,11 @@ from app.core.request_schema_validation import (
     REQUEST_SCHEMA_MAX_NUMBERS_PER_VALUE,
     REQUEST_SCHEMA_MAX_PATTERNS,
     REQUEST_SCHEMA_MAX_SUBSCHEMAS_PER_VALUE,
+    check_request_body_bounds,
     check_request_schema,
     check_request_schema_depth,
     request_validator,
+    validate_request_body,
 )
 
 SLUG_PATTERN = "^[a-z0-9-]{1,63}$"
@@ -78,6 +84,14 @@ def _combinations(steps: int) -> JsonObject:
 
 def _patterns(count: int) -> JsonObject:
     return {"properties": {f"p{index}": {"pattern": "^a"} for index in range(count)}}
+
+
+def _nested_body(levels: int) -> JsonValue:
+    """A request body of `levels` nested arrays: [[... []]]."""
+    body: JsonValue = []
+    for _ in range(levels - 1):
+        body = [body]
+    return body
 
 
 @pytest.mark.parametrize(
@@ -520,3 +534,96 @@ def test_a_catastrophic_backtracking_pattern_is_matched_in_linear_time() -> None
 
     # A backtracking engine takes about 2**n steps on n letters and one mismatch.
     assert not validator.is_valid("a" * 100_000 + "!")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        [0] * (REQUEST_BODY_MAX_VALUES - 1),
+        _nested_body(REQUEST_BODY_MAX_DEPTH),
+        {"max": 9007199254740991, "min": -9007199254740991, "zero": 0},
+        {"large": 1e15, "small": 1e-05, "negative": -1e-05, "zero": 0.0, "negative_zero": -0.0},
+        {"text": "hi é \U0001f600", "flag": True, "nothing": None},
+        {"k" * 6: "é" * ((REQUEST_BODY_MAX_TEXT_BYTES - 6) // 2)},
+        "a string body",
+    ],
+    ids=["most_values", "deepest", "integers", "decimals", "other_values", "most_text", "scalar"],
+)
+def test_a_request_body_within_the_bounds_is_accepted(body: JsonValue) -> None:
+    check_request_body_bounds(body)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            [0] * REQUEST_BODY_MAX_VALUES,
+            f"request body holds more than {REQUEST_BODY_MAX_VALUES} values",
+        ),
+        (
+            {"k" * 7: "é" * ((REQUEST_BODY_MAX_TEXT_BYTES - 6) // 2)},
+            f"request body holds more than {REQUEST_BODY_MAX_TEXT_BYTES} bytes of text "
+            "in its strings and keys",
+        ),
+        (
+            _nested_body(REQUEST_BODY_MAX_DEPTH + 1),
+            f"request body nests more than {REQUEST_BODY_MAX_DEPTH} levels at "
+            + "/0" * REQUEST_BODY_MAX_DEPTH,
+        ),
+        ({"n": 2**53}, f"request body number 9007199254740992 {NUMBER_RULE} at /n"),
+        ({"n": -1e16}, f"request body number -1e+16 {NUMBER_RULE} at /n"),
+        ({"n": 1e-06}, f"request body number 1e-06 {NUMBER_RULE} at /n"),
+        (2**53, f"request body number 9007199254740992 {NUMBER_RULE} at the root"),
+        ({"n": float("nan")}, "request body number NaN is not finite at /n"),
+        ([float("-inf")], "request body number -Infinity is not finite at /0"),
+        (
+            {"s": "\ud800"},
+            "request body string is not valid Unicode (a lone surrogate) at /s",
+        ),
+        (
+            {"\udfff": 1},
+            "request body object key is not valid Unicode (a lone surrogate) at the root",
+        ),
+    ],
+    ids=[
+        "too_many_values",
+        "too_much_text",
+        "too_deep",
+        "unsafe_integer",
+        "huge_decimal",
+        "tiny_decimal",
+        "unsafe_integer_body",
+        "nan",
+        "negative_infinity",
+        "lone_surrogate",
+        "lone_surrogate_key",
+    ],
+)
+def test_a_request_body_outside_the_bounds_is_rejected_naming_the_problem(
+    body: JsonValue,
+    message: str,
+) -> None:
+    with pytest.raises(InvalidInputError, match=f"^{re.escape(message)}$"):
+        check_request_body_bounds(body)
+
+
+def test_validate_request_body_accepts_a_matching_body() -> None:
+    validate_request_body(
+        schema={"type": "object", "properties": {"text": {"type": "string"}}},
+        body={"text": "hello"},
+    )
+
+
+def test_validate_request_body_rejects_a_body_the_schema_refuses() -> None:
+    with pytest.raises(
+        InvalidInputError, match=r"^request body does not match the request schema$"
+    ):
+        validate_request_body(
+            schema={"properties": {"a/b": {"items": {"type": "string"}}}},
+            body={"a/b": ["x", 5]},
+        )
+
+
+def test_validate_request_body_checks_the_bounds_before_validating() -> None:
+    with pytest.raises(InvalidInputError, match=r"^request body number 1e-06 is out of range"):
+        validate_request_body(schema={"type": "string"}, body=1e-06)

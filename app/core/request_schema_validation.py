@@ -1,18 +1,34 @@
-"""Rules for the JSON Schemas providers give their endpoints' request bodies.
+"""Rules for the JSON Schemas providers give their endpoints' request bodies, and for the
+request bodies validated against them.
 
 jsonschema-rs holds the GIL while it validates, so one expensive validation stalls the
-whole API process. A request schema is checked when it is saved (`check_request_schema`)
-so that validating a request body against it has a bounded cost: for each value a request
-body can hold, the schema applies at most REQUEST_SCHEMA_MAX_SUBSCHEMAS_PER_VALUE
-subschemas to it, compares it with at most REQUEST_SCHEMA_MAX_NUMBERS_PER_VALUE numbers
-and at most REQUEST_SCHEMA_MAX_ENTRIES_PER_VALUE other enum, const or dependency entries,
-and matches it (or each of its keys) against at most
-REQUEST_SCHEMA_MAX_PATTERNS_PER_STRING pattern, compiled within PATTERN_SIZE_LIMIT bytes.
-Its numbers are integers of magnitude at most MAX_SAFE_INTEGER or decimals that are 0 or
-of magnitude DECIMAL_MIN_MAGNITUDE to DECIMAL_MAX_MAGNITUDE: jsonschema-rs compares
-numbers exactly, and outside that range one comparison can cost hundreds of microseconds.
+whole API process. Its cost is bounded as the product of two bounds, both defined here:
 
-The compiled validator is cached per schema content for the invoke path.
+- A schema bound, checked when a schema is saved (`check_request_schema`). For each value
+  a request body can hold, the schema applies at most
+  REQUEST_SCHEMA_MAX_SUBSCHEMAS_PER_VALUE subschemas to it, compares it with at most
+  REQUEST_SCHEMA_MAX_NUMBERS_PER_VALUE numbers and at most
+  REQUEST_SCHEMA_MAX_ENTRIES_PER_VALUE other enum, const or dependency entries, and
+  matches it (or each of its keys) against at most REQUEST_SCHEMA_MAX_PATTERNS_PER_STRING
+  pattern, compiled within PATTERN_SIZE_LIMIT bytes.
+- A body bound, checked before each body is validated (`validate_request_body`). A body
+  holds at most REQUEST_BODY_MAX_VALUES values nested at most REQUEST_BODY_MAX_DEPTH
+  deep, and at most REQUEST_BODY_MAX_TEXT_BYTES of text, which a pattern scans. Its
+  numbers, like the schema's, are integers of magnitude at most MAX_SAFE_INTEGER or
+  decimals that are 0 or of magnitude DECIMAL_MIN_MAGNITUDE to DECIMAL_MAX_MAGNITUDE:
+  jsonschema-rs compares numbers exactly, and outside that range one comparison can cost
+  hundreds of microseconds.
+
+So one validation applies at most REQUEST_BODY_MAX_VALUES x
+REQUEST_SCHEMA_MAX_SUBSCHEMAS_PER_VALUE subschemas and scans the body's text with at most
+one pattern. At these limits the costliest validation measured takes about 42 ms on an
+Apple M2 with jsonschema-rs 0.58 (one pattern scanning a 64 KB string), and 32 subschemas
+with 4 fractional numbers on each of 1023 numbers about 23 ms.
+
+The body is validated with `is_valid`, in one pass. jsonschema-rs's `validate` describes
+the first error by evaluating a failing pattern again, and anyOf and oneOf branches once
+more per level, up to ten times the cost, so a refused body is not described. The
+compiled validator is cached per schema content for the invoke path.
 """
 
 import json
@@ -24,6 +40,7 @@ from urllib.parse import unquote
 
 import jsonschema_rs
 
+from app.core.errors import InvalidInputError
 from app.core.json_types import JsonObject, JsonValue
 
 # The one dialect providers write and the invoke path validates with.
@@ -42,6 +59,9 @@ REQUEST_SCHEMA_MAX_ANALYSIS_STEPS = 10_000
 # Regex limits: the compiled program, and each pattern's lazy DFA cache.
 PATTERN_SIZE_LIMIT = 10 * 1024
 PATTERN_DFA_SIZE_LIMIT = 64 * 1024
+REQUEST_BODY_MAX_VALUES = 1024
+REQUEST_BODY_MAX_DEPTH = 64
+REQUEST_BODY_MAX_TEXT_BYTES = 65_536
 MAX_SAFE_INTEGER = 2**53 - 1
 DECIMAL_MIN_MAGNITUDE = 1e-05
 DECIMAL_MAX_MAGNITUDE = 1e15
@@ -166,6 +186,51 @@ def request_validator(schema: JsonObject) -> jsonschema_rs.Draft202012Validator:
     and an edited schema is compiled afresh.
     """
     return _compile(_canonical(schema))
+
+
+def check_request_body_bounds(body: JsonValue) -> None:
+    """Reject a request body beyond the body bound of the module docstring.
+
+    Raises InvalidInputError naming the first bound broken and where in the body.
+    """
+    text_bytes = 0
+    for count, (pointer, value) in enumerate(_json_values(body), start=1):
+        if count > REQUEST_BODY_MAX_VALUES:
+            msg = f"request body holds more than {REQUEST_BODY_MAX_VALUES} values"
+            raise InvalidInputError(msg)
+        if isinstance(value, dict | list) and len(pointer) >= REQUEST_BODY_MAX_DEPTH:
+            msg = (
+                f"request body nests more than {REQUEST_BODY_MAX_DEPTH} levels "
+                f"at {_location(pointer)}"
+            )
+            raise InvalidInputError(msg)
+        problem = _value_problem(value)
+        if problem:
+            msg = f"request body {problem} at {_location(pointer)}"
+            raise InvalidInputError(msg)
+        if isinstance(value, str):
+            text_bytes += len(value.encode())
+        elif isinstance(value, dict):
+            text_bytes += sum(len(key.encode()) for key in value)
+        if text_bytes > REQUEST_BODY_MAX_TEXT_BYTES:
+            msg = (
+                f"request body holds more than {REQUEST_BODY_MAX_TEXT_BYTES} bytes of text "
+                "in its strings and keys"
+            )
+            raise InvalidInputError(msg)
+
+
+def validate_request_body(*, schema: JsonObject, body: JsonValue) -> None:
+    """Validate a request body against its endpoint's accepted request schema.
+
+    Checks the body bound, then validates with the cached compiled validator in one pass.
+    Raises InvalidInputError naming the bound broken, or saying the schema refuses the
+    body.
+    """
+    check_request_body_bounds(body)
+    if not request_validator(schema).is_valid(body):
+        msg = "request body does not match the request schema"
+        raise InvalidInputError(msg)
 
 
 def _canonical(schema: JsonObject) -> str:
