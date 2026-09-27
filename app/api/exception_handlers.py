@@ -8,6 +8,9 @@ from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
+
+# Starlette's HTTPException, not FastAPI's subclass of it, so the handler below also
+# catches FastAPI's own HTTPException and the router's own 404/405.
 from starlette.exceptions import HTTPException
 
 from app.core.errors import (
@@ -76,8 +79,9 @@ def install_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(request: Request, exc: HTTPException) -> Response:
-        # Framework errors (unknown route, method not allowed, route-local HTTPException)
-        # carry no meaning beyond their status code, so they render as about:blank.
+        # Registered on Starlette's HTTPException base so this one handler also catches
+        # FastAPI's HTTPException and the router's own 404/405; all of these carry no
+        # meaning beyond their status code, so they render as about:blank.
         return problem_response(
             status_code=exc.status_code,
             detail=exc.detail,
