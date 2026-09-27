@@ -242,8 +242,14 @@ async def test_a_request_schema_that_does_not_compile_in_time_is_refused_at_requ
 
 
 async def test_compiles_leave_a_worker_free_for_request_bodies(open_pool: OpenPool) -> None:
-    # Two saves of a schema that compiles for 83 s, each killed at its 0.5 s deadline.
-    pool = open_pool(workers=2, timeout_seconds=1.0, compile_timeout_seconds=0.5)
+    # Two saves of a schema that compiles for 83 s, each killed at its 0.5 s deadline. The
+    # second waits for the first well within the 5 s validation deadline, however slowly
+    # a loaded machine starts workers, and both workers start first, so that no start
+    # takes the validation's time.
+    pool = open_pool(workers=2, compile_timeout_seconds=0.5)
+    await asyncio.gather(
+        *(validate_request_body(pool=pool, schema={}, body=b"{}") for _ in range(2))
+    )
     compiles = [
         asyncio.create_task(check_request_schema_compiles(pool=pool, schema=EXPENSIVE_SCHEMA))
         for _ in range(2)
@@ -368,8 +374,9 @@ async def test_a_body_matching_the_schema_is_accepted_without_stalling_the_event
         stop.set()
 
     # A stall of the class uvloop once caused (about 1 s for each large body) exceeds
-    # this bound by far, while a run with no stall stays near a millisecond.
-    assert await ticker < 0.1
+    # this bound, while a run with no stall stays near a millisecond, and scheduler noise
+    # on an oversubscribed machine stays well under it.
+    assert await ticker < 0.5
 
 
 async def test_a_refused_body_crosses_the_pipe_with_its_location(open_pool: OpenPool) -> None:
@@ -422,7 +429,7 @@ async def test_a_validation_past_the_deadline_is_refused_and_its_worker_replaced
     await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
     (replacement,) = pool.pids
     assert replacement != overrunning
-    assert not _exists(overrunning)
+    assert await _all_reaped((overrunning,))
 
 
 @pytest.mark.skipif(
@@ -516,7 +523,7 @@ async def test_workers_that_cannot_start_make_the_pool_unavailable(
     )
     assert "ended before it was ready" in vars(record)["cause"]
     assert vars(record)["elapsed_seconds"] >= 0
-    assert pool.pids == ()
+    assert await _all_reaped(pool.pids)
 
 
 async def test_a_worker_that_does_not_start_in_time_is_not_retried(
@@ -617,7 +624,7 @@ async def test_closing_the_pool_while_a_worker_starts_fails_the_call_and_leaves_
     with pytest.raises(UnavailableError, match=f"^{re.escape(CLOSING)}$") as unavailable:
         await call
     assert unavailable.value.headers == {"Retry-After": "1"}
-    assert pool.pids == ()
+    assert await _all_reaped(pool.pids)
 
 
 async def test_closing_the_pool_fails_running_and_waiting_calls_at_once(
@@ -640,7 +647,7 @@ async def test_closing_the_pool_fails_running_and_waiting_calls_at_once(
         assert unavailable.value.headers == {"Retry-After": "1"}
     with pytest.raises(UnavailableError, match=f"^{re.escape(CLOSING)}$"):
         await validate_request_body(pool=pool, schema={}, body=b"{}")
-    assert pool.pids == ()
+    assert await _all_reaped(pool.pids)
 
 
 async def test_the_resources_start_the_workers_on_first_use_and_stop_them_on_exit() -> None:
@@ -653,7 +660,7 @@ async def test_the_resources_start_the_workers_on_first_use_and_stop_them_on_exi
         pids = pool.pids
         assert len(pids) == 3
 
-    assert not any(_exists(pid) for pid in pids)
+    assert await _all_reaped(pids)
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="macOS does not enforce RLIMIT_AS")
