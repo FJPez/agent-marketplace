@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import pytest
 from sqlalchemy import select
-from tests.fixtures.settings import TEST_PRICE_TERMS
+from tests.fixtures.settings import TEST_PRICE_TERMS, TEST_TREASURY_ADDRESS
 from tests.helpers.auth import create_account
 from tests.helpers.dns import TEST_DOMAIN_TOKEN, TEST_UPSTREAM_BASE_URL
 
@@ -14,6 +14,7 @@ from app.core.enums import (
     ServiceHealthStatus,
     ServiceLifecycle,
 )
+from app.core.json_types import JsonObject as CoreJsonObject
 from app.db.models import (
     ListingPrice,
     ModerationAction,
@@ -108,7 +109,7 @@ class EndpointFactory(Protocol):
         summary: str | None | object = ...,
         description: str | None | object = ...,
         access_mode: AccessMode = ...,
-        request_schema: JsonObject | None = ...,
+        request_schema: CoreJsonObject | None = ...,
         response_schema: JsonObject | None = ...,
         timeout_seconds: int = ...,
         is_enabled: bool = ...,
@@ -273,7 +274,7 @@ async def create_endpoint_record(
     summary: str | None | object = _UNSET,
     description: str | None | object = _UNSET,
     access_mode: AccessMode = AccessMode.FREE,
-    request_schema: dict[str, object] | None = None,
+    request_schema: CoreJsonObject | None = None,
     response_schema: dict[str, object] | None = None,
     timeout_seconds: int = 30,
     is_enabled: bool = True,
@@ -304,14 +305,15 @@ async def create_listing_price_record(
     endpoint_id: int,
     amount: int = 250_000,
     version: int = 1,
+    pay_to: str = TEST_TREASURY_ADDRESS,
 ) -> int:
-    """Store a price version with the default test payment terms and make it current."""
+    """Store a price version on the test payment terms, or another `pay_to`, as current."""
     async with db_session_factory.begin() as session:
         price = ListingPrice(
             endpoint_id=endpoint_id,
             version=version,
             amount=amount,
-            **TEST_PRICE_TERMS,
+            **{**TEST_PRICE_TERMS, "pay_to": pay_to},
         )
         session.add(price)
         # The get autoflushes the pending version, which assigns its id.
@@ -568,7 +570,7 @@ def endpoint_factory(
         summary: str | None | object = _UNSET,
         description: str | None | object = _UNSET,
         access_mode: AccessMode = AccessMode.FREE,
-        request_schema: JsonObject | None = None,
+        request_schema: CoreJsonObject | None = None,
         response_schema: JsonObject | None = None,
         timeout_seconds: int = 30,
         is_enabled: bool = True,
