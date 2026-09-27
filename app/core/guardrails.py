@@ -1,18 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
 
 from fastapi import FastAPI, Request, Response, status
 
-from app.core.config import get_settings
 from app.core.errors import UnauthenticatedError
+from app.core.lifespan import get_resources
 from app.core.problems import problem_response
-from app.core.rate_limits_backend import (
-    RateLimitsBackend,
-    build_client_rate_limit_key,
-    get_rate_limits_backend,
-)
+from app.core.rate_limits_backend import build_client_rate_limit_key
+from app.core.resources import Resources
 from app.services.auth import resolve_actor
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
@@ -20,57 +16,42 @@ _V1_PATH_PREFIX = "/v1/"
 _GLOBAL_SCOPE = "global"
 
 
-@dataclass(slots=True)
-class ApiGuardrails:
-    api_rate_limit: str
-    rate_limits_backend: RateLimitsBackend = field(default_factory=get_rate_limits_backend)
+async def protect(request: Request, call_next: RequestHandler) -> Response:
+    """Apply the global rate limit to /v1 requests, keyed by account or client address."""
+    if not request.url.path.startswith(_V1_PATH_PREFIX):
+        return await call_next(request)
+    resources = get_resources(request.app)
+    api_rate_limit = resources.settings.api_rate_limit
+    backend = resources.rate_limits_backend
+    key = await _resolve_owner_key(request, resources)
+    if await backend.hit(api_rate_limit, key=key, scope=_GLOBAL_SCOPE):
+        return await call_next(request)
+    retry_after = await backend.seconds_until_reset(api_rate_limit, key=key, scope=_GLOBAL_SCOPE)
+    return problem_response(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        problem_type="rate_limited",
+        detail="rate limit exceeded",
+        headers={"Retry-After": str(retry_after)},
+    )
 
-    async def protect(
-        self,
-        request: Request,
-        call_next: RequestHandler,
-    ) -> Response:
-        if not request.url.path.startswith(_V1_PATH_PREFIX):
-            return await call_next(request)
-        key = await self._resolve_owner_key(request)
-        if await self.rate_limits_backend.hit(self.api_rate_limit, key=key, scope=_GLOBAL_SCOPE):
-            return await call_next(request)
-        retry_after = await self.rate_limits_backend.seconds_until_reset(
-            self.api_rate_limit,
-            key=key,
-            scope=_GLOBAL_SCOPE,
-        )
-        return problem_response(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            problem_type="rate_limited",
-            detail="rate limit exceeded",
-            headers={"Retry-After": str(retry_after)},
-        )
 
-    async def _resolve_owner_key(self, request: Request) -> str:
-        authorization = request.headers.get("Authorization")
-        app_state = getattr(request.app.state, "app_state", None)
-        session_factory = getattr(app_state, "db_session_factory", None)
-        if authorization is None or session_factory is None:
+async def _resolve_owner_key(request: Request, resources: Resources) -> str:
+    authorization = request.headers.get("Authorization")
+    if authorization is None:
+        return build_client_rate_limit_key(request)
+
+    async with resources.db_session_factory() as session:
+        try:
+            actor = await resolve_actor(
+                session=session,
+                settings=resources.settings,
+                authorization=authorization,
+                touch_api_key=False,
+            )
+        except UnauthenticatedError:
             return build_client_rate_limit_key(request)
-
-        async with session_factory() as session:
-            try:
-                actor = await resolve_actor(
-                    session=session,
-                    settings=get_settings(),
-                    authorization=authorization,
-                    touch_api_key=False,
-                )
-            except UnauthenticatedError:
-                return build_client_rate_limit_key(request)
-        return f"account:{actor.account_id}"
+    return f"account:{actor.account_id}"
 
 
-def install_guardrails(app: FastAPI, *, guardrails: ApiGuardrails) -> None:
-    @app.middleware("http")
-    async def api_guardrails_middleware(
-        request: Request,
-        call_next: RequestHandler,
-    ) -> Response:
-        return await guardrails.protect(request, call_next)
+def install_guardrails(app: FastAPI) -> None:
+    app.middleware("http")(protect)

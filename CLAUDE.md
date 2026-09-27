@@ -33,7 +33,10 @@ Layer responsibilities:
 - `app/schemas` contains Pydantic request and response models only. Schemas
   must not import from services.
 - `app/core` contains configuration, logging, shared enums, and the shared
-  application exception taxonomy.
+  application exception taxonomy. `app/core/resources.py` builds the
+  process-wide resources (engine, session factory, Redis client, rate-limit
+  backend) without FastAPI; the API lifespan and the worker both open them with
+  `open_resources(settings)`. Add a new shared client there, not to the lifespan.
 - `app/integrations` owns external protocol and provider behavior.
 
 ### No repository layer
