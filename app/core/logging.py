@@ -21,24 +21,30 @@ SERVICE_ID_FIELD: Final[str] = "service_id"
 ERROR_CODE_FIELD: Final[str] = "error_code"
 
 _request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
-_REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+_REQUEST_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
-_REDACTED = "[REDACTED]"
-# How deep `_redact` will descend into nested mappings/sequences before giving up and
-# redacting the rest wholesale; also bounds a self-referencing container.
+_REDACTED: Final[str] = "[REDACTED]"
 _MAX_REDACTION_DEPTH: Final[int] = 8
 # Header values that are credentials or spendable payment authorizations.
-_SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "payment-signature", "x-payment"})
-_SENSITIVE_HEADER_IN_TEXT = re.compile(
+_SENSITIVE_HEADERS: Final[frozenset[str]] = frozenset(
+    {"authorization", "cookie", "payment-signature", "x-payment"}
+)
+_SENSITIVE_HEADER_IN_TEXT: Final[re.Pattern[str]] = re.compile(
     rf"""
-    \b({"|".join(sorted(_SENSITIVE_HEADERS))})\b  # the header name
-    (['"]?\s*[:=]\s*)  # ":" or "=", possibly after the closing quote of a dict key
+    # the header name, with "-" or "_" between its words
+    \b({"|".join(name.replace("-", "[-_]") for name in sorted(_SENSITIVE_HEADERS))})\b
+    (  # the separator before the value:
+        ['"]\s*,\s*b?(?=['"])  # a quoted pair: ('name', 'value') or (b'name', b'value')
+        |['"]?\s*[:=]\s*  # ":" or "=", possibly after the closing quote of a dict key
+    )
     ('[^']*'|"[^"]*"|[^\r\n]*)  # a quoted value, else the rest of the line
     """,
     re.IGNORECASE | re.VERBOSE,
 )
 # Attributes every LogRecord has; any other attribute came from `extra`.
-_RECORD_ATTRIBUTES = frozenset(vars(logging.makeLogRecord({}))) | {"message", "asctime"}
+_RECORD_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {*vars(logging.makeLogRecord({})), "message", "asctime"}
+)
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -48,10 +54,10 @@ def get_logger(name: str) -> logging.Logger:
 def configure_logging(level: str) -> None:
     """Write `app.*` records at `level` and above to stdout as redacted JSON lines.
 
-    Both entry points call this (`create_app` and the worker). Only the `app` logger is
-    configured, so uvicorn and third-party loggers keep their own settings, and records
-    still propagate to the root logger, which has no handlers in production (pytest's
-    caplog listens there). Calling it again replaces the handler instead of adding one.
+    Only the `app` logger is configured, so uvicorn and third-party loggers keep their
+    own settings, and records still propagate to the root logger, which has no handlers
+    in production (pytest's caplog listens there). Calling it again replaces the handler
+    instead of adding one.
     """
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(RedactionFilter())
@@ -65,72 +71,90 @@ def _redact_text(text: str) -> str:
     return _SENSITIVE_HEADER_IN_TEXT.sub(rf"\1\2{_REDACTED}", text)
 
 
+def _as_text(value: object) -> str:
+    # latin-1 maps every byte value to a character, so decoding cannot raise.
+    return value.decode("latin-1") if isinstance(value, bytes) else str(value)
+
+
 def _is_sensitive_header_name(name: object) -> bool:
     """True if `name` is a sensitive header, as a str or bytes (decoded latin-1).
 
     `-` and `_` are treated alike so `payment_signature` matches `PAYMENT-SIGNATURE`.
     """
-    if isinstance(name, bytes):
-        # latin-1 maps every byte value to a character, so this cannot raise.
-        name = name.decode("latin-1")
-    if not isinstance(name, str):
+    if not isinstance(name, (str, bytes)):
         return False
-    return name.lower().replace("_", "-") in _SENSITIVE_HEADERS
+    return _as_text(name).lower().replace("_", "-") in _SENSITIVE_HEADERS
 
 
 def _redact(value: object, depth: int = 0) -> object:
-    """Redact `value` recursively, bounding recursion at `_MAX_REDACTION_DEPTH`.
+    """Return `value` as JSON-ready data with every sensitive header value redacted.
 
-    A container nested past the bound becomes the redaction marker instead of being
-    descended into. This is what ends a self-referencing list or dict (`a = [];
-    a.append(a)`) without a `RecursionError`, with no need to track object identities.
+    None, booleans and numbers pass through. Text (bytes decoded as latin-1) is redacted
+    by pattern. A mapping becomes a dict with text keys whose sensitive keys' values are
+    redacted, and a list or tuple is redacted item by item. Anything else is redacted as
+    its `str()`. A container nested deeper than `_MAX_REDACTION_DEPTH` becomes the
+    redaction marker instead of being descended into. This is what ends a
+    self-referencing list or dict (`a = []; a.append(a)`) without a `RecursionError`,
+    with no need to track object identities.
     """
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, (str, bytes)):
+        return _redact_text(_as_text(value))
     if depth > _MAX_REDACTION_DEPTH:
         return _REDACTED
-    if isinstance(value, str):
-        return _redact_text(value)
     if isinstance(value, Mapping):
         return {
-            key: _REDACTED if _is_sensitive_header_name(key) else _redact(item, depth + 1)
+            _redact_text(_as_text(key)): (
+                _REDACTED if _is_sensitive_header_name(key) else _redact(item, depth + 1)
+            )
             for key, item in value.items()
         }
-    # Rebuilt as a plain `list`/`tuple`, never `type(value)(...)`: a `tuple` subclass
-    # (for example a namedtuple pair) usually cannot be constructed from one iterable.
-    if isinstance(value, list):
-        return [_redact_sequence_item(item, depth + 1) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_redact_sequence_item(item, depth + 1) for item in value)
-    return value
+    if isinstance(value, (list, tuple)):
+        # Rebuilt as a plain `list`/`tuple`, never `type(value)(...)`: a `tuple` subclass
+        # (for example a namedtuple pair) usually cannot be constructed from one iterable.
+        items = [_redact_sequence_item(item, depth + 1) for item in value]
+        return items if isinstance(value, list) else tuple(items)
+    return _redact_text(str(value))
 
 
 def _redact_sequence_item(item: object, depth: int) -> object:
     # A `(name, value)` pair, as in `list(headers.items())` or `Headers.raw`.
     if isinstance(item, (list, tuple)) and len(item) == 2 and _is_sensitive_header_name(item[0]):
-        return (item[0], _REDACTED)
+        pair = [_redact(item[0], depth), _REDACTED]
+        return pair if isinstance(item, list) else tuple(pair)
     return _redact(item, depth)
+
+
+def _render_message(record: logging.LogRecord) -> str:
+    """The record's message, or its format string alone if the arguments do not render.
+
+    Filters run outside logging's error handling, so this must not raise into the caller.
+    """
+    try:
+        return record.getMessage()
+    except Exception:
+        try:
+            return str(record.msg)
+        except Exception:
+            return f"<unprintable {type(record.msg).__name__}>"
 
 
 class RedactionFilter(logging.Filter):
     """Remove Authorization, Cookie, PAYMENT-SIGNATURE and X-PAYMENT values from a record.
 
-    Covers the rendered message, `extra` values (an `extra` field named after a
-    sensitive header, header mappings by key, `(name, value)` pairs in a list or
-    tuple, and strings by pattern) and the exception text. The record is edited in
-    place, so every handler after this one, including the root logger's, sees only
-    the redacted record. Fails closed: an `extra` value that cannot be redacted
-    (for example a `Mapping` whose `items()` raises) becomes the redaction marker
-    rather than raising out of this filter or dropping the record.
+    Covers the rendered message, every `extra` value (an `extra` field named after a
+    sensitive header, header mappings by key, `(name, value)` pairs in a list or tuple,
+    and any other value by pattern on its text), the exception text and the stack. The
+    record is edited in place, so every handler after this one, including the root
+    logger's, sees only the redacted record, and every `extra` value is left JSON-ready.
+    Never raises into the logging call: a message whose arguments do not render is
+    logged as its format string, and an `extra` value that cannot be redacted (for
+    example a `Mapping` whose `items()` raises) becomes the redaction marker.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            message = record.getMessage()
-        except (TypeError, ValueError, KeyError):
-            # Filters run outside logging's error handling, so a call whose arguments
-            # do not fit its format string would raise into the caller. Log the format
-            # string alone instead.
-            message = str(record.msg)
-        record.msg = _redact_text(message)
+        record.msg = _redact_text(_render_message(record))
         record.args = ()
         for key in vars(record).keys() - _RECORD_ATTRIBUTES:
             if _is_sensitive_header_name(key):
@@ -139,8 +163,6 @@ class RedactionFilter(logging.Filter):
             try:
                 redacted_value = _redact(getattr(record, key))
             except Exception:
-                # An unusual object (a Mapping whose `items()` raises, say) must not
-                # crash the filter or drop the record: redact it wholesale instead.
                 redacted_value = _REDACTED
             setattr(record, key, redacted_value)
         if record.exc_info and not record.exc_text:
@@ -148,6 +170,8 @@ class RedactionFilter(logging.Filter):
             record.exc_text = logging.Formatter().formatException(record.exc_info)
         if record.exc_text:
             record.exc_text = _redact_text(record.exc_text)
+        if record.stack_info:
+            record.stack_info = _redact_text(record.stack_info)
         return True
 
 
@@ -158,12 +182,13 @@ class JsonFormatter(logging.Formatter):
     """
 
     def format(self, record: logging.LogRecord) -> str:
-        entry: dict[str, object] = {
+        standard_fields: dict[str, object] = {
             "time": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
+        entry = dict(standard_fields)
         request_id = get_request_id()
         if request_id is not None:
             entry[REQUEST_ID_FIELD] = request_id
@@ -175,7 +200,14 @@ class JsonFormatter(logging.Formatter):
             entry[key] = value
         if record.exc_text:
             entry["exception"] = record.exc_text
-        return json.dumps(entry, default=str)
+        if record.stack_info:
+            entry["stack"] = record.stack_info
+        try:
+            return json.dumps(entry, default=str)
+        except Exception as exc:
+            # A field that does not serialize (only possible without RedactionFilter,
+            # which leaves every extra JSON-ready) must not lose the whole record.
+            return json.dumps(standard_fields | {"log_error": type(exc).__name__})
 
 
 def resolve_request_id(request_id: str | None) -> str:

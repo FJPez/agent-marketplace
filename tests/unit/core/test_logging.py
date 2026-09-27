@@ -3,8 +3,10 @@ import logging
 import uuid
 from collections import namedtuple
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 
+import httpx
 import pytest
 from starlette.datastructures import Headers
 
@@ -17,6 +19,7 @@ from app.core.logging import (
     REQUEST_ID_HEADER,
     SERVICE_ID_FIELD,
     STATUS_CODE_FIELD,
+    JsonFormatter,
     bind_request_id,
     build_event_context,
     build_log_context,
@@ -28,6 +31,39 @@ from app.core.logging import (
 SECRET = "sk-live-4f9a7c"
 
 _HeaderPair = namedtuple("_HeaderPair", ["name", "value"])
+
+# Raw ASGI headers with a repeated name, as a client that sends two Accept headers
+# produces; a Starlette `Headers` built from them switches its repr to `raw=[...]`.
+_RAW_HEADERS = [
+    (b"authorization", f"Bearer {SECRET}".encode()),
+    (b"accept", b"application/json"),
+    (b"accept", b"text/plain"),
+]
+
+
+@dataclass
+class _PaymentHeaders:
+    """Renders like a pydantic model or dataclass with header-named fields."""
+
+    payment_signature: str
+    x_payment: str
+
+
+class _HeaderCarrier:
+    """An arbitrary object whose `str()` holds a header line."""
+
+    def __str__(self) -> str:
+        return f"Cookie: session={SECRET}"
+
+
+class _UnprintableError(Exception):
+    """Raised by `_Unprintable.__str__`, as a lazy-loading repr might raise."""
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise _UnprintableError
+
 
 # A list that contains itself, and a dict that contains itself: redaction must
 # terminate on these without a RecursionError, by bounding nesting depth rather
@@ -203,13 +239,116 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
                     (b"accept", b"application/json"),
                 )
             },
-            {
-                "headers": [
-                    ["b'authorization'", "[REDACTED]"],
-                    ["b'accept'", "b'application/json'"],
-                ]
-            },
+            {"headers": [["authorization", "[REDACTED]"], ["accept", "application/json"]]},
             id="tuple_of_bytes_pairs_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"headers": dict(_RAW_HEADERS)},
+            {"headers": {"authorization": "[REDACTED]", "accept": "text/plain"}},
+            id="dict_with_bytes_keys_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"seen": {f"Authorization: Bearer {SECRET}": 1}},
+            {"seen": {"Authorization: [REDACTED]": 1}},
+            id="header_line_as_a_key_in_extra",
+        ),
+        pytest.param(
+            "upstream headers %s",
+            (_RAW_HEADERS,),
+            {},
+            {
+                "message": (
+                    "upstream headers [(b'authorization', b[REDACTED]),"
+                    " (b'accept', b'application/json'), (b'accept', b'text/plain')]"
+                ),
+            },
+            id="raw_headers_in_message",
+        ),
+        pytest.param(
+            "upstream headers %s",
+            ([("authorization", f"Bearer {SECRET}"), ("accept", "application/json")],),
+            {},
+            {
+                "message": (
+                    "upstream headers [('authorization', [REDACTED]),"
+                    " ('accept', 'application/json')]"
+                ),
+            },
+            id="header_items_in_message",
+        ),
+        pytest.param(
+            "request scope %s",
+            ({"type": "http", "headers": [(b"x-payment", SECRET.encode())]},),
+            {},
+            {"message": "request scope {'type': 'http', 'headers': [(b'x-payment', b[REDACTED])]}"},
+            id="asgi_scope_in_message",
+        ),
+        pytest.param(
+            "request headers %r",
+            (Headers(raw=_RAW_HEADERS),),
+            {},
+            {
+                "message": (
+                    "request headers Headers(raw=[(b'authorization', b[REDACTED]),"
+                    " (b'accept', b'application/json'), (b'accept', b'text/plain')])"
+                ),
+            },
+            id="starlette_headers_with_a_repeated_name_in_message",
+        ),
+        pytest.param(
+            "upstream headers %r",
+            (httpx.Headers([("payment-signature", SECRET), ("payment-signature", SECRET)]),),
+            {},
+            {
+                "message": (
+                    "upstream headers Headers([('payment-signature', [REDACTED]),"
+                    " ('payment-signature', [REDACTED])])"
+                ),
+            },
+            id="httpx_headers_with_a_repeated_name_in_message",
+        ),
+        pytest.param(
+            "payment %r",
+            (_PaymentHeaders(payment_signature=SECRET, x_payment=SECRET),),
+            {},
+            {
+                "message": (
+                    "payment _PaymentHeaders(payment_signature=[REDACTED], x_payment=[REDACTED])"
+                ),
+            },
+            id="header_named_fields_in_message",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"raw": f"Authorization: Bearer {SECRET}".encode()},
+            {"raw": "Authorization: [REDACTED]"},
+            id="bytes_in_extra",
+        ),
+        pytest.param(
+            "settle failed",
+            (),
+            {"error": RuntimeError(f"facilitator rejected X-PAYMENT: {SECRET}")},
+            {"error": "facilitator rejected X-PAYMENT: [REDACTED]"},
+            id="exception_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"lines": {f"Authorization: Bearer {SECRET}"}},
+            {"lines": "{'Authorization: [REDACTED]"},
+            id="set_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"carrier": _HeaderCarrier()},
+            {"carrier": "Cookie: [REDACTED]"},
+            id="object_with_a_header_line_in_extra",
         ),
         pytest.param(
             "forwarding",
@@ -272,9 +411,44 @@ def test_configure_logging_redacts_sensitive_header_values(
 
     app_logger.getChild("tests").info(message, *args, extra=extra)
 
+    (line,) = capsys.readouterr().out.splitlines()
+    assert SECRET not in line
+    assert expected.items() <= json.loads(line).items()
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "authorization, cookie and x-payment headers are redacted",
+        "authorization failed for account 5",
+    ],
+)
+def test_configure_logging_keeps_prose_that_names_a_sensitive_header(
+    app_logger: logging.Logger,
+    capsys: pytest.CaptureFixture[str],
+    message: str,
+) -> None:
+    configure_logging("INFO")
+
+    app_logger.getChild("tests").info(message)
+
     (entry,) = _json_lines(capsys)
-    assert SECRET not in json.dumps(entry)
-    assert expected.items() <= entry.items()
+    assert entry["message"] == message
+
+
+def test_configure_logging_keeps_the_container_type_of_a_redacted_header_pair(
+    app_logger: logging.Logger,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    configure_logging("INFO")
+
+    app_logger.getChild("tests").info(
+        "forwarding",
+        extra={"headers": [["Authorization", SECRET], ("Cookie", SECRET)]},
+    )
+
+    (record,) = caplog.records
+    assert vars(record)["headers"] == [["Authorization", "[REDACTED]"], ("Cookie", "[REDACTED]")]
 
 
 def test_configure_logging_keeps_standard_fields_when_extra_uses_their_names(
@@ -310,13 +484,64 @@ def test_configure_logging_redacts_sensitive_header_values_in_exceptions(
     assert "RuntimeError: facilitator rejected X-PAYMENT: [REDACTED]" in str(entry["exception"])
 
 
-def test_configure_logging_keeps_a_malformed_record_without_raising(
+@pytest.mark.parametrize(
+    ("message", "args", "expected"),
+    [
+        pytest.param(
+            "sent %s to %s", (f"Authorization: {SECRET}",), "sent %s to %s", id="too_few_args"
+        ),
+        pytest.param("sent %s", (_Unprintable(),), "sent %s", id="unprintable_arg"),
+        pytest.param(_Unprintable(), (), "<unprintable _Unprintable>", id="unprintable_message"),
+    ],
+)
+def test_configure_logging_keeps_a_record_whose_message_does_not_render(
+    app_logger: logging.Logger,
+    capsys: pytest.CaptureFixture[str],
+    message: object,
+    args: tuple[object, ...],
+    expected: str,
+) -> None:
+    configure_logging("INFO")
+
+    app_logger.getChild("tests").info(message, *args)
+
+    (entry,) = _json_lines(capsys)
+    assert entry["message"] == expected
+
+
+def test_configure_logging_emits_the_stack_redacted(
     app_logger: logging.Logger,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     configure_logging("INFO")
+    logger = app_logger.getChild("tests")
+    # The stack shows each frame's source line, and a source line can quote a header.
+    stack = f'Stack (most recent call last):\n  File "pay.py", line 1\n    X-PAYMENT: {SECRET}'
 
-    app_logger.getChild("tests").info("sent %s to %s", f"Authorization: {SECRET}")
+    logger.handle(logger.makeRecord(logger.name, logging.INFO, "pay.py", 1, "paying", (), None))
+    logger.handle(
+        logger.makeRecord(logger.name, logging.INFO, "pay.py", 1, "paying", (), None, sinfo=stack)
+    )
 
-    (entry,) = _json_lines(capsys)
-    assert entry["message"] == "sent %s to %s"
+    without_stack, with_stack = _json_lines(capsys)
+    assert "stack" not in without_stack
+    assert with_stack["stack"] == (
+        'Stack (most recent call last):\n  File "pay.py", line 1\n    X-PAYMENT: [REDACTED]'
+    )
+
+
+def test_json_formatter_keeps_a_record_whose_fields_do_not_serialize() -> None:
+    # Without RedactionFilter nothing turns these bytes keys into strings.
+    record = logging.makeLogRecord(
+        {"name": "app.tests", "levelname": "INFO", "msg": "forwarding", "headers": {b"a": 1}},
+    )
+
+    entry = json.loads(JsonFormatter().format(record))
+
+    assert datetime.fromisoformat(str(entry.pop("time"))).tzinfo is not None
+    assert entry == {
+        "level": "INFO",
+        "logger": "app.tests",
+        "message": "forwarding",
+        "log_error": "TypeError",
+    }

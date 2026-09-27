@@ -3,7 +3,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -84,6 +84,12 @@ class Settings(BaseSettings):
         )
         sources.append(file_secret_settings)
         return tuple(sources)
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalize_log_level(cls, value: object) -> object:
+        # Accept `APP_LOG_LEVEL=info`: the Literal above lists only upper-case names.
+        return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":

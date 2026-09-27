@@ -88,6 +88,26 @@ def test_settings_use_default_values(
     assert settings.worker_shutdown_timeout_seconds == 25.0
 
 
+@pytest.mark.parametrize(("log_level", "expected"), [("info", "INFO"), ("Warning", "WARNING")])
+def test_settings_accept_a_log_level_in_any_case(
+    settings_env_factory: SettingsEnvFactory,
+    log_level: str,
+    expected: str,
+) -> None:
+    settings_env_factory(env={"APP_LOG_LEVEL": log_level})
+
+    assert Settings().log_level == expected
+
+
+def test_settings_reject_an_unknown_log_level(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env={"APP_LOG_LEVEL": "verbose"})
+
+    with pytest.raises(ValidationError, match="log_level"):
+        Settings()
+
+
 def test_settings_require_jwt_secret_key(
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
