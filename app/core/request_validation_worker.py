@@ -25,7 +25,7 @@ from typing import BinaryIO
 
 import jsonschema_rs
 
-from app.core.json_types import JsonValue
+from app.core.json_types import JsonObject, JsonValue
 from app.core.request_schema_validation import json_pointer
 
 CHECK_SCHEMA = 0
@@ -68,6 +68,14 @@ _PATTERN_RULE = (
 
 class _NotFiniteError(ValueError):
     """A number parsed as NaN or an infinity."""
+
+
+class _RepeatedKeyError(ValueError):
+    """An object that holds one key twice."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
 
 
 def main() -> None:
@@ -126,15 +134,33 @@ def schema_refusal(schema_json: str) -> str | None:
 
 
 def body_refusal(schema_json: str, body: bytes) -> str | None:
-    """Why the raw JSON `body` is refused against the schema `schema_json`, or None."""
+    """Why the raw JSON `body` is refused against the schema `schema_json`, or None.
+
+    The body is refused unless it is JSON exactly as the provider will read it: UTF-8
+    without a byte order mark (RFC 8259), and no object holding a key twice (I-JSON,
+    RFC 7493), since parsers disagree on which of its values wins.
+    """
     validator = _compile(schema_json)
     try:
-        instance = json.loads(body, parse_constant=_not_finite, parse_float=_finite_float)
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return "request body is not UTF-8"
+    if text.startswith("\ufeff"):
+        return "request body must not start with a byte order mark"
+    try:
+        instance = json.loads(
+            text,
+            parse_constant=_not_finite,
+            parse_float=_finite_float,
+            object_pairs_hook=_unique_keys,
+        )
     except RecursionError:
         return _TOO_DEEP
     except _NotFiniteError:
         return _NOT_FINITE
-    except ValueError:  # malformed, not UTF-8, or an integer of over 4,300 digits
+    except _RepeatedKeyError as exc:
+        return f"request body repeats the key {_cut(json.dumps(exc.key))}"
+    except ValueError:  # malformed, or an integer of over 4,300 digits
         return _NOT_JSON
     if _nests_deeper_than(instance, REQUEST_BODY_MAX_DEPTH):
         return _TOO_DEEP
@@ -184,6 +210,17 @@ def _memory_bytes() -> int:
 
 def _not_finite(name: str) -> float:
     raise _NotFiniteError(name)
+
+
+def _unique_keys(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
+    members = dict(pairs)
+    if len(members) < len(pairs):
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                raise _RepeatedKeyError(key)
+            seen.add(key)
+    return members
 
 
 def _finite_float(text: str) -> float:

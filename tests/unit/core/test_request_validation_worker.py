@@ -15,6 +15,7 @@ from app.core.request_validation_worker import (
 
 MISMATCH = "request body does not match the request schema"
 NOT_JSON = "request body is not valid JSON"
+NOT_UTF_8 = "request body is not UTF-8"
 NOT_FINITE = "request body holds a number that is not finite"
 TOO_DEEP = f"request body must nest at most {REQUEST_BODY_MAX_DEPTH} levels"
 CUT = REQUEST_BODY_ERROR_TEXT_MAX_LENGTH
@@ -225,7 +226,30 @@ def test_a_body_matching_the_schema_is_not_refused(schema: JsonObject, body: byt
             id="long_location_cut",
         ),
         pytest.param({}, b'{"a": ', NOT_JSON, id="malformed"),
-        pytest.param({}, b'"\xff"', NOT_JSON, id="not_utf_8"),
+        pytest.param({}, b'"\xff"', NOT_UTF_8, id="not_utf_8"),
+        # What the provider receives is these bytes: only UTF-8 without a byte order mark
+        # is JSON it must accept (RFC 8259), and parsers disagree on which value of a
+        # repeated key wins (I-JSON, RFC 7493).
+        pytest.param({}, '{"a": 1}'.encode("utf-16"), NOT_UTF_8, id="utf_16"),
+        pytest.param({}, '{"a": 1}'.encode("utf-32"), NOT_UTF_8, id="utf_32"),
+        pytest.param(
+            {},
+            b'\xef\xbb\xbf{"a": 1}',
+            "request body must not start with a byte order mark",
+            id="utf_8_byte_order_mark",
+        ),
+        pytest.param(
+            {"properties": {"amount": {"maximum": 100}}},
+            b'{"amount": 999999, "amount": 5}',
+            'request body repeats the key "amount"',
+            id="repeated_key",
+        ),
+        pytest.param(
+            {},
+            b'{"items": [{"id": 1, "id": 2}]}',
+            'request body repeats the key "id"',
+            id="repeated_nested_key",
+        ),
         pytest.param({}, b"1" * 4301, NOT_JSON, id="integer_of_4301_digits"),
         pytest.param({}, b"[NaN]", NOT_FINITE, id="nan"),
         pytest.param({}, b"[-Infinity]", NOT_FINITE, id="negative_infinity"),

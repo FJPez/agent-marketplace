@@ -265,7 +265,7 @@ async def test_a_compile_that_waits_too_long_for_its_turn_is_turned_away_as_busy
     open_pool: OpenPool,
 ) -> None:
     # Two workers leave room for one compile at a time; the second waits at most 0.25 s.
-    pool = open_pool(workers=2, timeout_seconds=SHORT_DEADLINE_SECONDS, compile_timeout_seconds=1.0)
+    pool = open_pool(workers=2, timeout_seconds=SHORT_DEADLINE_SECONDS, compile_timeout_seconds=0.5)
 
     results = await asyncio.gather(
         check_request_schema_compiles(pool=pool, schema=EXPENSIVE_SCHEMA),
