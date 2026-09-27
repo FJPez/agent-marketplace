@@ -28,7 +28,8 @@ async def get_readiness_response(app_state: AppState) -> HealthResponse:
     try:
         async with session_factory() as session:
             await session.execute(text("SELECT 1"))
-    except SQLAlchemyError as exc:
+    # asyncpg raises a refused or timed-out connection as a plain OSError, not wrapped.
+    except (SQLAlchemyError, OSError) as exc:
         raise ReadinessCheckError("database unavailable") from exc
 
     if app_state.settings.redis_url is not None:
