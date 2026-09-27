@@ -105,6 +105,8 @@ def test_settings_use_default_values(
     assert settings.payment_max_timeout_seconds == 120
     assert settings.provider_secret_encryption_keys == ()
     assert settings.provider_secret_grace_seconds == 86_400
+    assert settings.payout_address_challenge_seconds == 300
+    assert settings.payout_address_hold_seconds == 86_400
     assert settings.request_validation_timeout_ms == 250
     assert settings.request_validation_workers == 2
     assert settings.request_schema_compile_timeout_ms == 100
@@ -365,6 +367,11 @@ def test_settings_ignore_retired_payment_variables(
             id="worker-shutdown-timeout-zero",
         ),
         pytest.param({"APP_PROVIDER_SECRET_GRACE_SECONDS": "0"}, id="secret-grace-zero"),
+        pytest.param(
+            {"APP_PAYOUT_ADDRESS_CHALLENGE_SECONDS": "0"},
+            id="payout-address-challenge-zero",
+        ),
+        pytest.param({"APP_PAYOUT_ADDRESS_HOLD_SECONDS": "0"}, id="payout-address-hold-zero"),
         pytest.param(
             {"APP_REQUEST_VALIDATION_TIMEOUT_MS": "0"},
             id="request-validation-timeout-zero",

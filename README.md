@@ -254,6 +254,15 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   read the deployed secret later; check `GET /v1/provider/signing-secret` and rotate
   with a new key if a new secret is still needed. Use a fresh random key, such as a
   UUID, for each rotation.
+- A provider proves a payout address by signing, with that address's key, EIP-712
+  typed data naming the provider's account, the address and the payment network
+  (`APP_PAYMENT_NETWORK`) under a one-time nonce, which expires after
+  `APP_PAYOUT_ADDRESS_CHALLENGE_SECONDS` (default 300). Every proof is kept, and the
+  latest one decides where payouts go, but only `APP_PAYOUT_ADDRESS_HOLD_SECONDS`
+  (default 86400, one day) after it: until then payouts are held, even if an earlier
+  address was in use, so a hijacked account cannot redirect earnings before the
+  provider notices. The address must be an externally owned account: a smart
+  contract wallet cannot make the signature.
 
 ## Signing Secret Encryption Keys
 

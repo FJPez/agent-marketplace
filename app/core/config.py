@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     provider_secret_encryption_keys: Annotated[tuple[SecretStr, ...], NoDecode] = ()
     # How long a rotated-out signing secret keeps signing beside its replacement.
     provider_secret_grace_seconds: int = Field(default=86_400, gt=0)
+    # How long a provider has to sign a payout address challenge.
+    payout_address_challenge_seconds: int = Field(default=300, gt=0)
+    # How long payouts are held after a provider proves a new payout address, so a
+    # hijacked account cannot redirect earnings before the provider notices.
+    payout_address_hold_seconds: int = Field(default=86_400, gt=0)
     # Request bodies are validated in this many worker processes, each validation within
     # this deadline (app/core/request_validation.py). A caller also waits at most the
     # deadline for a free worker, and each worker takes about 25 to 200 MiB.
