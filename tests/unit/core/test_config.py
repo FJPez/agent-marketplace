@@ -107,6 +107,7 @@ def test_settings_use_default_values(
     assert settings.provider_secret_grace_seconds == 86_400
     assert settings.request_validation_timeout_ms == 250
     assert settings.request_validation_workers == 2
+    assert settings.request_schema_compile_timeout_ms == 100
 
 
 @pytest.mark.parametrize(("log_level", "expected"), [("info", "INFO"), ("Warning", "WARNING")])
@@ -369,6 +370,10 @@ def test_settings_ignore_retired_payment_variables(
             id="request-validation-timeout-zero",
         ),
         pytest.param({"APP_REQUEST_VALIDATION_WORKERS": "0"}, id="request-validation-workers-zero"),
+        pytest.param(
+            {"APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS": "0"},
+            id="request-schema-compile-timeout-zero",
+        ),
     ],
 )
 def test_settings_reject_non_positive_timeout_and_touch_interval_settings(
@@ -391,6 +396,19 @@ def test_settings_reject_non_positive_timeout_and_touch_interval_settings(
         pytest.param(
             {"APP_REQUEST_VALIDATION_WORKERS": "33"}, id="request-validation-workers-over-32"
         ),
+        # A stored schema compiled within the compile deadline when it was saved, so a
+        # worker compiling it afresh leaves at least half the validation deadline.
+        pytest.param(
+            {"APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS": "126"},
+            id="compile-timeout-over-half-the-validation-timeout",
+        ),
+        pytest.param(
+            {
+                "APP_REQUEST_VALIDATION_TIMEOUT_MS": "100",
+                "APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS": "51",
+            },
+            id="compile-timeout-over-half-a-shorter-validation-timeout",
+        ),
     ],
 )
 def test_settings_bound_the_request_validation_pool(
@@ -401,6 +419,21 @@ def test_settings_bound_the_request_validation_pool(
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_settings_accept_a_compile_timeout_of_half_the_validation_timeout(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(
+        env={
+            "APP_REQUEST_VALIDATION_TIMEOUT_MS": "10000",
+            "APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS": "5000",
+        },
+    )
+
+    settings = Settings()
+
+    assert settings.request_schema_compile_timeout_ms == 5000
 
 
 @pytest.mark.parametrize(

@@ -1,3 +1,4 @@
+import re
 from urllib.parse import urlsplit
 
 import pytest
@@ -20,6 +21,7 @@ from tests.helpers.dns import (
     FakeResolver,
     TransactionWatchingResolver,
 )
+from tests.helpers.request_validation import IN_PROCESS_REQUEST_VALIDATION_POOL
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
@@ -42,6 +44,9 @@ pytestmark = [pytest.mark.asyncio]
 
 REQUEST_SCHEMA: JsonObject = {"type": "object", "properties": {"text": {"type": "string"}}}
 RESPONSE_SCHEMA: JsonObject = {"type": "object", "properties": {"result": {"type": "string"}}}
+NEGATIVE_LENGTH = (
+    "request_schema is not a valid JSON Schema: -1 is less than the minimum of 0 at /minLength"
+)
 
 
 async def _create_draft_service(
@@ -68,6 +73,7 @@ async def test_create_endpoint_persists_normalized_fields(
         endpoint = await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -107,6 +113,7 @@ async def test_create_endpoint_persists_invocation_fields(
         endpoint = await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -140,6 +147,7 @@ async def test_create_endpoint_returns_endpoint_with_loaded_relations(
         created = await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -168,6 +176,7 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
         await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -186,6 +195,7 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
             await create_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 service_id=service_id,
                 request=EndpointCreateRequest(
@@ -219,6 +229,7 @@ async def test_create_endpoint_allows_same_key_different_service(
         await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_a_id,
             request=EndpointCreateRequest(
@@ -236,6 +247,7 @@ async def test_create_endpoint_allows_same_key_different_service(
         endpoint_b = await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_b_id,
             request=EndpointCreateRequest(
@@ -269,6 +281,7 @@ async def test_create_endpoint_rejects_active_service(
             await create_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 service_id=service_id,
                 request=EndpointCreateRequest(
@@ -298,6 +311,7 @@ async def test_create_endpoint_rejects_other_accounts_service(
             await create_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 service_id=service_id,
                 request=EndpointCreateRequest(
@@ -310,6 +324,58 @@ async def test_create_endpoint_rejects_other_accounts_service(
                     is_enabled=True,
                 ),
             )
+
+
+async def test_create_endpoint_refuses_a_request_schema_that_does_not_compile(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError, match=f"^{re.escape(NEGATIVE_LENGTH)}$"):
+            await create_endpoint(
+                session=session,
+                settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
+                account_id=account_id,
+                service_id=service_id,
+                request=EndpointCreateRequest(
+                    key="translate",
+                    name="Translate",
+                    access_mode=AccessMode.FREE,
+                    request_schema={"minLength": -1},
+                    response_schema=RESPONSE_SCHEMA,
+                    timeout_seconds=30,
+                ),
+            )
+
+    async with db_session_factory() as session:
+        assert await session.scalar(select(func.count()).select_from(ServiceEndpoint)) == 0
+
+
+async def test_update_endpoint_refuses_a_request_schema_that_does_not_compile(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError, match=f"^{re.escape(NEGATIVE_LENGTH)}$"):
+            await update_endpoint(
+                session=session,
+                settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                changes=EndpointUpdateRequest(request_schema={"minLength": -1}),
+            )
+
+    async with db_session_factory() as session:
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+    assert endpoint is not None
+    assert endpoint.request_schema == {"type": "object"}
 
 
 async def test_update_endpoint_clears_summary_and_description(
@@ -333,6 +399,7 @@ async def test_update_endpoint_clears_summary_and_description(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(summary=None, description=None),
@@ -367,6 +434,7 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(
@@ -406,6 +474,7 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -447,6 +516,7 @@ async def test_update_endpoint_active_invocation_field_change_creates_revision(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest.model_validate({field: value}),
@@ -498,6 +568,7 @@ async def test_update_endpoint_active_material_update_snapshots_sibling_endpoint
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=updated_endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -564,6 +635,7 @@ async def test_update_endpoint_returns_endpoint_renderable_without_lazy_loading(
         endpoint = await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -595,6 +667,7 @@ async def test_update_endpoint_active_name_only_update_creates_zero_revisions(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Renamed Endpoint"),
@@ -632,6 +705,7 @@ async def test_update_endpoint_active_paid_endpoint_without_pricing_rejects_mate
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -666,6 +740,7 @@ async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutati
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -704,6 +779,7 @@ async def test_update_endpoint_suspended_service_blocks_material_update(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -732,6 +808,7 @@ async def test_update_endpoint_suspended_service_allows_name_only_update(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Renamed While Suspended"),
@@ -762,6 +839,7 @@ async def test_update_endpoint_rejects_other_accounts_endpoint(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(name="New Name"),
@@ -792,6 +870,7 @@ async def test_update_endpoint_draft_identical_values_leave_updated_at_unchanged
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Translate", timeout_seconds=30),
@@ -833,6 +912,7 @@ async def test_update_endpoint_active_identical_material_value_is_a_no_op(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=30),
@@ -877,6 +957,7 @@ async def test_update_endpoint_normalized_value_matching_stored_value_is_a_no_op
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="  Same  "),
@@ -917,6 +998,7 @@ async def test_update_endpoint_active_unchanged_material_field_creates_no_revisi
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Renamed Endpoint", timeout_seconds=30),
@@ -969,6 +1051,7 @@ async def test_update_endpoint_suspended_service_allows_no_op_update(
         await update_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=30),

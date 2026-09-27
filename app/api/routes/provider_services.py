@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Response, status
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
 from app.api.deps.dns import DnsResolverDep
+from app.api.deps.request_validation import RequestValidationPoolDep
 from app.api.deps.settings import SettingsDep
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -277,10 +278,12 @@ async def create_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
     settings: SettingsDep,
+    validation_pool: RequestValidationPoolDep,
 ) -> EndpointResponse:
     endpoint = await provider_endpoints.create_endpoint(
         session=session,
         settings=settings,
+        validation_pool=validation_pool,
         account_id=actor.account_id,
         service_id=service_id,
         request=request,
@@ -327,10 +330,12 @@ async def update_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
     settings: SettingsDep,
+    validation_pool: RequestValidationPoolDep,
 ) -> EndpointResponse:
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
         settings=settings,
+        validation_pool=validation_pool,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
         changes=request,

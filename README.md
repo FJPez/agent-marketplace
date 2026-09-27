@@ -198,11 +198,15 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   may be declared only once, and every `$ref` and `$dynamicRef` must be a `#` fragment
   naming a subschema of the same schema: the marketplace never fetches a remote
   schema. A schema has at most 64 patterns, each compiled by a linear-time engine
-  within 10 KiB, so compiling one stays cheap: a pattern that can apply to a request
-  body must avoid lookaround and backreferences and compile no larger, so `\p{L}+` or
-  `[A-Za-z0-9+/]{0,256}` are refused. `format` is an annotation only, as the draft
-  specifies by default. These rules do not bound what validating a body costs; a
-  deadline does (below).
+  within 10 KiB: a pattern that can apply to a request body must avoid lookaround and
+  backreferences and compile no larger, so `\p{L}+` or `[A-Za-z0-9+/]{0,256}` are
+  refused. `format` is an annotation only, as the draft specifies by default. The
+  schema is compiled in a request validation worker (below), because compiling some
+  patterns takes time quadratic in their length, and must compile within
+  `APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS` (default 100, at most half of
+  `APP_REQUEST_VALIDATION_TIMEOUT_MS`), or it is refused as too expensive to compile.
+  So a worker that must compile a stored schema afresh still has at least half the
+  validation deadline for the body.
 - A request body is validated against its endpoint's `request_schema` in a worker
   process, because the validator (jsonschema-rs) holds the Python GIL and what a
   schema costs on a body is not known in advance. `APP_REQUEST_VALIDATION_WORKERS`

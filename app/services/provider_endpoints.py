@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
+from app.core.request_validation import RequestValidationPool, check_request_schema_compiles
 from app.db.errors import is_unique_violation, unique_violation_constraint
 from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
@@ -33,6 +34,7 @@ async def create_endpoint(
     *,
     session: AsyncSession,
     settings: Settings,
+    validation_pool: RequestValidationPool,
     account_id: int,
     service_id: int,
     request: EndpointCreateRequest,
@@ -42,6 +44,8 @@ async def create_endpoint(
         if request.price is None
         else build_price_version(settings=settings, amount=request.price.amount)
     )
+    # Before any transaction opens: it waits on a worker process.
+    await check_request_schema_compiles(pool=validation_pool, schema=request.request_schema)
     service = await service_access.lock_owned_service(
         session=session,
         account_id=account_id,
@@ -84,10 +88,14 @@ async def update_endpoint(
     *,
     session: AsyncSession,
     settings: Settings,
+    validation_pool: RequestValidationPool,
     account_id: int,
     endpoint_id: int,
     changes: EndpointUpdateRequest,
 ) -> ServiceEndpoint:
+    if changes.request_schema is not None:
+        # Before any transaction opens: it waits on a worker process.
+        await check_request_schema_compiles(pool=validation_pool, schema=changes.request_schema)
     await service_access.lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,

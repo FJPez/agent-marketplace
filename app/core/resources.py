@@ -65,6 +65,7 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
         request_validation_pool = ProcessRequestValidationPool(
             workers=settings.request_validation_workers,
             timeout_seconds=settings.request_validation_timeout_ms / 1000,
+            compile_timeout_seconds=settings.request_schema_compile_timeout_ms / 1000,
         )
         stack.push_async_callback(request_validation_pool.close)
 

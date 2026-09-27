@@ -21,7 +21,7 @@ depends_on: Sequence[str] | None = None
 
 def upgrade() -> None:
     # From here on a request schema is checked when it is saved, and the invoke path
-    # compiles every stored one as below (app/core/request_schema_validation.py). Refuse
+    # compiles every stored one as below (app/core/request_validation_worker.py). Refuse
     # a stored schema it cannot compile rather than fail its invocations; nothing is
     # deployed, so only a local database can hold one (see the README).
     rows = op.get_bind().execute(

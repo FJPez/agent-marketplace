@@ -1,14 +1,13 @@
 """Rules for the JSON Schemas providers give their endpoints' request bodies.
 
-A request schema is checked when it is saved (`check_request_schema`). The checks are
-cheap and about correctness: the schema's size and nesting, valid Unicode and finite
+A request schema is checked in two steps when it is saved. First the request models run
+`check_request_schema_shape` and `check_request_schema`, walks in Python whose cost is
+bounded by the size limit: the schema's size and nesting, valid Unicode and finite
 numbers, draft 2020-12 throughout, references only to its own subschemas (so nothing is
-ever fetched), and that it compiles. Its patterns are compiled within PATTERN_SIZE_LIMIT
-bytes, at most REQUEST_SCHEMA_MAX_PATTERNS of them, so compiling a schema stays cheap.
-
-What validating a body costs is not bounded here: request bodies are validated in worker
-processes under a deadline (`app.core.request_validation_worker`), which compile each schema
-with `compile_request_schema`, as the save check does.
+ever fetched), anchors declared once, and at most REQUEST_SCHEMA_MAX_PATTERNS patterns.
+Then the endpoint services compile it, which can be costly (jsonschema-rs compiles some
+patterns in quadratic time), in a worker process under a deadline
+(`app.core.request_validation.check_request_schema_compiles`).
 """
 
 import json
@@ -16,18 +15,14 @@ import math
 from collections.abc import Iterable, Iterator
 from urllib.parse import unquote
 
-import jsonschema_rs
-
 from app.core.json_types import JsonObject, JsonValue
 
 # The one dialect providers write and the workers validate with.
 DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
 REQUEST_SCHEMA_MAX_DEPTH = 32
 REQUEST_SCHEMA_MAX_BYTES = 32_768
+# Bounds the patterns a worker compiles and keeps for one schema.
 REQUEST_SCHEMA_MAX_PATTERNS = 64
-# Regex limits: the compiled program, and each pattern's lazy DFA cache.
-PATTERN_SIZE_LIMIT = 10 * 1024
-PATTERN_DFA_SIZE_LIMIT = 64 * 1024
 
 # A location in a schema: its JSON Pointer's reference tokens.
 type Pointer = tuple[str, ...]
@@ -59,10 +54,6 @@ _SUBSCHEMA_MAPS = (
     "patternProperties",
     "properties",
 )
-_PATTERN_RULE = (
-    "is not supported: patterns must avoid lookaround and backreferences "
-    f"and compile within {PATTERN_SIZE_LIMIT} bytes"
-)
 
 
 def check_request_schema_shape(value: JsonValue) -> JsonValue:
@@ -93,12 +84,12 @@ def check_request_schema_shape(value: JsonValue) -> JsonValue:
 
 
 def check_request_schema(schema: JsonObject) -> JsonObject:
-    """Accept `schema` only if it is a sound draft 2020-12 schema the workers can compile.
+    """Accept `schema` only if it is a sound draft 2020-12 schema, before it is compiled.
 
     It must take at most REQUEST_SCHEMA_MAX_BYTES of compact JSON, hold only valid
     Unicode and finite numbers, use draft 2020-12 throughout, refer only to its own
-    subschemas, have at most REQUEST_SCHEMA_MAX_PATTERNS patterns, and compile. Raises
-    ValueError naming the first rule broken and where in the schema it is broken.
+    subschemas and have at most REQUEST_SCHEMA_MAX_PATTERNS patterns. Raises ValueError
+    naming the first rule broken and where in the schema it is broken.
     """
     compact = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
     if len(compact.encode("utf-8", "surrogatepass")) > REQUEST_SCHEMA_MAX_BYTES:
@@ -110,46 +101,12 @@ def check_request_schema(schema: JsonObject) -> JsonObject:
             msg = f"request_schema {problem} at {_where_location(where)}"
             raise ValueError(msg)
     _check_subschemas(schema)
-    try:
-        compile_request_schema(schema)
-    except jsonschema_rs.ValidationError as exc:
-        raise ValueError(_schema_error_message(exc)) from None
     return schema
-
-
-def compile_request_schema(schema: JsonObject) -> jsonschema_rs.Draft202012Validator:
-    """Compile a request schema as the save check and the validation workers do.
-
-    Raises jsonschema_rs.ValidationError when `schema` is not a valid JSON Schema.
-    """
-    return jsonschema_rs.Draft202012Validator(
-        schema,
-        # Never fetch a remote $ref: the schema is the provider's input.
-        offline=True,
-        # Linear-time matching with bounded programs.
-        pattern_options=jsonschema_rs.RegexOptions(
-            size_limit=PATTERN_SIZE_LIMIT,
-            dfa_size_limit=PATTERN_DFA_SIZE_LIMIT,
-        ),
-    )
 
 
 def json_pointer(tokens: Iterable[str | int]) -> str:
     """The JSON Pointer (RFC 6901) of a location, given its keys and indexes."""
     return "".join("/" + str(token).replace("~", "~0").replace("/", "~1") for token in tokens)
-
-
-def _schema_error_message(exc: jsonschema_rs.ValidationError) -> str:
-    path = tuple(str(part) for part in exc.instance_path)
-    if exc.kind.as_dict() == {"format": "regex"}:
-        # A refused `pattern` is the value itself; a refused patternProperties key is the
-        # subschema's key.
-        pattern = exc.instance if isinstance(exc.instance, str) else path[-1]
-        return (
-            f"request_schema pattern {json.dumps(pattern)} {_PATTERN_RULE} at {json_pointer(path)}"
-        )
-    msg = f"request_schema is not a valid JSON Schema: {exc.message}"
-    return f"{msg} at {json_pointer(path)}" if path else msg
 
 
 def _check_subschemas(schema: JsonObject) -> None:

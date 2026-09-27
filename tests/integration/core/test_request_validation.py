@@ -1,4 +1,5 @@
-"""Request bodies validated in worker processes, each validation within a deadline.
+"""Request schemas compiled, and request bodies validated, in worker processes under
+deadlines.
 
 Every test runs on asyncio's event loop and on uvloop, which uvicorn uses in production.
 """
@@ -22,6 +23,7 @@ from app.core.json_types import JsonObject
 from app.core.request_validation import (
     REQUEST_BODY_MAX_BYTES,
     ProcessRequestValidationPool,
+    check_request_schema_compiles,
     validate_request_body,
 )
 from app.core.request_validation_worker import MEMORY_LIMIT_BYTES
@@ -34,6 +36,8 @@ pytestmark = pytest.mark.xdist_group("request_validation_pool")
 DEADLINE_SECONDS = 5.0
 # For the tests that wait for a deadline to pass.
 SHORT_DEADLINE_SECONDS = 0.25
+# The default compile deadline: ordinary schemas compile in a few milliseconds.
+COMPILE_DEADLINE_SECONDS = 0.1
 # Each of 100,000 items is compared with 10,000 enum entries: seconds of work.
 SLOW_SCHEMA: JsonObject = {"items": {"not": {"enum": [[] for _ in range(10_000)]}}}
 SLOW_BODY = json.dumps([[0]] * 100_000).encode()
@@ -60,6 +64,7 @@ class OpenPool(Protocol):
         *,
         workers: int = 2,
         timeout_seconds: float = DEADLINE_SECONDS,
+        compile_timeout_seconds: float = COMPILE_DEADLINE_SECONDS,
     ) -> ProcessRequestValidationPool: ...
 
 
@@ -78,8 +83,13 @@ async def open_pool() -> AsyncIterator[OpenPool]:
         *,
         workers: int = 2,
         timeout_seconds: float = DEADLINE_SECONDS,
+        compile_timeout_seconds: float = COMPILE_DEADLINE_SECONDS,
     ) -> ProcessRequestValidationPool:
-        pool = ProcessRequestValidationPool(workers=workers, timeout_seconds=timeout_seconds)
+        pool = ProcessRequestValidationPool(
+            workers=workers,
+            timeout_seconds=timeout_seconds,
+            compile_timeout_seconds=compile_timeout_seconds,
+        )
         pools.append(pool)
         return pool
 
@@ -117,6 +127,66 @@ async def _worst_tick(stop: asyncio.Event) -> float:
 def _integers(size: int) -> bytes:
     """A JSON array of zeros exactly `size` bytes long."""
     return b"[" + b"0," * ((size - 4) // 2) + b"0] "
+
+
+async def test_a_request_schema_that_compiles_is_accepted(open_pool: OpenPool) -> None:
+    schema: JsonObject = {
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            },
+        },
+    }
+
+    await check_request_schema_compiles(pool=open_pool(), schema=schema)
+
+
+@pytest.mark.parametrize(
+    ("schema", "refusal"),
+    [
+        pytest.param(
+            {"properties": {"text": {"pattern": "(?=a)"}}},
+            'request_schema pattern "(?=a)" is not supported: patterns must avoid lookaround '
+            "and backreferences and compile within 10240 bytes at /properties/text/pattern",
+            id="lookaround",
+        ),
+        # The class escapes compile in quadratic time: about 83 s for this 32 KiB schema.
+        pytest.param(
+            {"pattern": "\\s" * 10_900},
+            "request_schema is too expensive to compile",
+            id="quadratic_class_escapes",
+        ),
+        # Compiles in about 0.6 s, so it can never be stored: every validation of it would
+        # overrun the validation deadline on a worker that had to compile it first.
+        pytest.param(
+            {"pattern": "(?i)" + "|".join(["[\u0100-\uffff]"] * 1_780)},
+            "request_schema is too expensive to compile",
+            id="case_folded_alternation",
+        ),
+    ],
+)
+async def test_a_request_schema_that_does_not_compile_in_time_is_refused_at_request_schema(
+    open_pool: OpenPool,
+    schema: JsonObject,
+    refusal: str,
+) -> None:
+    pool = open_pool()
+
+    with pytest.raises(InvalidInputError, match=f"^{re.escape(refusal)}$") as refused:
+        await check_request_schema_compiles(pool=pool, schema=schema)
+
+    assert refused.value.extensions == {
+        "errors": [
+            {
+                "type": "value_error",
+                "loc": ["body", "request_schema"],
+                "msg": f"Value error, {refusal}",
+            },
+        ],
+    }
+    await check_request_schema_compiles(pool=pool, schema={"type": "object"})
 
 
 @pytest.mark.parametrize(

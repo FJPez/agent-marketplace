@@ -1,5 +1,7 @@
 import json
 import re
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -8,6 +10,7 @@ from app.core.request_validation_worker import (
     REQUEST_BODY_ERROR_TEXT_MAX_LENGTH,
     REQUEST_BODY_MAX_DEPTH,
     body_refusal,
+    schema_refusal,
 )
 
 MISMATCH = "request body does not match the request schema"
@@ -15,10 +18,131 @@ NOT_JSON = "request body is not valid JSON"
 NOT_FINITE = "request body holds a number that is not finite"
 TOO_DEEP = f"request body must nest at most {REQUEST_BODY_MAX_DEPTH} levels"
 CUT = REQUEST_BODY_ERROR_TEXT_MAX_LENGTH
+PATTERN_RULE = (
+    "is not supported: patterns must avoid lookaround and backreferences "
+    "and compile within 10240 bytes"
+)
 
 
 def _canonical(schema: JsonObject) -> str:
     return json.dumps(schema, separators=(",", ":"), sort_keys=True)
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        pytest.param({}, id="empty"),
+        pytest.param(
+            {
+                "properties": {
+                    "slug": {"pattern": "^[a-z0-9-]{1,63}$"},
+                    "email": {"pattern": "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"},
+                    "id": {
+                        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+                    },
+                },
+            },
+            id="ordinary_patterns",
+        ),
+        pytest.param(
+            {"type": "number", "minimum": 0.5, "maximum": 99.5, "multipleOf": 0.01},
+            id="prices",
+        ),
+        # A pattern in a subschema nothing applies is never compiled.
+        pytest.param({"$defs": {"unused": {"pattern": "(?=a)"}}}, id="unreferenced_pattern"),
+    ],
+)
+def test_a_schema_that_compiles_is_not_refused(schema: JsonObject) -> None:
+    assert schema_refusal(_canonical(schema)) is None
+
+
+@pytest.mark.parametrize(
+    ("schema", "refusal"),
+    [
+        pytest.param(
+            {"properties": {"a/b": {"type": "objekt"}}},
+            'request_schema is not a valid JSON Schema: "objekt" is not valid under any of '
+            "the schemas listed in the 'anyOf' keyword at /properties/a~1b/type",
+            id="invalid_keyword_value",
+        ),
+        pytest.param(
+            {"minLength": -1},
+            "request_schema is not a valid JSON Schema: -1 is less than the minimum of 0 "
+            "at /minLength",
+            id="negative_length",
+        ),
+        pytest.param(
+            {"type": "string", "pattern": "^(?=.*[0-9]).+$"},
+            f'request_schema pattern "^(?=.*[0-9]).+$" {PATTERN_RULE} at /pattern',
+            id="lookaround_pattern",
+        ),
+        pytest.param(
+            {"patternProperties": {"^(a)\\1$": {}}},
+            f'request_schema pattern "^(a)\\\\1$" {PATTERN_RULE} at /patternProperties/^(a)\\1$',
+            id="backreference_pattern_property",
+        ),
+        pytest.param(
+            {"properties": {"patternProperties": {"pattern": "(?=a)"}}},
+            f'request_schema pattern "(?=a)" {PATTERN_RULE} '
+            "at /properties/patternProperties/pattern",
+            id="pattern_of_a_property_named_patternProperties",
+        ),
+        pytest.param(
+            {"pattern": "((a{50}){50}){50}x"},
+            f'request_schema pattern "((a{{50}}){{50}}){{50}}x" {PATTERN_RULE} at /pattern',
+            id="nested_counted_repetition",
+        ),
+        pytest.param(
+            {"pattern": "(a{100}){100}x"},
+            f'request_schema pattern "(a{{100}}){{100}}x" {PATTERN_RULE} at /pattern',
+            id="counted_repetition",
+        ),
+        pytest.param(
+            {"properties": {"name": {"pattern": "^\\p{L}+$"}}},
+            f'request_schema pattern "^\\\\p{{L}}+$" {PATTERN_RULE} at /properties/name/pattern',
+            id="unicode_letters_pattern",
+        ),
+        pytest.param(
+            {"pattern": "^[A-Za-z0-9+/]{0,256}$"},
+            f'request_schema pattern "^[A-Za-z0-9+/]{{0,256}}$" {PATTERN_RULE} at /pattern',
+            id="long_bounded_pattern",
+        ),
+    ],
+)
+def test_a_schema_that_does_not_compile_is_refused_naming_the_problem(
+    schema: JsonObject,
+    refusal: str,
+) -> None:
+    assert schema_refusal(_canonical(schema)) == refusal
+
+
+def test_compiling_never_fetches_a_remote_ref() -> None:
+    requested_paths: list[str] = []
+
+    class SchemaHandler(BaseHTTPRequestHandler):
+        """Serves a valid schema at every path, so a fetch would make the ref resolve."""
+
+        def do_GET(self) -> None:
+            requested_paths.append(self.path)
+            body = b'{"type": "string"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), SchemaHandler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_port}/input.json"
+    try:
+        refusal = schema_refusal(_canonical({"$ref": url}))
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert refusal is not None
+    assert url in refusal
+    assert requested_paths == []
 
 
 @pytest.mark.parametrize(

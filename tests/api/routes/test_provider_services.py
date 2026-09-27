@@ -1,4 +1,5 @@
 import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -17,6 +18,7 @@ from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
 from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, TEST_UPSTREAM_HOST, FakeResolver
 
+from app.api.deps.request_validation import get_request_validation_pool
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
@@ -252,6 +254,38 @@ async def test_patch_endpoint_with_an_invalid_request_schema_is_one_invalid_inpu
             "patterns must avoid lookaround and backreferences and compile within 10240 bytes "
             "at /properties/text/pattern",
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_patch_endpoint_with_a_request_schema_too_expensive_to_compile_is_refused(
+    app: FastAPI,
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The resources' request validation workers, not the in-process stand-in.
+    del app.dependency_overrides[get_request_validation_pool]
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="schema-service",
+    )
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+
+    # These class escapes compile in quadratic time: about 83 s in the API process.
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"request_schema": {"pattern": "\\s" * 10_900}},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["type"] == "/problems/invalid_input"
+    assert body["detail"] == "request_schema is too expensive to compile"
+    assert [(error["loc"], error["msg"]) for error in body["errors"]] == [
+        (["body", "request_schema"], "Value error, request_schema is too expensive to compile"),
     ]
 
 

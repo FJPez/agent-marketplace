@@ -1,22 +1,30 @@
-"""Request bodies validated against their endpoint's request schema, in worker processes.
+"""Request schemas compiled, and request bodies validated, in worker processes.
 
-jsonschema-rs holds the GIL while it validates, and what a provider's schema costs on a
-consumer's body is not bounded in advance. So request bodies are validated in worker
-processes (`app.core.request_validation_worker`), each validation within a deadline: a
-worker that overruns is killed, and the API process only waits on the worker's pipes,
-without blocking its event loop, whether that loop is asyncio's or uvloop's. The API
-process never holds a compiled validator.
+jsonschema-rs holds the GIL, and what a provider's schema costs, to compile or on a
+consumer's body, is not bounded in advance. So both run in worker processes
+(`app.core.request_validation_worker`), each within a deadline: a worker that overruns is
+killed, and the API process only waits on the worker's pipes, without blocking its event
+loop, whether that loop is asyncio's or uvloop's. The API process never compiles a schema.
 
-The invoke path calls `validate_request_body(pool=..., schema=..., body=...)` with the raw
-request body, at most REQUEST_BODY_MAX_BYTES of it. The pool is
-`Resources.request_validation_pool`. The call raises:
-- InvalidInputError (422) when the body is refused: too large, not JSON, nested too deep,
-  or not matching the schema (naming the first error and where it is);
-- InvalidInputError with the problem type `request_validation_timeout` when validating
-  overruns the deadline, and `request_validation_failed` when it ends the worker (both are
-  the schema and body's doing, and would recur);
-- UnavailableError (503) when no worker is free within the deadline (with `Retry-After`),
-  when workers cannot start, and when the pool is closing.
+The interface, with the pool as `Resources.request_validation_pool`:
+- `check_request_schema_compiles(pool=..., schema=...)`: the endpoint services call it when
+  a provider saves a request schema, after the request model's own checks. It raises
+  InvalidInputError (422, located at `request_schema`) when the schema does not compile,
+  or not within the compile deadline (`APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS`).
+- `validate_request_body(pool=..., schema=..., body=...)`: the invoke path calls it with
+  the stored schema and the raw request body, at most REQUEST_BODY_MAX_BYTES of it, within
+  the validation deadline (`APP_REQUEST_VALIDATION_TIMEOUT_MS`). It raises
+  InvalidInputError (422) when the body is refused: too large, not JSON, nested too deep,
+  or not matching the schema (naming the first error and where it is). The problem type
+  is `request_validation_timeout` when validating overruns the deadline, and
+  `request_validation_failed` when it ends the worker: both are the schema and body's
+  doing, and would recur.
+- Both raise UnavailableError (503) when no worker is free within the validation deadline
+  (with `Retry-After: 1`), when workers cannot start, and when the pool is closing.
+
+The compile deadline is at most half the validation deadline (Settings). So a stored
+schema, which compiled within the compile deadline when it was saved, leaves a worker that
+must compile it afresh at least half the validation deadline to validate the body.
 """
 
 import asyncio
@@ -25,11 +33,17 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from app.core.errors import InvalidInputError, UnavailableError
 from app.core.json_types import JsonObject
 from app.core.logging import get_logger
-from app.core.request_validation_worker import ANSWER_HEADER, REQUEST_HEADER
+from app.core.request_validation_worker import (
+    ANSWER_HEADER,
+    CHECK_SCHEMA,
+    REQUEST_HEADER,
+    VALIDATE_BODY,
+)
 
 logger = get_logger(__name__)
 
@@ -41,6 +55,7 @@ WORKER_EXIT_TIMEOUT_SECONDS = 1.0
 # Run as a module from the directory that holds the `app` package.
 _WORKER_COMMAND = (sys.executable, "-m", "app.core.request_validation_worker")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_TOO_EXPENSIVE = "request_schema is too expensive to compile"
 _TIME_LIMIT = "the request body could not be validated within the time limit"
 _FAILED = "the request body could not be validated"
 _BUSY = "request validation is busy; retry shortly"
@@ -70,16 +85,35 @@ class _Slot:
     worker: _Worker | None = None
 
 
-class ProcessRequestValidationPool:
-    """Worker processes validating request bodies, each validation within a deadline.
+class RequestValidationPool(Protocol):
+    """Compiles request schemas and validates request bodies, each within a deadline."""
 
-    A caller waits at most the deadline for a free worker. Workers start on first use. A
-    worker that overruns, dies, or is still working for a cancelled caller is killed, and
-    the next caller in its place starts a new one.
+    async def check_schema(self, schema_json: str) -> str | None:
+        """Why the schema `schema_json` does not compile in time, or None when it does."""
+        ...
+
+    async def validate(self, schema_json: str, body: bytes) -> str | None:
+        """Why `body` does not match the schema `schema_json`, or None when it does."""
+        ...
+
+
+class ProcessRequestValidationPool:
+    """A RequestValidationPool of worker processes.
+
+    A caller waits at most the validation deadline for a free worker. Workers start on
+    first use. A worker that overruns, dies, or is still working for a cancelled caller is
+    killed, and the next caller in its place starts a new one.
     """
 
-    def __init__(self, *, workers: int, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        workers: int,
+        timeout_seconds: float,
+        compile_timeout_seconds: float,
+    ) -> None:
         self._timeout_seconds = timeout_seconds
+        self._compile_timeout_seconds = compile_timeout_seconds
         # The free slots, then None once the pool closes, which each caller passes on.
         self._free: asyncio.Queue[_Slot | None] = asyncio.Queue()
         for _ in range(workers):
@@ -92,12 +126,21 @@ class ProcessRequestValidationPool:
         """The process ids of the workers running."""
         return tuple(process.pid for process in self._processes if process.returncode is None)
 
+    async def check_schema(self, schema_json: str) -> str | None:
+        """Why the schema `schema_json` does not compile in time, or None when it does."""
+        try:
+            return await self._call(
+                _request(CHECK_SCHEMA, schema_json, b""), self._compile_timeout_seconds
+            )
+        except (TimeoutError, _CrashedError):
+            return _TOO_EXPENSIVE
+
     async def validate(self, schema_json: str, body: bytes) -> str | None:
         """Why `body` does not match the schema `schema_json`, or None when it does."""
-        schema = schema_json.encode()
-        request = REQUEST_HEADER.pack(len(schema), len(body)) + schema + body
         try:
-            return await self._call(request, self._timeout_seconds)
+            return await self._call(
+                _request(VALIDATE_BODY, schema_json, body), self._timeout_seconds
+            )
         except TimeoutError:
             raise InvalidInputError(
                 _TIME_LIMIT, problem_type="request_validation_timeout"
@@ -207,23 +250,47 @@ class ProcessRequestValidationPool:
             raise UnavailableError(_CLOSING)
 
 
+async def check_request_schema_compiles(*, pool: RequestValidationPool, schema: JsonObject) -> None:
+    """Refuse a request schema being saved that does not compile within the deadline.
+
+    Raises the errors of the module docstring. A refusal is reported as the request
+    models report theirs, at `request_schema`.
+    """
+    refusal = await pool.check_schema(_canonical(schema))
+    if refusal is not None:
+        error: JsonObject = {
+            "type": "value_error",
+            "loc": ["body", "request_schema"],
+            "msg": f"Value error, {refusal}",
+        }
+        raise InvalidInputError(refusal, extensions={"errors": [error]})
+
+
 async def validate_request_body(
     *,
-    pool: ProcessRequestValidationPool,
+    pool: RequestValidationPool,
     schema: JsonObject,
     body: bytes,
 ) -> None:
-    """Validate a raw JSON request body against its endpoint's accepted request schema.
+    """Validate a raw JSON request body against its endpoint's stored request schema.
 
     Raises the errors of the module docstring.
     """
     if len(body) > REQUEST_BODY_MAX_BYTES:
         msg = f"request body must be at most {REQUEST_BODY_MAX_BYTES} bytes"
         raise InvalidInputError(msg)
-    schema_json = json.dumps(schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    refusal = await pool.validate(schema_json, body)
+    refusal = await pool.validate(_canonical(schema), body)
     if refusal is not None:
         raise InvalidInputError(refusal)
+
+
+def _canonical(schema: JsonObject) -> str:
+    return json.dumps(schema, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+
+def _request(kind: int, schema_json: str, body: bytes) -> bytes:
+    schema = schema_json.encode()
+    return REQUEST_HEADER.pack(kind, len(schema), len(body)) + schema + body
 
 
 def _discard(slot: _Slot) -> None:

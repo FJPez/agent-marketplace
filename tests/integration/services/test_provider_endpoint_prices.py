@@ -14,6 +14,7 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS, build_service_settings
 from tests.helpers.dns import FakeResolver
+from tests.helpers.request_validation import IN_PROCESS_REQUEST_VALIDATION_POOL
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
@@ -78,6 +79,7 @@ async def _update(
         return await update_endpoint(
             session=session,
             settings=settings or build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=changes,
@@ -112,6 +114,7 @@ async def test_create_endpoint_stores_a_first_price_version_with_the_current_ter
         endpoint = await create_endpoint(
             session=session,
             settings=settings,
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_id,
             request=_create_request(access_mode=AccessMode.PAID, amount=10_000),
@@ -147,6 +150,7 @@ async def test_create_endpoint_without_a_price_stores_no_version(
         endpoint = await create_endpoint(
             session=session,
             settings=build_service_settings(),
+            validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
             account_id=account_id,
             service_id=service_id,
             request=_create_request(access_mode=access_mode, amount=None),
@@ -170,6 +174,7 @@ async def test_create_endpoint_below_the_minimum_price_creates_nothing(
             await create_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 service_id=service_id,
                 request=_create_request(access_mode=AccessMode.PAID, amount=9_999),
@@ -191,6 +196,7 @@ async def test_price_one_unit_below_the_minimum_is_rejected_and_stores_nothing(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(
@@ -217,6 +223,7 @@ async def test_price_version_needs_a_treasury_address(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings().model_copy(update={"treasury_address": None}),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(
@@ -473,6 +480,7 @@ async def test_active_paid_endpoint_rejects_clearing_its_price_without_mutating_
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20, price=None),

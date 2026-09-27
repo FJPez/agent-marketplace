@@ -1,6 +1,5 @@
 import re
 import threading
-from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -12,16 +11,11 @@ from app.core.request_schema_validation import (
     REQUEST_SCHEMA_MAX_PATTERNS,
     check_request_schema,
     check_request_schema_shape,
-    compile_request_schema,
 )
 
 SLUG_PATTERN = "^[a-z0-9-]{1,63}$"
 EMAIL_PATTERN = "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
 UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-PATTERN_RULE = (
-    "is not supported: patterns must avoid lookaround and backreferences "
-    "and compile within 10240 bytes"
-)
 
 
 def _nested(levels: int) -> JsonObject:
@@ -172,6 +166,10 @@ def _patterns(count: int) -> JsonObject:
         pytest.param(_nested_all_of(12), id="deeply_nested_applicators"),
         # Costly to validate, but bounded by the validation workers' deadline.
         pytest.param(_fan_out(28), id="ref_fan_out"),
+        # Costly to compile, which only the workers do, under a deadline.
+        pytest.param({"pattern": "\\s" * 10_900}, id="costly_to_compile"),
+        # Not compilable, which only the workers find.
+        pytest.param({"minLength": -1}, id="negative_length"),
     ],
 )
 def test_a_valid_draft_2020_12_schema_is_accepted_unchanged(schema: JsonObject) -> None:
@@ -227,54 +225,6 @@ def test_a_valid_draft_2020_12_schema_is_accepted_unchanged(schema: JsonObject) 
             },
             'request_schema declares the anchor "node" twice at /$defs/b/$dynamicAnchor',
             id="repeated_anchor",
-        ),
-        pytest.param(
-            {"properties": {"a/b": {"type": "objekt"}}},
-            'request_schema is not a valid JSON Schema: "objekt" is not valid under any of '
-            "the schemas listed in the 'anyOf' keyword at /properties/a~1b/type",
-            id="invalid_keyword_value",
-        ),
-        pytest.param(
-            {"minLength": -1},
-            "request_schema is not a valid JSON Schema: -1 is less than the minimum of 0 "
-            "at /minLength",
-            id="negative_length",
-        ),
-        pytest.param(
-            {"type": "string", "pattern": "^(?=.*[0-9]).+$"},
-            f'request_schema pattern "^(?=.*[0-9]).+$" {PATTERN_RULE} at /pattern',
-            id="lookaround_pattern",
-        ),
-        pytest.param(
-            {"patternProperties": {"^(a)\\1$": {}}},
-            f'request_schema pattern "^(a)\\\\1$" {PATTERN_RULE} at /patternProperties/^(a)\\1$',
-            id="backreference_pattern_property",
-        ),
-        pytest.param(
-            {"properties": {"patternProperties": {"pattern": "(?=a)"}}},
-            f'request_schema pattern "(?=a)" {PATTERN_RULE} '
-            "at /properties/patternProperties/pattern",
-            id="pattern_of_a_property_named_patternProperties",
-        ),
-        pytest.param(
-            {"pattern": "((a{50}){50}){50}x"},
-            f'request_schema pattern "((a{{50}}){{50}}){{50}}x" {PATTERN_RULE} at /pattern',
-            id="nested_counted_repetition",
-        ),
-        pytest.param(
-            {"pattern": "(a{100}){100}x"},
-            f'request_schema pattern "(a{{100}}){{100}}x" {PATTERN_RULE} at /pattern',
-            id="counted_repetition",
-        ),
-        pytest.param(
-            {"properties": {"name": {"pattern": "^\\p{L}+$"}}},
-            f'request_schema pattern "^\\\\p{{L}}+$" {PATTERN_RULE} at /properties/name/pattern',
-            id="unicode_letters_pattern",
-        ),
-        pytest.param(
-            {"pattern": "^[A-Za-z0-9+/]{0,256}$"},
-            f'request_schema pattern "^[A-Za-z0-9+/]{{0,256}}$" {PATTERN_RULE} at /pattern',
-            id="long_bounded_pattern",
         ),
         pytest.param(
             _patterns(REQUEST_SCHEMA_MAX_PATTERNS + 1),
@@ -370,14 +320,7 @@ def test_a_schema_too_deep_or_too_large_is_rejected_before_it_is_read_as_json(
         check_request_schema_shape(schema)
 
 
-@pytest.mark.parametrize(
-    "check",
-    [
-        pytest.param(check_request_schema, id="save_check"),
-        pytest.param(compile_request_schema, id="workers_compile"),
-    ],
-)
-def test_a_remote_ref_is_never_fetched(check: Callable[[JsonObject], object]) -> None:
+def test_a_remote_ref_is_never_fetched() -> None:
     requested_paths: list[str] = []
 
     class SchemaHandler(BaseHTTPRequestHandler):
@@ -396,16 +339,9 @@ def test_a_remote_ref_is_never_fetched(check: Callable[[JsonObject], object]) ->
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         with pytest.raises(ValueError, match=f"http://127.0.0.1:{server.server_port}/input.json"):
-            check({"$ref": f"http://127.0.0.1:{server.server_port}/input.json"})
+            check_request_schema({"$ref": f"http://127.0.0.1:{server.server_port}/input.json"})
     finally:
         server.shutdown()
         server.server_close()
 
     assert requested_paths == []
-
-
-def test_a_catastrophic_backtracking_pattern_is_matched_in_linear_time() -> None:
-    validator = compile_request_schema({"type": "string", "pattern": "^(a+)+$"})
-
-    # A backtracking engine takes about 2**n steps on n letters and one mismatch.
-    assert not validator.is_valid("a" * 100_000 + "!")
