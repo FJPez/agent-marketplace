@@ -10,7 +10,7 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
-    create_signing_secret_record,
+    create_trusted_provider_records,
     create_upstream_record,
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS
@@ -1222,7 +1222,7 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
         service_id=service_id,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
-    await create_signing_secret_record(db_session_factory, account_id=account_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
 
     response = await async_client.post(
         f"/v1/provider/services/{service_id}/publish",
@@ -1253,6 +1253,44 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
 
 
 @pytest.mark.asyncio
+async def test_publish_service_without_domain_proof_is_an_invalid_input_problem(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="unproven-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
+    dns_resolver.txt_records.clear()
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
+        "status": 422,
+        "detail": (
+            f"upstream hosts failed the domain-control check: {TEST_UPSTREAM_HOST} "
+            "(record_missing); publish a TXT record at _agent-marketplace.<host> with the "
+            "value from POST /v1/provider/domain-verification"
+        ),
+    }
+
+
+@pytest.mark.asyncio
 async def test_publish_service_replaces_stale_failed_publish_readiness_with_fresh_pass(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -1268,7 +1306,7 @@ async def test_publish_service_replaces_stale_failed_publish_readiness_with_fres
         service_id=service_id,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
-    await create_signing_secret_record(db_session_factory, account_id=account_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
     await _seed_health_check(
         db_session_factory,
         service_id=service_id,
@@ -1320,7 +1358,7 @@ async def test_publish_succeeds_with_passing_health_check(
         key="healthy-ep",
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
-    await create_signing_secret_record(db_session_factory, account_id=account_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
     await _seed_health_check(
         db_session_factory,
         service_id=service_id,

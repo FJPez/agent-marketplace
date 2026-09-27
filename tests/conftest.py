@@ -23,7 +23,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
-from tests.helpers.dns import TEST_UPSTREAM_ADDRESS, TEST_UPSTREAM_HOST, FakeResolver
+from tests.helpers.dns import (
+    TEST_DOMAIN_RECORD_NAME,
+    TEST_DOMAIN_RECORD_VALUE,
+    TEST_UPSTREAM_ADDRESS,
+    TEST_UPSTREAM_HOST,
+    FakeResolver,
+)
 from tests.integration.db.support import (
     MIGRATION_DATABASE_SUFFIX,
     MigrationDatabase,
@@ -204,8 +210,15 @@ def migration_database(
 
 @pytest.fixture
 def dns_resolver() -> FakeResolver:
-    """The resolver of every test: the test upstream host resolves to a public address."""
-    return FakeResolver({TEST_UPSTREAM_HOST: [TEST_UPSTREAM_ADDRESS]})
+    """The resolver of every test.
+
+    The test upstream host resolves to a public address and carries the TXT record of
+    the test domain token, so a provider with that token proves control of it.
+    """
+    return FakeResolver(
+        {TEST_UPSTREAM_HOST: [TEST_UPSTREAM_ADDRESS]},
+        txt_records={TEST_DOMAIN_RECORD_NAME: [TEST_DOMAIN_RECORD_VALUE]},
+    )
 
 
 @pytest.fixture

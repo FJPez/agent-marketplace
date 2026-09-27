@@ -8,11 +8,12 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
-    create_signing_secret_record,
+    create_trusted_provider_records,
     create_upstream_record,
     read_price_versions,
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS, build_service_settings
+from tests.helpers.dns import FakeResolver
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
@@ -558,10 +559,11 @@ async def test_active_paid_to_free_clears_the_current_price_and_revises(
 
 async def test_price_change_on_a_published_service_revises_and_keeps_the_old_revision(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     account_id, endpoint_id = await _create_endpoint(db_session_factory, price_amount=250_000)
     await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
-    await create_signing_secret_record(db_session_factory, account_id=account_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
     async with db_session_factory() as session:
         endpoint = await session.get(ServiceEndpoint, endpoint_id)
         assert endpoint is not None
@@ -570,6 +572,7 @@ async def test_price_change_on_a_published_service_revises_and_keeps_the_old_rev
     async with db_session_factory() as session:
         await publishing.publish_service(
             session=session,
+            resolver=dns_resolver,
             account_id=account_id,
             service_id=service_id,
         )

@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import select
 from tests.fixtures.settings import TEST_PRICE_TERMS
 from tests.helpers.auth import create_account
-from tests.helpers.dns import TEST_UPSTREAM_BASE_URL
+from tests.helpers.dns import TEST_DOMAIN_TOKEN, TEST_UPSTREAM_BASE_URL
 
 from app.core.config import get_settings
 from app.core.enums import (
@@ -17,6 +17,7 @@ from app.core.enums import (
 from app.db.models import (
     ListingPrice,
     ModerationAction,
+    ProviderDomainToken,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -372,6 +373,21 @@ async def create_signing_secret_record(
             settings=get_settings(),
             account_id=account_id,
         )
+
+
+async def create_trusted_provider_records(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+) -> None:
+    """Give the account what publishing asks of a provider.
+
+    A signing secret, and the test domain token, whose TXT record the `dns_resolver`
+    fixture serves for the test upstream host.
+    """
+    await create_signing_secret_record(db_session_factory, account_id=account_id)
+    async with db_session_factory.begin() as session:
+        session.add(ProviderDomainToken(account_id=account_id, token=TEST_DOMAIN_TOKEN))
 
 
 async def create_moderation_action_record(

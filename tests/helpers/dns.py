@@ -4,6 +4,7 @@ from ipaddress import ip_address
 from typing import TYPE_CHECKING
 
 from app.integrations.providers.dns import DnsLookupError
+from app.services.domain_control import RECORD_LABEL, record_value
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
@@ -14,6 +15,10 @@ if TYPE_CHECKING:
 TEST_UPSTREAM_HOST = "provider.example.com"
 TEST_UPSTREAM_ADDRESS = "93.184.215.14"
 TEST_UPSTREAM_BASE_URL = f"https://{TEST_UPSTREAM_HOST}/"
+# The domain token test providers get, and the TXT record that proves it on the host.
+TEST_DOMAIN_TOKEN = "test-domain-token"
+TEST_DOMAIN_RECORD_NAME = f"{RECORD_LABEL}.{TEST_UPSTREAM_HOST}"
+TEST_DOMAIN_RECORD_VALUE = record_value(TEST_DOMAIN_TOKEN)
 
 
 class FakeResolver:

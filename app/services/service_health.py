@@ -10,12 +10,13 @@ from app.core.json_types import JsonObject
 from app.db.models import ServiceHealthCheck
 
 PUBLISH_READINESS_CHECK_NAME = "publish-readiness"
+DOMAIN_CONTROL_CHECK_NAME = "domain-control"
 
 
 @dataclass(frozen=True, slots=True)
 class ServiceHealthOutcome:
     status: ServiceHealthStatus
-    summary: str | None = None
+    summary: str
     details: JsonObject | None = None
 
 

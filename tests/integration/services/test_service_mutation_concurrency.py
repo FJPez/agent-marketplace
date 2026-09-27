@@ -11,7 +11,7 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
-    create_signing_secret_record,
+    create_trusted_provider_records,
     create_upstream_record,
     read_price_versions,
 )
@@ -191,7 +191,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
         access_mode=AccessMode.FREE,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
-    await create_signing_secret_record(db_session_factory, account_id=provider_account_id)
+    await create_trusted_provider_records(db_session_factory, account_id=provider_account_id)
 
     publish_has_lock = asyncio.Event()
     mutation_lookup_started = asyncio.Event()
@@ -242,6 +242,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
         async with db_session_factory() as session:
             await publishing.publish_service(
                 session=session,
+                resolver=dns_resolver,
                 account_id=provider_account_id,
                 service_id=service_id,
             )
@@ -284,6 +285,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
 @pytest.mark.asyncio
 async def test_publish_holds_its_lock_until_the_single_commit(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
@@ -299,7 +301,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
         access_mode=AccessMode.FREE,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
-    await create_signing_secret_record(db_session_factory, account_id=provider_account_id)
+    await create_trusted_provider_records(db_session_factory, account_id=provider_account_id)
 
     # Publish pauses between recording its readiness verdict and flipping the
     # lifecycle - the window in which it used to have already committed and
@@ -343,6 +345,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
         async with db_session_factory() as session:
             await publishing.publish_service(
                 session=session,
+                resolver=dns_resolver,
                 account_id=provider_account_id,
                 service_id=service_id,
             )

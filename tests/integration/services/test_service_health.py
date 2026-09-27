@@ -34,7 +34,10 @@ async def test_record_check_is_invisible_to_other_sessions_until_caller_commits(
             session=recording_session,
             service_id=service_id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
-            outcome=ServiceHealthOutcome(status=ServiceHealthStatus.PASS),
+            outcome=ServiceHealthOutcome(
+                status=ServiceHealthStatus.PASS,
+                summary="service is publish-ready",
+            ),
             checked_at=datetime(2026, 9, 10, 12, 30, tzinfo=UTC),
         )
 

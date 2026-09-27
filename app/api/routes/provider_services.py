@@ -189,7 +189,10 @@ async def replace_provider_service_tags(
     summary="Publish a provider service",
     description=(
         "Publishes an owned service once its endpoints, pricing, upstreams, and health "
-        "preconditions are satisfied."
+        "preconditions are satisfied, the provider has a signing secret, and every "
+        "upstream host resolves only to public addresses and carries the provider's "
+        "domain verification TXT record (see `POST /v1/provider/domain-verification`). "
+        "Each attempt records its verdicts as health checks."
     ),
     responses={
         200: {"description": "Service published successfully."},
@@ -202,9 +205,11 @@ async def publish_provider_service(
     service_id: int,
     actor: CurrentActor,
     session: SessionDep,
+    resolver: DnsResolverDep,
 ) -> ServiceResponse:
     published = await publishing.publish_service(
         session=session,
+        resolver=resolver,
         account_id=actor.account_id,
         service_id=service_id,
     )
