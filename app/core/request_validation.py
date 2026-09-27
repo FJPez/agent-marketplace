@@ -13,6 +13,7 @@ must compile it afresh at least half the validation deadline for the body.
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import sys
 import time
@@ -27,6 +28,7 @@ from app.core.request_validation_worker import (
     ANSWER_HEADER,
     CHECK_SCHEMA,
     NO_REFUSAL,
+    REFUSAL,
     REQUEST_HEADER,
     UNCOMPILABLE_SCHEMA,
     VALIDATE_BODY,
@@ -157,7 +159,7 @@ class ProcessRequestValidationPool:
             return "request_schema could not be compiled"
         finally:
             self._compiles.release()
-        return answer.text or None
+        return answer.text if answer.outcome == REFUSAL else None
 
     async def validate(self, schema_json: str, body: bytes) -> str | None:
         """Why `body` does not match the schema `schema_json`, or None when it does."""
@@ -176,13 +178,17 @@ class ProcessRequestValidationPool:
         if answer.outcome == UNCOMPILABLE_SCHEMA:
             # The save check compiled it, so the library or the database changed since:
             # the provider's listing is at fault, and stays so until the schema is saved
-            # again, hence the long Retry-After.
+            # again, hence the long Retry-After. Logged by its hash, never its content.
+            logger.warning(
+                "stored request schema does not compile",
+                extra={"schema_sha256": hashlib.sha256(schema_json.encode()).hexdigest()},
+            )
             raise UnavailableError(
                 "the listing is unavailable: its request schema does not compile",
                 problem_type="listing_unavailable",
                 headers={"Retry-After": "60"},
             )
-        return answer.text or None
+        return answer.text if answer.outcome == REFUSAL else None
 
     async def close(self) -> None:
         """Fail the calls waiting and running at once, and stop every worker."""
@@ -326,7 +332,11 @@ class ProcessRequestValidationPool:
                 if read != _EMPTY:
                     raise _MalformedAnswerError
                 with contextlib.suppress(asyncio.IncompleteReadError):
-                    return await _read_answer(worker.answers)
+                    answer = await _read_answer(worker.answers)
+                    # The outcome decides; text that disagrees with it is a broken worker.
+                    if not _is_well_formed(kind, answer):
+                        raise _MalformedAnswerError
+                    return answer
         except _MalformedAnswerError:
             logger.warning(
                 "request validation worker sent a malformed answer",
@@ -419,6 +429,16 @@ async def _reap(process: asyncio.subprocess.Process) -> None:
     """Wait a bounded time for a killed worker to exit, and the event loop to reap it."""
     with contextlib.suppress(TimeoutError):
         await asyncio.wait_for(process.wait(), WORKER_EXIT_TIMEOUT_SECONDS)
+
+
+def _is_well_formed(kind: int, answer: _Answer) -> bool:
+    if answer.outcome == REFUSAL:
+        return answer.text != ""
+    # A compile is refused with text; only a body can meet an uncompilable schema.
+    return answer.text == "" and (
+        answer.outcome == NO_REFUSAL
+        or (answer.outcome == UNCOMPILABLE_SCHEMA and kind == VALIDATE_BODY)
+    )
 
 
 def _discard(slot: _Slot) -> None:
