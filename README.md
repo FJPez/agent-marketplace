@@ -17,6 +17,7 @@ Core capabilities:
 
 - wallet-based authentication (SIWE) and API keys
 - provider service authoring and publish control
+- marketplace-issued provider signing secrets, rotatable with a grace period
 - public discovery, schemas, and pricing lookups
 - moderation for administrators
 

@@ -74,6 +74,13 @@ async def rotate_signing_secret(
     return stored, secret
 
 
+async def get_signing_secret(*, session: AsyncSession, account_id: int) -> ProviderSigningSecret:
+    stored = await session.get(ProviderSigningSecret, account_id)
+    if stored is None:
+        raise NotFoundError("the account has no signing secret")
+    return stored
+
+
 async def load_signing_secrets(
     *,
     session: AsyncSession,
