@@ -24,6 +24,9 @@ _request_id_context: ContextVar[str | None] = ContextVar("request_id", default=N
 _REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._:-]{1,128}")
 
 _REDACTED = "[REDACTED]"
+# How deep `_redact` will descend into nested mappings/sequences before giving up and
+# redacting the rest wholesale; also bounds a self-referencing container.
+_MAX_REDACTION_DEPTH: Final[int] = 8
 # Header values that are credentials or spendable payment authorizations.
 _SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "payment-signature", "x-payment"})
 _SENSITIVE_HEADER_IN_TEXT = re.compile(
@@ -68,35 +71,43 @@ def _is_sensitive_header_name(name: object) -> bool:
     `-` and `_` are treated alike so `payment_signature` matches `PAYMENT-SIGNATURE`.
     """
     if isinstance(name, bytes):
-        try:
-            name = name.decode("latin-1")
-        except UnicodeDecodeError:
-            return False
+        # latin-1 maps every byte value to a character, so this cannot raise.
+        name = name.decode("latin-1")
     if not isinstance(name, str):
         return False
     return name.lower().replace("_", "-") in _SENSITIVE_HEADERS
 
 
-def _redact(value: object) -> object:
+def _redact(value: object, depth: int = 0) -> object:
+    """Redact `value` recursively, bounding recursion at `_MAX_REDACTION_DEPTH`.
+
+    A container nested past the bound becomes the redaction marker instead of being
+    descended into. This is what ends a self-referencing list or dict (`a = [];
+    a.append(a)`) without a `RecursionError`, with no need to track object identities.
+    """
+    if depth > _MAX_REDACTION_DEPTH:
+        return _REDACTED
     if isinstance(value, str):
         return _redact_text(value)
     if isinstance(value, Mapping):
         return {
-            key: _REDACTED if _is_sensitive_header_name(key) else _redact(item)
+            key: _REDACTED if _is_sensitive_header_name(key) else _redact(item, depth + 1)
             for key, item in value.items()
         }
-    if isinstance(value, (list, tuple)):
-        return type(value)(_redact_sequence_item(item) for item in value)
+    # Rebuilt as a plain `list`/`tuple`, never `type(value)(...)`: a `tuple` subclass
+    # (for example a namedtuple pair) usually cannot be constructed from one iterable.
+    if isinstance(value, list):
+        return [_redact_sequence_item(item, depth + 1) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sequence_item(item, depth + 1) for item in value)
     return value
 
 
-def _redact_sequence_item(item: object) -> object:
+def _redact_sequence_item(item: object, depth: int) -> object:
     # A `(name, value)` pair, as in `list(headers.items())` or `Headers.raw`.
-    if isinstance(item, list) and len(item) == 2 and _is_sensitive_header_name(item[0]):
-        return [item[0], _REDACTED]
-    if isinstance(item, tuple) and len(item) == 2 and _is_sensitive_header_name(item[0]):
+    if isinstance(item, (list, tuple)) and len(item) == 2 and _is_sensitive_header_name(item[0]):
         return (item[0], _REDACTED)
-    return _redact(item)
+    return _redact(item, depth)
 
 
 class RedactionFilter(logging.Filter):
@@ -106,7 +117,9 @@ class RedactionFilter(logging.Filter):
     sensitive header, header mappings by key, `(name, value)` pairs in a list or
     tuple, and strings by pattern) and the exception text. The record is edited in
     place, so every handler after this one, including the root logger's, sees only
-    the redacted record.
+    the redacted record. Fails closed: an `extra` value that cannot be redacted
+    (for example a `Mapping` whose `items()` raises) becomes the redaction marker
+    rather than raising out of this filter or dropping the record.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -120,8 +133,16 @@ class RedactionFilter(logging.Filter):
         record.msg = _redact_text(message)
         record.args = ()
         for key in vars(record).keys() - _RECORD_ATTRIBUTES:
-            value = _REDACTED if _is_sensitive_header_name(key) else _redact(getattr(record, key))
-            setattr(record, key, value)
+            if _is_sensitive_header_name(key):
+                setattr(record, key, _REDACTED)
+                continue
+            try:
+                redacted_value = _redact(getattr(record, key))
+            except Exception:
+                # An unusual object (a Mapping whose `items()` raises, say) must not
+                # crash the filter or drop the record: redact it wholesale instead.
+                redacted_value = _REDACTED
+            setattr(record, key, redacted_value)
         if record.exc_info and not record.exc_text:
             # logging.Formatter reuses exc_text, so the traceback is rendered once, here.
             record.exc_text = logging.Formatter().formatException(record.exc_info)

@@ -1,7 +1,8 @@
 import json
 import logging
 import uuid
-from collections.abc import Iterator
+from collections import namedtuple
+from collections.abc import Iterator, Mapping
 from datetime import datetime
 
 import pytest
@@ -25,6 +26,29 @@ from app.core.logging import (
 )
 
 SECRET = "sk-live-4f9a7c"
+
+_HeaderPair = namedtuple("_HeaderPair", ["name", "value"])
+
+# A list that contains itself, and a dict that contains itself: redaction must
+# terminate on these without a RecursionError, by bounding nesting depth rather
+# than tracking object identities.
+_SELF_REFERENCING_LIST: list[object] = [("authorization", SECRET)]
+_SELF_REFERENCING_LIST.append(_SELF_REFERENCING_LIST)
+_SELF_REFERENCING_DICT: dict[str, object] = {"authorization": SECRET}
+_SELF_REFERENCING_DICT["self"] = _SELF_REFERENCING_DICT
+
+
+class _ExplodingMapping(Mapping[str, str]):
+    """A Mapping that raises when iterated, to test that redaction fails closed."""
+
+    def __getitem__(self, key: str) -> str:
+        raise RuntimeError("boom")
+
+    def __iter__(self) -> Iterator[str]:
+        raise RuntimeError("boom")
+
+    def __len__(self) -> int:
+        return 0
 
 
 @pytest.fixture
@@ -200,6 +224,39 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
             {"payment_signature": SECRET},
             {"payment_signature": "[REDACTED]"},
             id="flat_payment_signature_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {
+                "headers": [
+                    _HeaderPair("Authorization", f"Bearer {SECRET}"),
+                    _HeaderPair("Accept", "application/json"),
+                ]
+            },
+            {"headers": [["Authorization", "[REDACTED]"], ["Accept", "application/json"]]},
+            id="namedtuple_pairs_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"headers": _SELF_REFERENCING_LIST},
+            {},
+            id="self_referencing_list_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"headers": _SELF_REFERENCING_DICT},
+            {},
+            id="self_referencing_dict_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"broken": _ExplodingMapping()},
+            {"broken": "[REDACTED]"},
+            id="exploding_mapping_in_extra",
         ),
     ],
 )
