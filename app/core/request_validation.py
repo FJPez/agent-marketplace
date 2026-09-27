@@ -146,6 +146,9 @@ class ProcessRequestValidationPool:
         self._free: asyncio.Queue[_Slot | None] = asyncio.Queue()
         for _ in range(workers):
             self._free.put_nowait(_Slot())
+        # Compiles never hold every worker, so provider saves cannot starve request
+        # bodies; with a single worker the two share it.
+        self._compiles = asyncio.Semaphore(max(1, workers - 1))
         self._processes: set[asyncio.subprocess.Process] = set()
         self._closed = False
         self._busy_logged_at = float("-inf")
@@ -158,11 +161,17 @@ class ProcessRequestValidationPool:
     async def check_schema(self, schema_json: str) -> str | None:
         """Why the schema `schema_json` does not compile in time, or None when it does."""
         try:
+            await asyncio.wait_for(self._compiles.acquire(), self._timeout_seconds)
+        except TimeoutError:
+            raise self._busy(CHECK_SCHEMA) from None
+        try:
             answer = await self._call(CHECK_SCHEMA, schema_json, b"", self._compile_timeout_seconds)
         except TimeoutError:
             return _TOO_EXPENSIVE
         except _CrashedError:
             return "request_schema could not be compiled"
+        finally:
+            self._compiles.release()
         return answer.text or None
 
     async def validate(self, schema_json: str, body: bytes) -> str | None:

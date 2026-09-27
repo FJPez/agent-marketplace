@@ -1,3 +1,5 @@
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.request_validation_worker import body_refusal, schema_refusal
 
 
@@ -16,3 +18,20 @@ class InProcessRequestValidationPool:
 
 
 IN_PROCESS_REQUEST_VALIDATION_POOL = InProcessRequestValidationPool()
+
+
+class TransactionWatchingPool(InProcessRequestValidationPool):
+    """Answers as the in-process pool does and records `session.in_transaction()` at
+    every compile.
+
+    Proves a save compiles its request schema with no transaction open on `session`, or
+    does not compile it at all.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self.in_transaction_during_compiles: list[bool] = []
+
+    async def check_schema(self, schema_json: str) -> str | None:
+        self.in_transaction_during_compiles.append(self._session.in_transaction())
+        return await super().check_schema(schema_json)

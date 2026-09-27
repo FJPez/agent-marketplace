@@ -61,6 +61,9 @@ UNAVAILABLE = "request validation is unavailable"
 CLOSING = "request validation is shutting down"
 MISMATCH = "request body does not match the request schema"
 LOGGER = "app.core.request_validation"
+# Its class escapes compile in quadratic time: about 83 s for this 32 KiB schema.
+EXPENSIVE_SCHEMA: JsonObject = {"pattern": "\\s" * 10_900}
+TOO_EXPENSIVE = "request_schema is too expensive to compile"
 # A worker that breaks the answer protocol in the way named by its first argument.
 MISBEHAVING_WORKER = f"""
 import struct
@@ -209,12 +212,7 @@ async def test_a_request_schema_that_compiles_is_accepted(open_pool: OpenPool) -
             "and backreferences and compile within 10240 bytes at /properties/text/pattern",
             id="lookaround",
         ),
-        # The class escapes compile in quadratic time: about 83 s for this 32 KiB schema.
-        pytest.param(
-            {"pattern": "\\s" * 10_900},
-            "request_schema is too expensive to compile",
-            id="quadratic_class_escapes",
-        ),
+        pytest.param(EXPENSIVE_SCHEMA, TOO_EXPENSIVE, id="quadratic_class_escapes"),
         # Compiles in about 0.6 s, so it can never be stored: every validation of it would
         # overrun the validation deadline on a worker that had to compile it first.
         pytest.param(
@@ -244,6 +242,39 @@ async def test_a_request_schema_that_does_not_compile_in_time_is_refused_at_requ
         ],
     }
     await check_request_schema_compiles(pool=pool, schema={"type": "object"})
+
+
+async def test_compiles_leave_a_worker_free_for_request_bodies(open_pool: OpenPool) -> None:
+    # Two saves of a schema that compiles for 83 s, each killed at its 0.5 s deadline.
+    pool = open_pool(workers=2, timeout_seconds=1.0, compile_timeout_seconds=0.5)
+    compiles = [
+        asyncio.create_task(check_request_schema_compiles(pool=pool, schema=EXPENSIVE_SCHEMA))
+        for _ in range(2)
+    ]
+    await asyncio.sleep(0)
+
+    await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
+
+    assert not any(compile_.done() for compile_ in compiles)
+    for compile_ in compiles:
+        with pytest.raises(InvalidInputError, match=f"^{re.escape(TOO_EXPENSIVE)}$"):
+            await compile_
+
+
+async def test_a_compile_that_waits_too_long_for_its_turn_is_turned_away_as_busy(
+    open_pool: OpenPool,
+) -> None:
+    # Two workers leave room for one compile at a time; the second waits at most 0.25 s.
+    pool = open_pool(workers=2, timeout_seconds=SHORT_DEADLINE_SECONDS, compile_timeout_seconds=1.0)
+
+    results = await asyncio.gather(
+        check_request_schema_compiles(pool=pool, schema=EXPENSIVE_SCHEMA),
+        check_request_schema_compiles(pool=pool, schema={"type": "object"}),
+        return_exceptions=True,
+    )
+
+    assert [type(result) for result in results] == [InvalidInputError, UnavailableError]
+    assert str(results[1]) == "request validation is busy; retry shortly"
 
 
 async def test_a_worker_that_ends_while_compiling_is_a_failed_compile(

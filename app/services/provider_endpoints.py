@@ -2,13 +2,13 @@ from datetime import UTC, datetime
 from typing import Protocol
 from urllib.parse import urlsplit
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.request_validation import RequestValidationPool, check_request_schema_compiles
 from app.db.errors import is_unique_violation, unique_violation_constraint
 from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
@@ -45,7 +45,16 @@ async def create_endpoint(
         if request.price is None
         else build_price_version(settings=settings, amount=request.price.amount)
     )
-    # Before any transaction opens: it waits on a worker process.
+    # Only the owner's save reaches the workers, and it waits on them with no transaction
+    # open; the lock below checks ownership again.
+    await _ensure_owned(
+        session,
+        select(Service.id).where(
+            Service.id == service_id,
+            Service.provider_account_id == account_id,
+        ),
+        not_found="service not found",
+    )
     await check_request_schema_compiles(pool=validation_pool, schema=request.request_schema)
     service = await service_access.lock_owned_service(
         session=session,
@@ -95,7 +104,18 @@ async def update_endpoint(
     changes: EndpointUpdateRequest,
 ) -> ServiceEndpoint:
     if changes.request_schema is not None:
-        # Before any transaction opens: it waits on a worker process.
+        # Only the owner's save reaches the workers, and it waits on them with no
+        # transaction open; the lock below checks ownership again.
+        await _ensure_owned(
+            session,
+            select(ServiceEndpoint.id)
+            .join(Service)
+            .where(
+                ServiceEndpoint.id == endpoint_id,
+                Service.provider_account_id == account_id,
+            ),
+            not_found="endpoint not found",
+        )
         await check_request_schema_compiles(pool=validation_pool, schema=changes.request_schema)
     await service_access.lock_owned_service_by_endpoint(
         session=session,
@@ -286,6 +306,18 @@ async def _ensure_upstream_host_capacity(
             f"a service's upstreams can name at most {MAX_UPSTREAM_HOSTS_PER_SERVICE} "
             "distinct hosts; point this endpoint at one the service already uses",
         )
+
+
+async def _ensure_owned(
+    session: AsyncSession, owned: Select[tuple[int]], *, not_found: str
+) -> None:
+    """Raise NotFoundError unless `owned` finds a row, in a read that ends at once."""
+    try:
+        found = await session.scalar(owned)
+    finally:
+        await session.rollback()
+    if found is None:
+        raise NotFoundError(not_found)
 
 
 async def _ensure_endpoint_update_allowed(
