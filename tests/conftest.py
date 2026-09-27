@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator, Generator
-from contextlib import suppress
 from pathlib import Path
 
 # These must be set before any import of app.main, which creates the
@@ -29,6 +28,7 @@ from tests.integration.db.support import (
     MIGRATION_DATABASE_SUFFIX,
     MigrationDatabase,
     PostgresUnavailableError,
+    drop_stale_test_databases,
     drop_test_database,
     get_test_database_url,
     recreate_test_database,
@@ -73,17 +73,22 @@ def use_dedicated_test_database(
     test_database_url = get_test_database_url(base_database_url)
     get_settings.cache_clear()
     try:
+        asyncio.run(drop_stale_test_databases(base_database_url))
         asyncio.run(recreate_test_database(test_database_url))
     except PostgresUnavailableError as exc:
-        raise pytest.skip.Exception(f"{exc}. Start PostgreSQL to run DB-backed tests.") from exc
+        msg = f"{exc}. Start PostgreSQL to run DB-backed tests."
+        # CI sets this so a missing PostgreSQL fails the run instead of skipping every
+        # DB-backed test.
+        if os.environ.get("APP_TEST_REQUIRE_DATABASE") == "1":
+            raise pytest.fail.Exception(msg, pytrace=False) from exc
+        raise pytest.skip.Exception(msg) from exc
     os.environ["APP_DATABASE_URL"] = test_database_url
     get_settings.cache_clear()
 
     try:
         yield
     finally:
-        with suppress(PostgresUnavailableError):
-            asyncio.run(drop_test_database(test_database_url))
+        asyncio.run(drop_test_database(test_database_url))
         if original_database_url is None:
             os.environ.pop("APP_DATABASE_URL", None)
         else:
@@ -170,8 +175,7 @@ def migration_database(
         yield MigrationDatabase(config=_build_alembic_config(database_url), engine=engine)
     finally:
         asyncio.run(engine.dispose())
-        with suppress(PostgresUnavailableError):
-            asyncio.run(drop_test_database(database_url))
+        asyncio.run(drop_test_database(database_url))
 
 
 @pytest.fixture

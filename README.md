@@ -45,6 +45,14 @@ TEST_REDIS_URL=redis://localhost:6379/15 make test
 The tests flush the Redis database named by `TEST_REDIS_URL`, so point it at a
 database you use for nothing else.
 
+DB-backed tests skip when PostgreSQL is unreachable. Set
+`APP_TEST_REQUIRE_DATABASE=1` to make them fail instead; CI does. Each test run
+creates its own `agent_marketplace_test_*` databases, drops them at the end, and
+at start drops those left behind by runs that were killed before teardown.
+
+Tests marked `e2e` run against live services and are deselected by default; run
+them with `uv run pytest -m e2e`.
+
 ## Resetting a Local Database
 
 The migration history was squashed into a single baseline on 2026-09-26. A

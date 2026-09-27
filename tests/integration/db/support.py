@@ -102,28 +102,24 @@ async def admin_engine(database_url: str | None = None) -> AsyncIterator[AsyncEn
 @asynccontextmanager
 async def admin_connection(database_url: str | None = None) -> AsyncIterator[AsyncConnection]:
     async with admin_engine(database_url) as engine:
+        # Only a failure to connect means PostgreSQL is unavailable. A statement that
+        # fails on the open connection (a DROP at teardown) raises as it is.
         try:
-            async with engine.connect() as connection:
-                yield connection
+            connection = await engine.connect()
         except (OSError, OperationalError, DBAPIError) as exc:
             msg = "PostgreSQL is unavailable for DB-backed tests"
             raise PostgresUnavailableError(msg) from exc
+        try:
+            yield connection
+        finally:
+            await connection.close()
 
 
 async def recreate_test_database(database_url: str) -> None:
     database_name = get_database_name(database_url)
 
     async with admin_connection(database_url) as connection:
-        await connection.execute(
-            text(
-                "SELECT pg_terminate_backend(pid) "
-                "FROM pg_stat_activity "
-                "WHERE datname = :database_name "
-                "AND pid <> pg_backend_pid()",
-            ),
-            {"database_name": database_name},
-        )
-        await connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}"'))
+        await connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
         await connection.execute(text(f'CREATE DATABASE "{database_name}"'))
 
 
@@ -149,13 +145,41 @@ async def drop_test_database(database_url: str) -> None:
     database_name = get_database_name(database_url)
 
     async with admin_connection(database_url) as connection:
-        await connection.execute(
+        await connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}" WITH (FORCE)'))
+
+
+def _is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The process exists but belongs to another user.
+        return True
+    return True
+
+
+async def drop_stale_test_databases(database_url: str) -> None:
+    """Drop test databases left behind by earlier runs that were killed before teardown.
+
+    A killed run (SIGTERM from a timeout, SIGKILL, a crashed xdist worker) never reaches
+    the teardown that drops its databases, and the next run never reuses them because
+    their names end in the creating process's id. A database is dropped only when its
+    name is one this harness creates for `database_url`, the process in that name no
+    longer exists on this host, and nobody is connected to it.
+    """
+    harness_name = re.compile(
+        rf"{re.escape(get_database_name(database_url))}{TEST_DATABASE_SUFFIX}"
+        rf"_(?:local|gw\d+)_(?P<pid>\d+)(?:{MIGRATION_DATABASE_SUFFIX})?",
+    )
+    async with admin_connection(database_url) as connection:
+        unused_names = await connection.scalars(
             text(
-                "SELECT pg_terminate_backend(pid) "
-                "FROM pg_stat_activity "
-                "WHERE datname = :database_name "
-                "AND pid <> pg_backend_pid()",
+                "SELECT datname FROM pg_database AS d WHERE NOT EXISTS "
+                "(SELECT 1 FROM pg_stat_activity AS a WHERE a.datname = d.datname)",
             ),
-            {"database_name": database_name},
         )
-        await connection.execute(text(f'DROP DATABASE IF EXISTS "{database_name}"'))
+        for name in unused_names.all():
+            match = harness_name.fullmatch(name)
+            if match is not None and not _is_running(int(match["pid"])):
+                await connection.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))

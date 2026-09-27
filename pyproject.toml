@@ -43,9 +43,14 @@ include = ["app", "tests"]
 error-on-warning = true
 
 [tool.pytest.ini_options]
-addopts = "-ra --import-mode=importlib --dist loadgroup"
+addopts = "-ra --import-mode=importlib --dist loadgroup --strict-markers -m 'not e2e'"
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# asyncio, xdist_group, parametrize and skipif are registered by pytest-asyncio,
+# pytest-xdist and pytest itself.
+markers = [
+    "e2e: end-to-end test against live services such as Base Sepolia; deselected unless run with -m e2e",
+]
 
 [tool.ruff]
 target-version = "py312"
