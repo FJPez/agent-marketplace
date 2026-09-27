@@ -68,7 +68,8 @@ Layer responsibilities:
 - Read services do not commit.
 - The top-level mutation service owns the transaction and commits exactly once.
 - Private helpers may `flush()` but never commit.
-- Do not hold a database transaction open across external network I/O.
+- Do not hold a database transaction or row lock open across external
+  network I/O.
 - External workflows (x402 payments, provider invocation, payouts) use the
   short-transaction convention below. It is not an ordinary CRUD pattern; do
   not force it elsewhere.
@@ -85,9 +86,15 @@ durable state that recovery can resume from:
 2. Make the external call with no transaction open.
 3. Commit the outcome in a new short transaction.
 
-Never hold a transaction or a row lock across network I/O; the connection
-settings in `app/db/session.py` (statement, lock and idle-in-transaction
-timeouts) are a backstop, not a design tool.
+Any read after the intent commit (for example to fetch data the call needs)
+autobegins a new transaction, so commit or roll back after such reads, before
+the external call: `session.in_transaction()` must be `False` while it runs.
+For a known long-running statement, prefer a scoped `SET LOCAL
+statement_timeout` over raising the global default.
+
+The connection settings in `app/db/session.py` (statement, lock and
+idle-in-transaction timeouts) are a backstop for that rule, not a design
+tool.
 
 Every state change in such a workflow is a fenced compare-and-set update:
 
@@ -95,13 +102,15 @@ Every state change in such a workflow is a fenced compare-and-set update:
 UPDATE invocations
 SET state = :next_state, ...
 WHERE id = :id AND state = :expected_state AND fence = :fence
+RETURNING id
 ```
 
 The fencing token `fence` is incremented by the conditional update that takes
-the row's lease, and the lease holder passes it to every later update. Check
-the updated row count: zero rows means the state moved on or another worker
-took the lease, so ownership is lost: stop, perform no further side effect
-(no external call, no ledger posting) and do not retry.
+the row's lease (that update returns `RETURNING fence` instead), and the
+lease holder passes it to every later update. Read the result with
+`scalar_one_or_none()`: no row returned means the state moved on or another
+worker took the lease, so ownership is lost: stop, perform no further side
+effect (no external call, no ledger posting) and do not retry.
 
 ### Errors
 
