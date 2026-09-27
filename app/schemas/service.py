@@ -18,7 +18,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
-from app.core.request_schema_validation import check_request_schema, check_request_schema_depth
+from app.core.request_schema_validation import check_request_schema, check_request_schema_shape
 from app.core.service_fields import (
     DEFAULT_RESPONSE_CONTENT_TYPE,
     ENDPOINT_TIMEOUT_MAX_SECONDS,
@@ -78,17 +78,18 @@ def _check_request_schema_if_sent(schema: JsonObject | None) -> JsonObject | Non
     return None if schema is None else check_request_schema(schema)
 
 
-# The nesting is checked before the value is validated as a JSON object, the rest after.
+# The shape (nesting and size) is checked before the value is validated as a JSON object,
+# the rest after.
 RequestSchema = Annotated[
     JsonObject,
-    BeforeValidator(check_request_schema_depth),
+    BeforeValidator(check_request_schema_shape),
     AfterValidator(check_request_schema),
 ]
 # An update's request_schema may be omitted. Its checks wrap the whole optional type, so
 # an invalid schema is one error at `request_schema`, not one per member of the union.
 OptionalRequestSchema = Annotated[
     JsonObject | SkipJsonSchema[None],
-    BeforeValidator(check_request_schema_depth),
+    BeforeValidator(check_request_schema_shape),
     AfterValidator(_check_request_schema_if_sent),
 ]
 ResponseContentType = Annotated[str, AfterValidator(normalize_media_type)]
