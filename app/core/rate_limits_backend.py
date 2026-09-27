@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol
 
 from limits import RateLimitItem, parse
-from limits.aio.storage import MemoryStorage, RedisStorage
+from limits.aio.storage import MemoryStorage, RedisStorage, Storage
 from limits.aio.strategies import FixedWindowRateLimiter
 
 from app.core.config import Settings, get_settings
@@ -35,46 +35,38 @@ class RateLimitsBackend(Protocol):
     async def reset(self) -> None: ...
 
 
-class MemoryRateLimitsBackend:
+class _FixedWindowRateLimitsBackend:
+    def __init__(self, storage: Storage) -> None:
+        self._storage = storage
+        self._limiter = FixedWindowRateLimiter(storage)
+
+    async def hit(
+        self,
+        limit_value: str,
+        *,
+        key: str,
+        scope: str,
+    ) -> bool:
+        return await self._limiter.hit(_parse_limit(limit_value), scope, key)
+
+    async def reset(self) -> None:
+        await self._storage.reset()
+
+
+class MemoryRateLimitsBackend(_FixedWindowRateLimitsBackend):
     def __init__(self) -> None:
-        self._storage = MemoryStorage()
-        self._limiter = FixedWindowRateLimiter(self._storage)
-
-    async def hit(
-        self,
-        limit_value: str,
-        *,
-        key: str,
-        scope: str,
-    ) -> bool:
-        item = _parse_limit(limit_value)
-        return await self._limiter.hit(item, scope, key)
-
-    async def reset(self) -> None:
-        await self._storage.reset()
+        super().__init__(MemoryStorage())
 
 
-class RedisRateLimitsBackend:
+class RedisRateLimitsBackend(_FixedWindowRateLimitsBackend):
     def __init__(self, redis_url: str, *, key_prefix: str = "agent-marketplace") -> None:
-        self._storage = RedisStorage(
-            redis_url,
-            implementation="coredis",
-            key_prefix=f"{key_prefix}:rate-limits",
+        super().__init__(
+            RedisStorage(
+                redis_url,
+                implementation="coredis",
+                key_prefix=f"{key_prefix}:rate-limits",
+            )
         )
-        self._limiter = FixedWindowRateLimiter(self._storage)
-
-    async def hit(
-        self,
-        limit_value: str,
-        *,
-        key: str,
-        scope: str,
-    ) -> bool:
-        item = _parse_limit(limit_value)
-        return await self._limiter.hit(item, scope, key)
-
-    async def reset(self) -> None:
-        await self._storage.reset()
 
 
 def create_rate_limits_backend(settings: Settings) -> RateLimitsBackend:
