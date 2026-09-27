@@ -201,7 +201,19 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   within 10 KiB, so compiling one stays cheap: a pattern that can apply to a request
   body must avoid lookaround and backreferences and compile no larger, so `\p{L}+` or
   `[A-Za-z0-9+/]{0,256}` are refused. `format` is an annotation only, as the draft
-  specifies by default. These rules do not bound what validating a body costs.
+  specifies by default. These rules do not bound what validating a body costs; a
+  deadline does (below).
+- A request body is validated against its endpoint's `request_schema` in a worker
+  process, because the validator (jsonschema-rs) holds the Python GIL and what a
+  schema costs on a body is not known in advance. `APP_REQUEST_VALIDATION_WORKERS`
+  (default 2) workers start on the first validation. A validation must finish
+  within `APP_REQUEST_VALIDATION_TIMEOUT_MS` (default 250); otherwise its worker is
+  killed and replaced, and the body is refused. A body also waits at most that long
+  for a free worker. A body must be at most 1 MiB of JSON (`NaN` and `Infinity` are
+  not JSON) nested at most 128 levels, and a refused body names its first error and
+  where it is, each cut to 200 characters. Each worker keeps its 256 most recently
+  used compiled schemas and, on Linux, at most 512 MiB of address space (macOS does
+  not enforce that limit).
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

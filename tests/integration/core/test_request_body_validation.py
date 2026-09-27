@@ -12,6 +12,7 @@ from typing import Protocol
 
 import pytest
 
+from app.core.config import Settings
 from app.core.errors import InvalidInputError
 from app.core.json_types import JsonObject
 from app.core.request_body_validation import (
@@ -21,6 +22,7 @@ from app.core.request_body_validation import (
     RequestValidationPool,
     validate_request_body,
 )
+from app.core.resources import open_resources
 
 # The workers of one test would compete for CPU with another's: run them one at a time.
 pytestmark = pytest.mark.xdist_group("request_validation_pool")
@@ -273,3 +275,19 @@ async def test_closing_the_pool_during_a_validation_starts_no_replacement(
     with pytest.raises(InvalidInputError):
         await validation
     assert _worker_pids(before) == set()
+
+
+async def test_the_resources_start_the_workers_on_first_use_and_stop_them_on_exit() -> None:
+    before = set(multiprocessing.active_children())
+
+    async with open_resources(Settings(request_validation_workers=3)) as resources:
+        assert _worker_pids(before) == set()
+        await validate_request_body(
+            pool=resources.request_validation_pool,
+            schema={},
+            body=b"{}",
+        )
+        pids = _worker_pids(before)
+        assert len(pids) == 3
+
+    assert not any(_exists(pid) for pid in pids)
