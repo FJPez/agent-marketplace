@@ -19,20 +19,30 @@ TEST_UPSTREAM_BASE_URL = f"https://{TEST_UPSTREAM_HOST}/"
 class FakeResolver:
     """A DnsResolver that answers from its attributes, so no test resolves a real name.
 
-    A name missing from `addresses` has no records; a name in `failing_names` fails the
-    way a timed-out lookup does. Tests change the attributes to change the answers.
+    A name missing from `addresses` or `txt_records` has no such records; a name in
+    `failing_names` fails the way a timed-out lookup does. Tests change the attributes
+    to change the answers.
     """
 
     def __init__(
         self,
         addresses: Mapping[str, Sequence[str]] | None = None,
         *,
+        txt_records: Mapping[str, Sequence[str]] | None = None,
         failing_names: Collection[str] = (),
     ) -> None:
         self.addresses = {host: list(values) for host, values in (addresses or {}).items()}
+        self.txt_records = {name: list(values) for name, values in (txt_records or {}).items()}
         self.failing_names = set(failing_names)
 
     async def resolve_addresses(self, host: str) -> list[IpAddress]:
-        if host in self.failing_names:
-            raise DnsLookupError(f"DNS lookup for {host} failed")
+        self._fail_if_failing(host)
         return [ip_address(value) for value in self.addresses.get(host, [])]
+
+    async def resolve_txt(self, name: str) -> list[str]:
+        self._fail_if_failing(name)
+        return list(self.txt_records.get(name, []))
+
+    def _fail_if_failing(self, name: str) -> None:
+        if name in self.failing_names:
+            raise DnsLookupError(f"DNS lookup for {name} failed")

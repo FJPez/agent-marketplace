@@ -6,6 +6,7 @@ from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_acc
 
 SIGNING_SECRET_PATH = "/v1/provider/signing-secret"
 ROTATE_PATH = "/v1/provider/signing-secret/rotate"
+DOMAIN_VERIFICATION_PATH = "/v1/provider/domain-verification"
 
 
 async def test_a_signing_secret_is_returned_once_and_never_by_its_status(
@@ -116,3 +117,25 @@ async def test_signing_secret_routes_refuse_api_keys(
 
     assert response.status_code == 403
     assert response.json()["detail"] == "jwt authentication required"
+
+
+async def test_the_domain_verification_record_is_stable_and_differs_per_account(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    other_account_id = await create_provider_account_record(db_session_factory)
+    headers = auth_headers_for_account_id(account_id)
+
+    first = await async_client.post(DOMAIN_VERIFICATION_PATH, headers=headers)
+    second = await async_client.post(DOMAIN_VERIFICATION_PATH, headers=headers)
+    other = await async_client.post(
+        DOMAIN_VERIFICATION_PATH,
+        headers=auth_headers_for_account_id(other_account_id),
+    )
+
+    assert first.status_code == 200
+    assert first.json()["record_label"] == "_agent-marketplace"
+    assert first.json()["record_value"].startswith("agent-marketplace-verification=")
+    assert second.json() == first.json()
+    assert other.json()["record_value"] != first.json()["record_value"]

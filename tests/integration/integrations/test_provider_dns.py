@@ -80,6 +80,10 @@ async def resolver() -> AsyncIterator[DnsPythonResolver]:
             "alias.provider.example.": [("CNAME", "www.provider.example.")],
             "www.provider.example.": [("CNAME", "dual.provider.example.")],
             "ipv6-only.provider.example.": [("AAAA", "::1")],
+            "_agent-marketplace.dual.provider.example.": [
+                ("TXT", '"agent-marketplace-" "verification=token"'),
+                ("TXT", '"v=spf1 -all"'),
+            ],
         },
         failing=frozenset({"broken.provider.example.", "half-broken.provider.example. A"}),
         silent=frozenset({"slow.provider.example.", "half-broken.provider.example. AAAA"}),
@@ -129,17 +133,31 @@ async def test_a_missing_record_type_or_name_is_no_addresses(
     assert await resolver.resolve_addresses(host) == [ip_address(value) for value in expected]
 
 
+async def test_resolve_txt_joins_the_strings_of_each_record(
+    resolver: DnsPythonResolver,
+) -> None:
+    values = await resolver.resolve_txt("_agent-marketplace.dual.provider.example")
+
+    assert sorted(values) == ["agent-marketplace-verification=token", "v=spf1 -all"]
+
+
+async def test_resolve_txt_of_a_missing_name_is_no_records(resolver: DnsPythonResolver) -> None:
+    assert await resolver.resolve_txt("_agent-marketplace.missing.provider.example") == []
+
+
+@pytest.mark.parametrize("lookup", ["resolve_addresses", "resolve_txt"])
 @pytest.mark.parametrize(
     "host",
     ["broken.provider.example", "slow.provider.example"],
     ids=["servfail", "timeout"],
 )
-async def test_a_failed_lookup_raises_instead_of_returning_no_addresses(
+async def test_a_failed_lookup_raises_instead_of_returning_no_records(
     resolver: DnsPythonResolver,
+    lookup: str,
     host: str,
 ) -> None:
     with pytest.raises(DnsLookupError, match=f"DNS lookup for {host} failed"):
-        await resolver.resolve_addresses(host)
+        await getattr(resolver, lookup)(host)
 
 
 async def test_a_failed_query_cancels_the_other_instead_of_leaving_it_running(

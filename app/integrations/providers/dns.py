@@ -9,6 +9,7 @@ import dns.asyncresolver
 import dns.exception
 import dns.resolver
 from dns.rdata import Rdata
+from dns.rdtypes.txtbase import TXTBase
 
 type IpAddress = IPv4Address | IPv6Address
 
@@ -20,6 +21,10 @@ class DnsLookupError(Exception):
 class DnsResolver(Protocol):
     async def resolve_addresses(self, host: str) -> list[IpAddress]:
         """Every A and AAAA address of `host`; empty when it has none."""
+        ...
+
+    async def resolve_txt(self, name: str) -> list[str]:
+        """Every TXT record at `name`, its strings joined; empty when it has none."""
         ...
 
 
@@ -39,6 +44,14 @@ class DnsPythonResolver:
             raise DnsLookupError(f"DNS lookup for {host} failed") from failed
         ipv4, ipv6 = ipv4_query.result(), ipv6_query.result()
         return [ip_address(record.to_text()) for record in (*ipv4, *ipv6)]
+
+    async def resolve_txt(self, name: str) -> list[str]:
+        return [
+            # A TXT record is one or more strings of at most 255 bytes, read as one value.
+            b"".join(record.strings).decode("utf-8", errors="replace")
+            for record in await self._query(name, "TXT")
+            if isinstance(record, TXTBase)
+        ]
 
     async def _query(self, name: str, record_type: str) -> Sequence[Rdata]:
         try:

@@ -20,3 +20,14 @@ class IssuedSigningSecretResponse(SigningSecretResponse):
     """A newly issued signing secret: the only response that carries it."""
 
     secret: str
+
+
+class DomainVerificationResponse(BaseModel):
+    """The TXT record that proves the provider controls an upstream host.
+
+    Publish it at `<record_label>.<host>` for every host the provider's upstreams name.
+    The value is the same for every host and never changes.
+    """
+
+    record_label: str
+    record_value: str

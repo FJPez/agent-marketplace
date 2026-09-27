@@ -1,10 +1,14 @@
 from fastapi import APIRouter, Response, status
 
-from app.api.deps.auth import CurrentJwtActor
+from app.api.deps.auth import CurrentActor, CurrentJwtActor
 from app.api.deps.database import SessionDep
 from app.api.deps.settings import SettingsDep
-from app.schemas.provider_trust import IssuedSigningSecretResponse, SigningSecretResponse
-from app.services import provider_signing_secrets
+from app.schemas.provider_trust import (
+    DomainVerificationResponse,
+    IssuedSigningSecretResponse,
+    SigningSecretResponse,
+)
+from app.services import domain_control, provider_signing_secrets
 
 router = APIRouter(prefix="/provider", tags=["provider-trust"])
 
@@ -100,3 +104,26 @@ async def get_signing_secret(actor: CurrentJwtActor, session: SessionDep) -> Sig
         account_id=actor.account_id,
     )
     return SigningSecretResponse.model_validate(stored)
+
+
+@router.post(
+    "/domain-verification",
+    response_model=DomainVerificationResponse,
+    summary="Get the provider's domain verification record",
+    description=(
+        "Returns the TXT record that proves the provider controls its upstream hosts, "
+        "creating the provider's token on the first call. Publish it at "
+        "`<record_label>.<host>` for every upstream host; publishing a service checks "
+        "each of its hosts."
+    ),
+    responses={200: {"description": "Domain verification record returned."}},
+)
+async def get_domain_verification_record(
+    actor: CurrentActor,
+    session: SessionDep,
+) -> DomainVerificationResponse:
+    token = await domain_control.ensure_domain_token(session=session, account_id=actor.account_id)
+    return DomainVerificationResponse(
+        record_label=domain_control.RECORD_LABEL,
+        record_value=domain_control.record_value(token),
+    )
