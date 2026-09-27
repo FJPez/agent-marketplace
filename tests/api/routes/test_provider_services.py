@@ -1284,8 +1284,11 @@ async def test_publish_service_without_domain_proof_is_an_invalid_input_problem(
         "status": 422,
         "detail": (
             f"upstream hosts failed the domain-control check: {TEST_UPSTREAM_HOST} "
-            "(record_missing); publish a TXT record at _agent-marketplace.<host> with the "
-            "value from POST /v1/provider/domain-verification"
+            "(record_missing). record_missing: publish a TXT record at "
+            "_agent-marketplace.<host> with the value from POST "
+            "/v1/provider/domain-verification. DNS changes can take minutes to be visible, "
+            "longer after a failed check because resolvers cache the miss (negative "
+            "caching)."
         ),
     }
 

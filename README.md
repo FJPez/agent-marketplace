@@ -179,6 +179,11 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   registered through the API. The API resolves hosts with the system's nameservers.
   A service's upstreams can name at most 10 distinct hosts, which bounds the DNS
   queries each publish sends.
+- Publishing checks live that every upstream host of the service carries the
+  provider's TXT record at `_agent-marketplace.<host>`, with the value
+  `POST /v1/provider/domain-verification` returns. A new or changed record can take
+  minutes to be visible, longer after a failed check because resolvers cache the
+  miss (negative caching), so publish again once it is.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

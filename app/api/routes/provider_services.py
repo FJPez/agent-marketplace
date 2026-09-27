@@ -192,7 +192,9 @@ async def replace_provider_service_tags(
         "preconditions are satisfied, the provider has a signing secret, and every "
         "upstream host resolves only to public addresses and carries the provider's "
         "domain verification TXT record (see `POST /v1/provider/domain-verification`). "
-        "Each attempt records its verdicts as health checks."
+        "A new or changed record can take minutes to be visible, longer after a failed "
+        "check because resolvers cache the miss (negative caching). Each attempt records "
+        "its verdicts as health checks."
     ),
     responses={
         200: {"description": "Service published successfully."},
