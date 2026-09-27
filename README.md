@@ -62,6 +62,39 @@ lifecycle). On a signal it starts no new iteration and gives a running one
 `APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS` (default 25) to finish before cancelling
 it.
 
+## Deployment
+
+Both processes run from the one Docker image: the API with the image's default
+command, the worker with `python -m app.worker`.
+
+`make docker-run` builds the image and starts PostgreSQL, Redis, the API on
+`http://127.0.0.1:18000` and the worker; `make docker-stop` stops them.
+
+The API trusts `X-Forwarded-For` only from the addresses in
+`FORWARDED_ALLOW_IPS` (default `127.0.0.1`), so a published container ignores
+forged headers and rate limits key on the connecting address.
+
+### Railway
+
+Railway runs two services from this repository, both built from the
+`Dockerfile`:
+
+- **API.** Configured by `railway.toml`: the `/health/ready` health check and a
+  pre-deploy command that migrates the database and bootstraps the admin. Set
+  the `APP_*` variables and `FORWARDED_ALLOW_IPS=*`. Railway's edge proxy is
+  the only way into the container and replaces any `X-Forwarded-For` a client
+  sends, so trusting it gives every client its own rate limit instead of one
+  shared by all requests from the proxy.
+- **Worker.** Create a second service from the same repository. New services
+  cannot use a Railway config file, so set it up in the service settings: start
+  command `python -m app.worker`, no health check path, no pre-deploy command
+  (the API's deploy runs the migrations) and no public domain. Give it the same
+  `APP_*` variables as the API (for example as shared variables), plus
+  `APP_DB_APPLICATION_NAME=agent-marketplace-worker` and
+  `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends SIGKILL
+  right after SIGTERM; 30 seconds covers the worker's 25-second shutdown
+  timeout.
+
 ## Resetting a Local Database
 
 The migration history was squashed into a single baseline on 2026-09-26. A
