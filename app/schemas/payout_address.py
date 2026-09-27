@@ -15,7 +15,7 @@ class PayoutAddressChallengeRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "address": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
                     "network": "eip155:84532",
                 }
             ]

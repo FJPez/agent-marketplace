@@ -107,8 +107,9 @@ class Settings(BaseSettings):
     # How long a provider has to sign a payout address challenge.
     payout_address_challenge_seconds: int = Field(default=300, gt=0)
     # How long payouts are held after every payout address proof, even one of the
-    # address already in use, so a hijacked account cannot redirect earnings before the
-    # provider notices.
+    # address already in use. It covers a change the owner notices and answers by
+    # proving its own address again, which restarts the hold. It does not stop an
+    # account takeover: see the payout address notes in README.md.
     payout_address_hold_seconds: int = Field(default=86_400, gt=0)
     # Request bodies are validated in this many worker processes, each validation within
     # this deadline (app/core/request_validation.py). A caller also waits at most the

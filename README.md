@@ -19,7 +19,7 @@ Core capabilities:
 - provider service authoring and publish control
 - marketplace-issued provider signing secrets, rotatable with a grace period
 - DNS proof that a provider controls its upstream hosts, checked at every publish
-- provider payout addresses proven by signature, with payouts held after a change
+- provider payout addresses proven by signature, with payouts held after every proof
 - public discovery, schemas, and pricing lookups
 - moderation for administrators
 
@@ -199,8 +199,9 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   minutes to be visible, longer after a failed check because resolvers cache the
   miss (negative caching), so publish again once it is.
 - Every EVM address the API takes, from a wallet in a SIWE message to the treasury
-  and asset settings, may be all lowercase, all uppercase or EIP-55 checksummed; a
-  mixed-case address with a wrong checksum is refused as mistyped.
+  and asset settings, must be a lowercase `0x` followed by exactly 40 hex digits, with
+  no surrounding whitespace. The digits may be all lowercase, all uppercase or EIP-55
+  checksummed; a mixed-case address with a wrong checksum is refused as mistyped.
 - An endpoint's `request_schema` is checked when it is saved. It must be a JSON
   Schema of draft 2020-12 throughout (a `$schema`, in any subschema, must name that
   draft), nest at most 32 levels, take at most 32768 bytes as compact JSON, and hold
@@ -264,15 +265,29 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   read the deployed secret later; check `GET /v1/provider/signing-secret` and rotate
   with a new key if a new secret is still needed. Use a fresh random key, such as a
   UUID, for each rotation.
-- A provider proves a payout address by signing, with that address's key, EIP-712
-  typed data naming the provider's account, the address and the payment network
-  (`APP_PAYMENT_NETWORK`) under a one-time nonce, which expires after
-  `APP_PAYOUT_ADDRESS_CHALLENGE_SECONDS` (default 300). Every proof is kept, and the
-  latest one decides where payouts go, but only `APP_PAYOUT_ADDRESS_HOLD_SECONDS`
-  (default 86400, one day) after it: until then payouts are held, even if an earlier
-  address was in use, so a hijacked account cannot redirect earnings before the
-  provider notices. The address must be an externally owned account: a smart
-  contract wallet cannot make the signature.
+- A provider proves a payout address in two steps. First,
+  `POST /v1/provider/payout-address/challenge` names the address and the payment
+  network (`APP_PAYMENT_NETWORK`), and answers with EIP-712 typed data naming the
+  provider's account, the address and the network under a one-time nonce, which
+  expires after `APP_PAYOUT_ADDRESS_CHALLENGE_SECONDS` (default 300). Then the
+  provider signs the typed data with that address's key (`eth_signTypedData_v4`) and
+  submits the signature to `POST /v1/provider/payout-address`.
+  `GET /v1/provider/payout-address` returns the latest proof. Wallets such as
+  MetaMask sign v4 typed data only while connected to the chain it names (84532, Base
+  Sepolia, by default), so switch the wallet to that network first. The address must
+  be an externally owned account: a smart contract wallet cannot make the signature.
+- Proofs are kept while the account exists, and the latest one decides where payouts
+  go, but only `APP_PAYOUT_ADDRESS_HOLD_SECONDS` (default 86400, one day) after it:
+  until then payouts are held, even if an earlier address, or the same one, was in
+  use. Holds and challenge expiries are timed by the database's clock. The hold
+  protects against a change the owner notices and acts on: a provider that sees a
+  proof it did not make can prove its own address again, which supersedes it and
+  restarts the hold. The marketplace does not yet notify providers of a change.
+- The hold alone does not stop an account takeover. The payout routes, like changing
+  the account's login wallet, need only a signed-in session, so an attacker with a
+  stolen access token can move the login wallet to their own (which signs the owner
+  out) and then prove their own payout address. Payouts are not sent yet; closing
+  this gap is a follow-up that must land before they are.
 
 ## Signing Secret Encryption Keys
 
