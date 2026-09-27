@@ -16,6 +16,7 @@ from tests.fixtures.domain import (
     read_price_versions,
 )
 from tests.fixtures.settings import TEST_PRICE_TERMS, build_service_settings
+from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, FakeResolver
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidStateError
@@ -174,6 +175,7 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
 @pytest.mark.asyncio
 async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the_lock(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider_account_id = await _create_provider_account(db_session_factory)
@@ -252,11 +254,11 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
             with pytest.raises(InvalidStateError, match="service is not mutable outside draft"):
                 await provider_endpoints.upsert_upstream(
                     session=session,
-                    settings=build_service_settings(),
+                    resolver=dns_resolver,
                     account_id=provider_account_id,
                     endpoint_id=endpoint_id,
                     request=EndpointUpstreamRequest(
-                        base_url=HttpUrl("http://127.0.0.1:9000"),
+                        base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                         path="/mutated",
                         http_method="POST",
                     ),

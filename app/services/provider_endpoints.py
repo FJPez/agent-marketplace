@@ -7,12 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
-from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation, unique_violation_constraint
 from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.integrations.providers.dns import DnsResolver
+from app.integrations.providers.targets import UnsafeUpstreamTargetError, resolve_upstream_target
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
@@ -187,7 +188,7 @@ async def update_endpoint(
 async def upsert_upstream(
     *,
     session: AsyncSession,
-    settings: Settings,
+    resolver: DnsResolver,
     account_id: int,
     endpoint_id: int,
     request: EndpointUpstreamRequest,
@@ -195,8 +196,8 @@ async def upsert_upstream(
     try:
         # Resolves DNS - must run before the first query so no transaction or row
         # lock is held across the network I/O.
-        validated_base_url = validate_upstream_base_url(str(request.base_url), settings=settings)
-    except ValueError as exc:
+        target = await resolve_upstream_target(str(request.base_url), resolver=resolver)
+    except UnsafeUpstreamTargetError as exc:
         raise InvalidInputError(str(exc)) from exc
 
     await service_access.lock_owned_service_by_endpoint(
@@ -214,7 +215,7 @@ async def upsert_upstream(
     upstream = endpoint.upstream
     if (
         upstream is not None
-        and upstream.base_url == validated_base_url
+        and upstream.base_url == target.base_url
         and upstream.path == request.path
         and upstream.http_method == request.http_method
     ):
@@ -227,14 +228,14 @@ async def upsert_upstream(
     if upstream is None:
         upstream = ProviderUpstream(
             endpoint_id=endpoint.id,
-            base_url=validated_base_url,
+            base_url=target.base_url,
             path=request.path,
             http_method=request.http_method,
         )
         session.add(upstream)
         endpoint.upstream = upstream
     else:
-        upstream.base_url = validated_base_url
+        upstream.base_url = target.base_url
         upstream.path = request.path
         upstream.http_method = request.http_method
         upstream.updated_at = now

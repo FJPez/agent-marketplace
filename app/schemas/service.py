@@ -259,7 +259,7 @@ class EndpointUpstreamRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "base_url": "http://127.0.0.1:9000",
+                    "base_url": "https://provider.example.com",
                     "path": "/free-ping",
                     "http_method": "POST",
                 }

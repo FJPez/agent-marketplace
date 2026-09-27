@@ -15,6 +15,7 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
+from tests.helpers.dns import TEST_UPSTREAM_HOST, FakeResolver
 
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
@@ -700,7 +701,7 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": "https://provider.example.com",
             "path": "/translate",
             "http_method": "POST",
         },
@@ -723,9 +724,10 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
 
 
 @pytest.mark.asyncio
-async def test_put_endpoint_upstream_rejects_unsafe_private_target(
+async def test_put_endpoint_upstream_rejects_a_host_resolving_to_a_metadata_address(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
@@ -738,11 +740,13 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
         service_id=service_id,
     )
 
+    dns_resolver.addresses[TEST_UPSTREAM_HOST] = ["169.254.169.254"]
+
     response = await async_client.put(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://127.0.0.1:9000",
+            "base_url": f"https://{TEST_UPSTREAM_HOST}",
             "path": "/translate",
             "http_method": "POST",
         },
@@ -753,7 +757,7 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
         "type": "/problems/invalid_input",
         "title": "Invalid input",
         "status": 422,
-        "detail": "upstream target is not allowed",
+        "detail": f"upstream host {TEST_UPSTREAM_HOST} must resolve, and only to public addresses",
     }
 
 
@@ -777,7 +781,7 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": "https://provider.example.com",
             "path": "translate",
             "http_method": "POST",
         },
@@ -807,7 +811,7 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": "https://provider.example.com",
             "path": "/translate",
             "http_method": "GET",
         },
@@ -885,7 +889,7 @@ async def test_suspended_service_mutations_return_conflict(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": "https://provider.example.com",
             "path": "/translate",
             "http_method": "POST",
         },

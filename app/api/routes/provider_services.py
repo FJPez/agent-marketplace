@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Response, status
 
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
+from app.api.deps.dns import DnsResolverDep
 from app.api.deps.settings import SettingsDep
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -331,6 +332,8 @@ async def update_provider_endpoint(
     description=(
         "Creates or replaces the hidden upstream configuration for an owned endpoint. "
         "Upstream details are stored privately and are never exposed on public discovery routes. "
+        "The base URL must use https on port 443 with no credentials, query string or "
+        "fragment, and name a DNS host that resolves only to public addresses. "
         "The marketplace invokes upstreams by forwarding the invocation payload as a JSON "
         "request body and requires a JSON response, so the upstream must accept a "
         "body-bearing method (POST, PUT, or PATCH); GET-style APIs that read inputs from "
@@ -352,7 +355,7 @@ async def put_provider_endpoint_upstream(
                 "mock-upstream": {
                     "summary": "Point the endpoint at the local mock upstream",
                     "value": {
-                        "base_url": "http://127.0.0.1:9000",
+                        "base_url": "https://provider.example.com",
                         "path": "/free-ping",
                         "http_method": "POST",
                     },
@@ -362,11 +365,11 @@ async def put_provider_endpoint_upstream(
     ],
     actor: CurrentActor,
     session: SessionDep,
-    settings: SettingsDep,
+    resolver: DnsResolverDep,
 ) -> Response:
     await provider_endpoints.upsert_upstream(
         session=session,
-        settings=settings,
+        resolver=resolver,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
         request=request,

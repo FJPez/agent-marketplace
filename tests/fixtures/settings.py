@@ -38,7 +38,7 @@ UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 def build_service_settings() -> Settings:
     """Settings for calling services directly.
 
-    The test env allows loopback upstreams; the treasury is passed explicitly rather
+    In the test env, whatever APP_ENV says; the treasury is passed explicitly rather
     than left to the session-wide APP_TREASURY_ADDRESS.
     """
     return Settings(

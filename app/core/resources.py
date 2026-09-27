@@ -11,9 +11,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import coredis
+import dns.asyncresolver
 
 from app.core.rate_limits_backend import RateLimitsBackend, create_rate_limits_backend
 from app.db.session import create_engine, create_session_factory
+from app.integrations.providers.dns import DnsPythonResolver, DnsResolver
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -31,6 +33,7 @@ class Resources:
     db_session_factory: async_sessionmaker[AsyncSession]
     redis_client: Redis[str] | None
     rate_limits_backend: RateLimitsBackend
+    dns_resolver: DnsResolver
 
 
 @asynccontextmanager
@@ -57,4 +60,6 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             db_session_factory=create_session_factory(db_engine),
             redis_client=redis_client,
             rate_limits_backend=create_rate_limits_backend(settings),
+            # Reads the system's nameservers; each lookup is capped at 5 s in all.
+            dns_resolver=DnsPythonResolver(dns.asyncresolver.Resolver()),
         )

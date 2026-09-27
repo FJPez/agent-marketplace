@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.pool import NullPool
+from tests.helpers.dns import TEST_UPSTREAM_ADDRESS, TEST_UPSTREAM_HOST, FakeResolver
 from tests.integration.db.support import (
     MIGRATION_DATABASE_SUFFIX,
     MigrationDatabase,
@@ -35,6 +36,7 @@ from tests.integration.db.support import (
     truncate_all_tables,
 )
 
+from app.api.deps.dns import get_dns_resolver
 from app.core.config import Settings, get_settings
 from app.db.session import create_session_factory
 from app.main import create_app
@@ -201,9 +203,22 @@ def migration_database(
 
 
 @pytest.fixture
-def app(use_dedicated_test_database: None, base_test_env: None) -> FastAPI:
+def dns_resolver() -> FakeResolver:
+    """The resolver of every test: the test upstream host resolves to a public address."""
+    return FakeResolver({TEST_UPSTREAM_HOST: [TEST_UPSTREAM_ADDRESS]})
+
+
+@pytest.fixture
+def app(
+    use_dedicated_test_database: None,
+    base_test_env: None,
+    dns_resolver: FakeResolver,
+) -> FastAPI:
     get_settings.cache_clear()
-    return create_app()
+    application = create_app()
+    # No API test resolves a real name.
+    application.dependency_overrides[get_dns_resolver] = lambda: dns_resolver
+    return application
 
 
 @pytest.fixture
