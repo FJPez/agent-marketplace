@@ -8,6 +8,8 @@ from tests.fixtures.settings import TEST_JWT_SECRET_KEY, TEST_TREASURY_ADDRESS
 
 from app.core.config import AppEnv, Settings, get_settings
 
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -362,27 +364,77 @@ def test_settings_checksum_the_treasury_address(
 
 
 @pytest.mark.parametrize(
-    "env_overrides",
+    ("env_overrides", "match"),
     [
-        pytest.param({"APP_TREASURY_ADDRESS": "0x1234"}, id="treasury-too-short"),
+        pytest.param(
+            {"APP_TREASURY_ADDRESS": "0x1234"}, "treasury_address", id="treasury-too-short"
+        ),
         pytest.param(
             {"APP_TREASURY_ADDRESS": "0xABCDEFabcdefabcdefabcdefabcdefabcdefabcd"},
+            "treasury_address",
             id="treasury-bad-checksum",
         ),
-        pytest.param({"APP_PAYMENT_ASSET": "usdc"}, id="asset-not-an-address"),
-        pytest.param({"APP_PAYMENT_NETWORK": "base-sepolia"}, id="network-not-caip2"),
-        pytest.param({"APP_PAYMENT_NETWORK": "solana:devnet"}, id="network-not-evm"),
-        pytest.param({"APP_MIN_PRICE_AMOUNT": "0"}, id="min-price-zero"),
-        pytest.param({"APP_PLATFORM_FEE_BPS": "-1"}, id="fee-negative"),
-        pytest.param({"APP_PLATFORM_FEE_BPS": "10001"}, id="fee-above-100-percent"),
-        pytest.param({"APP_PAYMENT_MAX_TIMEOUT_SECONDS": "0"}, id="max-timeout-zero"),
+        pytest.param(
+            {"APP_TREASURY_ADDRESS": ZERO_ADDRESS},
+            "treasury_address",
+            id="treasury-zero-address",
+        ),
+        pytest.param({"APP_PAYMENT_ASSET": "usdc"}, "payment_asset", id="asset-not-an-address"),
+        pytest.param({"APP_PAYMENT_ASSET": ZERO_ADDRESS}, "payment_asset", id="asset-zero-address"),
+        pytest.param(
+            {"APP_PAYMENT_NETWORK": "base-sepolia"},
+            "payment_network",
+            id="network-not-caip2",
+        ),
+        pytest.param(
+            {"APP_PAYMENT_NETWORK": "solana:devnet"},
+            "payment_network",
+            id="network-not-evm",
+        ),
+        pytest.param(
+            {"APP_PAYMENT_NETWORK": "eip155:1" + "0" * 32},
+            "payment_network",
+            id="network-reference-over-32-digits",
+        ),
+        pytest.param({"APP_MIN_PRICE_AMOUNT": "0"}, "min_price_amount", id="min-price-zero"),
+        pytest.param({"APP_PLATFORM_FEE_BPS": "-1"}, "platform_fee_bps", id="fee-negative"),
+        pytest.param(
+            {"APP_PLATFORM_FEE_BPS": "10001"},
+            "platform_fee_bps",
+            id="fee-above-100-percent",
+        ),
+        pytest.param(
+            {"APP_PAYMENT_MAX_TIMEOUT_SECONDS": "0"},
+            "payment_max_timeout_seconds",
+            id="max-timeout-zero",
+        ),
+        pytest.param(
+            {"APP_PAYMENT_MAX_TIMEOUT_SECONDS": "3601"},
+            "payment_max_timeout_seconds",
+            id="max-timeout-over-one-hour",
+        ),
     ],
 )
 def test_settings_reject_invalid_payment_terms(
     env_overrides: dict[str, str],
+    match: str,
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
     settings_env_factory(env=env_overrides)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=match):
         Settings()
+
+
+def test_settings_accept_payment_terms_at_their_upper_bounds(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    network = "eip155:1" + "0" * 31
+    settings_env_factory(
+        env={"APP_PAYMENT_NETWORK": network, "APP_PAYMENT_MAX_TIMEOUT_SECONDS": "3600"},
+    )
+
+    settings = Settings()
+
+    assert settings.payment_network == network
+    assert settings.payment_max_timeout_seconds == 3600
