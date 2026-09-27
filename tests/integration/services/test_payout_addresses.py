@@ -5,7 +5,7 @@ import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
 from eth_account.signers.local import LocalAccount
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import create_provider_account_record
@@ -14,6 +14,7 @@ from tests.fixtures.settings import build_service_settings
 from app.core.config import Settings
 from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.core.security import verify_siwe_signature
+from app.db.models import Account as AccountModel
 from app.db.models import PayoutAddress, PayoutAddressChallenge
 from app.services import payout_addresses
 
@@ -434,6 +435,37 @@ async def test_a_recorded_proof_cannot_be_updated(
     held = await _effective(db_session_factory, account_id, at=proven.verified_at)
     effective = await _effective(db_session_factory, account_id, at=proven.effective_at)
     assert (held, effective) == (None, proven.address)
+
+
+async def test_a_recorded_proof_cannot_be_deleted(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    first = await _prove_address(db_session_factory, account_id, Account.create())
+    second = await _prove_address(db_session_factory, account_id, Account.create())
+
+    # Deleting the pending proof would hand payouts back to the first address at once.
+    with pytest.raises(DBAPIError, match="payout_addresses rows are deleted only with"):
+        async with db_session_factory.begin() as session:
+            await session.execute(delete(PayoutAddress).where(PayoutAddress.id == second.id))
+
+    held = await _effective(db_session_factory, account_id, at=first.effective_at)
+    assert (held, await _count_payout_addresses(db_session_factory)) == (None, 2)
+
+
+async def test_deleting_an_account_deletes_its_payout_addresses_and_challenge(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    await _prove_address(db_session_factory, account_id, Account.create())
+    await _request(db_session_factory, account_id, Account.create())
+
+    async with db_session_factory.begin() as session:
+        await session.execute(delete(AccountModel).where(AccountModel.id == account_id))
+
+    async with db_session_factory() as session:
+        challenge = await session.get(PayoutAddressChallenge, account_id)
+    assert (await _count_payout_addresses(db_session_factory), challenge) == (0, None)
 
 
 async def test_no_payout_address_is_effective_before_one_is_proven(
