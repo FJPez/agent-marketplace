@@ -1,6 +1,7 @@
 from ipaddress import ip_address
 
 import pytest
+from pydantic import HttpUrl
 from tests.helpers.dns import FakeResolver
 
 from app.integrations.providers.targets import (
@@ -44,6 +45,17 @@ async def test_a_valid_target_carries_its_host_and_every_address_to_pin() -> Non
         ("https://localhost/", "must be a DNS name"),
         (f"https://{HOST}./", "must be a DNS name"),
         ("https://under_score.provider.example/", "must be a DNS name"),
+        ("https://[v1.x]/", "must be a DNS name"),
+        ("https://[::1/", "must be a DNS name"),
+        (f"https://{HOST}]/", "must be a DNS name"),
+        (f" https://{HOST}/", "must be printable ASCII"),
+        (f"https://{HOST}/a b", "must be printable ASCII"),
+        ("https://api.provider\n.example/", "must be printable ASCII"),
+        (f"https://{HOST}/\t", "must be printable ASCII"),
+        (f"https://{HOST}/\x7f", "must be printable ASCII"),
+        (f"https://{HOST}\uff03@evil.example/", "must be printable ASCII"),
+        (f"https://{HOST}\uff0fevil/", "must be printable ASCII"),
+        ("https://\u212aube.example.com/", "must be printable ASCII"),
     ],
     ids=[
         "http",
@@ -61,6 +73,17 @@ async def test_a_valid_target_carries_its_host_and_every_address_to_pin() -> Non
         "single_label",
         "trailing_dot",
         "underscore",
+        "bracketed_ipvfuture",
+        "unclosed_bracket",
+        "stray_bracket",
+        "leading_space",
+        "space",
+        "newline",
+        "tab",
+        "delete",
+        "fullwidth_number_sign",
+        "fullwidth_solidus",
+        "kelvin_sign",
     ],
 )
 async def test_an_unsafe_url_is_rejected_before_any_lookup(base_url: str, reason: str) -> None:
@@ -71,11 +94,52 @@ async def test_an_unsafe_url_is_rejected_before_any_lookup(base_url: str, reason
             "localhost": [PUBLIC_IPV4],
             f"{HOST}.": [PUBLIC_IPV4],
             "under_score.provider.example": [PUBLIC_IPV4],
+            "v1.x": [PUBLIC_IPV4],
+            "kube.example.com": [PUBLIC_IPV4],
         },
     )
 
     with pytest.raises(UnsafeUpstreamTargetError, match=reason):
         await resolve_upstream_target(base_url, resolver=resolver)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        f"HTTPS://{HOST}/v1",
+        f"https://{HOST.upper()}/v1",
+        f"https://{HOST}:443/v1",
+        f"https://{HOST}:0443/v1",
+        f"https://{HOST}:/v1",
+    ],
+    ids=["uppercase_scheme", "uppercase_host", "default_port", "zero_padded_port", "empty_port"],
+)
+async def test_an_accepted_url_is_returned_rebuilt_from_its_validated_parts(base_url: str) -> None:
+    resolver = FakeResolver({HOST: [PUBLIC_IPV4]})
+
+    target = await resolve_upstream_target(base_url, resolver=resolver)
+
+    assert (target.base_url, target.host) == (f"https://{HOST}/v1", HOST)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"https://{HOST}",
+        f"https://{HOST.upper()}:443/v1/",
+        f"https://{HOST}/a b/%7Ec/[x]",
+        "https://b\u00fccher.example/\u00e9",
+    ],
+    ids=["bare_host", "default_port", "path_to_encode", "unicode"],
+)
+async def test_a_url_normalised_by_http_url_is_returned_unchanged(url: str) -> None:
+    # The upsert compares the stored URL with the returned one to detect a no-op.
+    base_url = str(HttpUrl(url))
+    resolver = FakeResolver({HOST: [PUBLIC_IPV4], "xn--bcher-kva.example": [PUBLIC_IPV4]})
+
+    target = await resolve_upstream_target(base_url, resolver=resolver)
+
+    assert target.base_url == base_url
 
 
 @pytest.mark.parametrize(

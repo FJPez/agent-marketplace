@@ -18,6 +18,7 @@ _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 # so no IPv4 form (dotted, decimal or hex) and no single-label name such as localhost.
 _DNS_NAME = re.compile(rf"(?:{_LABEL}\.)+(?=[a-z]){_LABEL}")
 _DNS_NAME_MAX_LENGTH = 253
+_NOT_A_DNS_NAME = "upstream host must be a DNS name such as api.example.com, not an IP address"
 # NAT64's well-known prefix carries an IPv4 address in its low 32 bits.
 _NAT64 = IPv6Network("64:ff9b::/96")
 # Any other IPv6 address must be global unicast outside the special-purpose blocks
@@ -43,7 +44,22 @@ class UpstreamTarget:
 
 
 async def resolve_upstream_target(base_url: str, *, resolver: DnsResolver) -> UpstreamTarget:
-    parts = urlsplit(base_url)
+    """Validate `base_url` and resolve its host to the addresses to connect to.
+
+    The returned `base_url` is rebuilt from the validated scheme, host and path, so it
+    cannot name another host than the one checked.
+    """
+    # urlsplit drops tabs and newlines anywhere and spaces or controls in front, and
+    # reads some non-ASCII characters as ASCII ones, so it could split another URL than
+    # the one given.
+    if not (base_url.isascii() and base_url.isprintable()) or " " in base_url:
+        raise UnsafeUpstreamTargetError(
+            "upstream base_url must be printable ASCII without whitespace",
+        )
+    try:
+        parts = urlsplit(base_url)
+    except ValueError as exc:  # brackets that are unbalanced or enclose no IP address
+        raise UnsafeUpstreamTargetError(_NOT_A_DNS_NAME) from exc
     if parts.scheme != "https":
         raise UnsafeUpstreamTargetError("upstream base_url must use https")
     if "@" in parts.netloc:
@@ -59,12 +75,12 @@ async def resolve_upstream_target(base_url: str, *, resolver: DnsResolver) -> Up
     if not on_https_port:
         raise UnsafeUpstreamTargetError("upstream base_url must use the https port 443")
     host = parts.hostname or ""
-    if len(host) > _DNS_NAME_MAX_LENGTH or not _DNS_NAME.fullmatch(host):
-        raise UnsafeUpstreamTargetError(
-            "upstream host must be a DNS name such as api.example.com, not an IP address",
-        )
+    # hostname drops the brackets of an IP literal, which would let "[v1.x]" pass as the
+    # name v1.x; urlsplit accepts brackets only in pairs, so "[" finds every literal.
+    if "[" in parts.netloc or len(host) > _DNS_NAME_MAX_LENGTH or not _DNS_NAME.fullmatch(host):
+        raise UnsafeUpstreamTargetError(_NOT_A_DNS_NAME)
     return UpstreamTarget(
-        base_url=base_url,
+        base_url=f"https://{host}{parts.path}",
         host=host,
         addresses=await resolve_public_addresses(host, resolver=resolver),
     )
