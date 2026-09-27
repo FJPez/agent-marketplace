@@ -111,15 +111,26 @@ async def update_endpoint(
         name: value for name, value in supplied.items() if value != getattr(endpoint, name)
     }
 
-    current_amount = None if endpoint.current_price is None else endpoint.current_price.amount
+    current_price = endpoint.current_price
+    current_amount = None if current_price is None else current_price.amount
+    price_supplied = "price" in changes.model_fields_set
     if target_access_mode is AccessMode.FREE:
         # Switching to FREE drops the current price even when price was omitted.
         resulting_amount = None
-    elif "price" in changes.model_fields_set:
+    elif price_supplied:
         resulting_amount = None if changes.price is None else changes.price.amount
     else:
         resulting_amount = current_amount
-    price_changed = resulting_amount != current_amount
+    # Resending the current amount moves the listing onto the payment terms in
+    # force when they have changed since its version was created. Without a
+    # treasury no version can be created, so the resend stays a no-op; omitting
+    # the price never re-stamps it.
+    price_changed = resulting_amount != current_amount or (
+        price_supplied
+        and current_price is not None
+        and settings.treasury_address is not None
+        and not _is_on_current_terms(current_price, settings=settings)
+    )
 
     effective_changes: dict[str, object] = dict(column_changes)
     if price_changed:
@@ -268,14 +279,29 @@ def _new_price_version(*, settings: Settings, amount: int) -> ListingPrice:
         raise InvalidStateError(
             "paid prices are unavailable until APP_TREASURY_ADDRESS is configured",
         )
-    return ListingPrice(
-        amount=amount,
-        asset=settings.payment_asset,
-        network=settings.payment_network,
-        pay_to=settings.treasury_address,
-        max_timeout_seconds=settings.payment_max_timeout_seconds,
-        fee_bps=settings.platform_fee_bps,
+    return ListingPrice(amount=amount, **_current_payment_terms(settings))
+
+
+def _is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
+    """Whether `price` carries the payment terms a version created now would.
+
+    The amount is not compared. Without a treasury no version can be created, so
+    no version is on the current terms.
+    """
+    return all(
+        getattr(price, term) == value for term, value in _current_payment_terms(settings).items()
     )
+
+
+def _current_payment_terms(settings: Settings) -> dict[str, str | int | None]:
+    """The payment terms a new price version copies from the settings."""
+    return {
+        "asset": settings.payment_asset,
+        "network": settings.payment_network,
+        "pay_to": settings.treasury_address,
+        "max_timeout_seconds": settings.payment_max_timeout_seconds,
+        "fee_bps": settings.platform_fee_bps,
+    }
 
 
 async def _make_current_price(
