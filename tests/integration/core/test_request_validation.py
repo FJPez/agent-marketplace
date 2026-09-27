@@ -159,6 +159,10 @@ async def _all_reaped(pids: tuple[int, ...]) -> bool:
     return False
 
 
+def _read_lines(path: Path) -> list[str]:
+    return path.read_text().splitlines()
+
+
 def _address_space_limits(pid: int) -> list[str]:
     """A process's soft and hard address space limits, as Linux reports them."""
     limits = Path(f"/proc/{pid}/limits").read_text().splitlines()
@@ -382,6 +386,7 @@ async def test_an_oversized_body_is_refused_before_any_worker_starts(open_pool: 
 
 async def test_a_validation_past_the_deadline_is_refused_and_its_worker_replaced(
     open_pool: OpenPool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     pool = open_pool(workers=1, timeout_seconds=SHORT_DEADLINE_SECONDS)
     await validate_request_body(pool=pool, schema={}, body=b"{}")
@@ -391,6 +396,15 @@ async def test_a_validation_past_the_deadline_is_refused_and_its_worker_replaced
         await validate_request_body(pool=pool, schema=SLOW_SCHEMA, body=SLOW_BODY)
 
     assert refused.value.problem_type == "request_validation_timeout"
+    (record,) = [record for record in caplog.records if record.name == LOGGER]
+    assert (record.levelname, record.getMessage()) == (
+        "WARNING",
+        "request validation worker killed at its deadline",
+    )
+    assert (vars(record)["kind"], vars(record)["deadline_seconds"]) == (
+        "validate",
+        SHORT_DEADLINE_SECONDS,
+    )
     await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
     (replacement,) = pool.pids
     assert replacement != overrunning
@@ -417,6 +431,7 @@ async def test_a_body_that_ends_its_worker_is_refused_and_the_worker_replaced(
         "WARNING",
         "request validation worker exited",
     )
+    assert vars(record)["kind"] == "validate"
     assert vars(record)["exitcode"] < 0  # ended by a signal: SIGSEGV or SIGBUS
     await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
     assert pool.pids != (crashing,)
@@ -464,15 +479,50 @@ async def test_workers_that_cannot_start_make_the_pool_unavailable(
     monkeypatch.setattr(request_validation, "_WORKER_COMMAND", (sys.executable, "-c", "pass"))
     pool = open_pool()
 
-    with pytest.raises(UnavailableError, match=f"^{re.escape(UNAVAILABLE)}$"):
+    with pytest.raises(UnavailableError, match=f"^{re.escape(UNAVAILABLE)}$") as unavailable:
         await validate_request_body(pool=pool, schema={}, body=b"{}")
 
+    assert unavailable.value.headers == {"Retry-After": "1"}
     (record,) = [record for record in caplog.records if record.name == LOGGER]
     assert (record.levelname, record.getMessage()) == (
         "ERROR",
-        "request validation workers cannot start or read requests",
+        "request validation workers cannot start",
     )
+    assert "ended before it was ready" in vars(record)["cause"]
+    assert vars(record)["elapsed_seconds"] >= 0
     assert pool.pids == ()
+
+
+async def test_a_worker_that_does_not_start_in_time_is_not_retried(
+    open_pool: OpenPool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    starts = tmp_path / "starts"
+    monkeypatch.setattr(request_validation, "WORKER_START_TIMEOUT_SECONDS", 0.2)
+    # A worker that records its start, then never says it is ready.
+    monkeypatch.setattr(
+        request_validation,
+        "_WORKER_COMMAND",
+        (
+            sys.executable,
+            "-c",
+            f"open({str(starts)!r}, 'a').write('start\\n'); import time; time.sleep(60)",
+        ),
+    )
+
+    with pytest.raises(UnavailableError, match=f"^{re.escape(UNAVAILABLE)}$") as unavailable:
+        await validate_request_body(pool=open_pool(workers=1), schema={}, body=b"{}")
+
+    assert unavailable.value.headers == {"Retry-After": "1"}
+    assert _read_lines(starts) == ["start"]
+    (record,) = [record for record in caplog.records if record.name == LOGGER]
+    assert (record.levelname, record.getMessage()) == (
+        "ERROR",
+        "request validation workers cannot start",
+    )
+    assert vars(record)["cause"] == "no ready answer within 0.2 s"
 
 
 @pytest.mark.parametrize(
@@ -506,6 +556,44 @@ async def test_validations_run_in_parallel_up_to_the_number_of_workers(
             assert str(result) == TIME_LIMIT
 
 
+async def test_callers_turned_away_as_busy_are_logged_at_most_once_per_interval(
+    open_pool: OpenPool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The first call holds the only worker while it starts and then for the deadline;
+    # the others give up waiting for it after the deadline.
+    pool = open_pool(workers=1, timeout_seconds=SHORT_DEADLINE_SECONDS)
+
+    results = await asyncio.gather(
+        validate_request_body(pool=pool, schema=SLOW_SCHEMA, body=SLOW_BODY),
+        *(validate_request_body(pool=pool, schema={}, body=b"{}") for _ in range(3)),
+        return_exceptions=True,
+    )
+
+    assert [type(result) for result in results] == [InvalidInputError] + [UnavailableError] * 3
+    busy = [
+        record for record in caplog.records if record.getMessage() == "request validation is busy"
+    ]
+    assert [(record.levelname, vars(record)["kind"]) for record in busy] == [
+        ("WARNING", "validate")
+    ]
+
+
+async def test_closing_the_pool_while_a_worker_starts_fails_the_call_and_leaves_no_worker(
+    open_pool: OpenPool,
+) -> None:
+    pool = open_pool(workers=1)
+    call = asyncio.create_task(validate_request_body(pool=pool, schema={}, body=b"{}"))
+    await asyncio.sleep(0)  # the call has taken the worker's slot and is starting it
+
+    await pool.close()
+
+    with pytest.raises(UnavailableError, match=f"^{re.escape(CLOSING)}$") as unavailable:
+        await call
+    assert unavailable.value.headers == {"Retry-After": "1"}
+    assert pool.pids == ()
+
+
 async def test_closing_the_pool_fails_running_and_waiting_calls_at_once(
     open_pool: OpenPool,
 ) -> None:
@@ -521,8 +609,9 @@ async def test_closing_the_pool_fails_running_and_waiting_calls_at_once(
 
     # At once: they would otherwise wait out the 5 s deadline and fail differently.
     for call in (running, waiting):
-        with pytest.raises(UnavailableError, match=f"^{re.escape(CLOSING)}$"):
+        with pytest.raises(UnavailableError, match=f"^{re.escape(CLOSING)}$") as unavailable:
             await call
+        assert unavailable.value.headers == {"Retry-After": "1"}
     with pytest.raises(UnavailableError, match=f"^{re.escape(CLOSING)}$"):
         await validate_request_body(pool=pool, schema={}, body=b"{}")
     assert pool.pids == ()
