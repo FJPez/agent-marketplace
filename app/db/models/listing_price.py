@@ -35,6 +35,9 @@ class ListingPrice(Base):
     __tablename__ = "listing_prices"
     __table_args__ = (
         UniqueConstraint("endpoint_id", "version", name=LISTING_PRICE_VERSION_CONSTRAINT),
+        # The target of ServiceEndpoint's current-price key, which scopes the
+        # pointer to the endpoint's own versions.
+        UniqueConstraint("endpoint_id", "id", name="uq_listing_prices_endpoint_id_id"),
         CheckConstraint("version > 0", name="positive_version"),
         CheckConstraint("amount > 0", name="positive_amount"),
         CheckConstraint("max_timeout_seconds > 0", name="positive_max_timeout_seconds"),

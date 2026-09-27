@@ -1,5 +1,5 @@
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -28,6 +28,28 @@ async def _create_endpoint(
         db_session_factory,
         service_id=service_id,
         access_mode=access_mode,
+    )
+
+
+async def _create_two_paid_endpoints(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> tuple[int, int]:
+    """Create two paid endpoints of one service, neither priced; return their ids."""
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(db_session_factory, provider_account_id=account_id)
+    return (
+        await create_endpoint_record(
+            db_session_factory,
+            service_id=service_id,
+            key="translate",
+            access_mode=AccessMode.PAID,
+        ),
+        await create_endpoint_record(
+            db_session_factory,
+            service_id=service_id,
+            key="summarize",
+            access_mode=AccessMode.PAID,
+        ),
     )
 
 
@@ -117,6 +139,53 @@ async def test_deleting_a_service_deletes_its_price_versions(
 
     async with db_session_factory.begin() as session:
         await session.execute(delete(Service))
+
+    async with db_session_factory() as session:
+        remaining = await session.scalar(select(func.count()).select_from(ListingPrice))
+
+    assert remaining == 0
+
+
+async def test_current_price_cannot_be_another_endpoints_version(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    endpoint_id, other_endpoint_id = await _create_two_paid_endpoints(db_session_factory)
+    price_id = await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    with pytest.raises(
+        IntegrityError,
+        match="fk_service_endpoints_id_current_price_id_listing_prices",
+    ):
+        async with db_session_factory.begin() as session:
+            await session.execute(
+                update(ServiceEndpoint)
+                .where(ServiceEndpoint.id == other_endpoint_id)
+                .values(current_price_id=price_id),
+            )
+
+
+async def test_current_price_may_be_the_endpoints_own_version_or_none(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    endpoint_id, unpriced_endpoint_id = await _create_two_paid_endpoints(db_session_factory)
+    price_id = await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+
+    async with db_session_factory() as session:
+        rows = await session.execute(select(ServiceEndpoint.id, ServiceEndpoint.current_price_id))
+        current_price_ids = {row.id: row.current_price_id for row in rows}
+
+    assert current_price_ids == {endpoint_id: price_id, unpriced_endpoint_id: None}
+
+
+async def test_deleting_an_endpoint_deletes_its_price_versions(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    endpoint_id = await _create_endpoint(db_session_factory)
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
+    await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id, version=2)
+
+    async with db_session_factory.begin() as session:
+        await session.execute(delete(ServiceEndpoint).where(ServiceEndpoint.id == endpoint_id))
 
     async with db_session_factory() as session:
         remaining = await session.scalar(select(func.count()).select_from(ListingPrice))

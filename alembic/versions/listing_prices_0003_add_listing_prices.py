@@ -57,17 +57,19 @@ def upgrade() -> None:
             "version",
             name="uq_listing_prices_endpoint_id_version",
         ),
+        sa.UniqueConstraint("endpoint_id", "id", name="uq_listing_prices_endpoint_id_id"),
     )
     op.add_column(
         "service_endpoints",
         sa.Column("current_price_id", sa.BigInteger(), nullable=True),
     )
+    # Composite, so an endpoint can only point at one of its own versions.
     op.create_foreign_key(
-        "fk_service_endpoints_current_price_id_listing_prices",
+        "fk_service_endpoints_id_current_price_id_listing_prices",
         "service_endpoints",
         "listing_prices",
-        ["current_price_id"],
-        ["id"],
+        ["id", "current_price_id"],
+        ["endpoint_id", "id"],
     )
     op.create_check_constraint(
         op.f("ck_service_endpoints_free_has_no_price"),
@@ -83,7 +85,7 @@ def downgrade() -> None:
         type_="check",
     )
     op.drop_constraint(
-        "fk_service_endpoints_current_price_id_listing_prices",
+        "fk_service_endpoints_id_current_price_id_listing_prices",
         "service_endpoints",
         type_="foreignkey",
     )

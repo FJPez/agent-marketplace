@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Integer,
     String,
@@ -59,6 +60,15 @@ class ServiceEndpoint(Base):
             "access_mode = 'paid' OR current_price_id IS NULL",
             name="free_has_no_price",
         ),
+        # The current price is one of this endpoint's own versions. A null
+        # current_price_id skips the check (MATCH SIMPLE). use_alter:
+        # listing_prices also references service_endpoints.
+        ForeignKeyConstraint(
+            ["id", "current_price_id"],
+            ["listing_prices.endpoint_id", "listing_prices.id"],
+            name="fk_service_endpoints_id_current_price_id_listing_prices",
+            use_alter=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -91,15 +101,7 @@ class ServiceEndpoint(Base):
     # Provider-declared: a request re-sent with the same Idempotency-Key is safe.
     supports_idempotency: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     is_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
-    current_price_id: Mapped[int | None] = mapped_column(
-        BigInteger,
-        # use_alter: listing_prices also references service_endpoints.
-        ForeignKey(
-            "listing_prices.id",
-            name="fk_service_endpoints_current_price_id_listing_prices",
-            use_alter=True,
-        ),
-    )
+    current_price_id: Mapped[int | None] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
@@ -116,4 +118,9 @@ class ServiceEndpoint(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    current_price: Mapped[ListingPrice | None] = relationship(foreign_keys=[current_price_id])
+    # The composite key above also names `id`, so the join and its foreign key
+    # are spelled out.
+    current_price: Mapped[ListingPrice | None] = relationship(
+        primaryjoin="ServiceEndpoint.current_price_id == ListingPrice.id",
+        foreign_keys=[current_price_id],
+    )
