@@ -11,8 +11,8 @@ class AtomicAmount(TypeDecorator[int]):
     """A token amount in the asset's atomic units (1 USDC = 1,000,000), as an exact int.
 
     Stored as NUMERIC(78,0), which holds any uint256. asyncpg reads NUMERIC as
-    Decimal; the conversion to int never goes through float. Amounts are signed
-    because ledger entries are (debit positive).
+    Decimal; the conversion to int never goes through float. Amounts are
+    signed: ledger entries carry a sign (debits positive).
     """
 
     impl = Numeric(78, 0)
