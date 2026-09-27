@@ -8,6 +8,7 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
+    create_signing_secret_record,
     create_upstream_record,
     read_price_versions,
 )
@@ -560,6 +561,7 @@ async def test_price_change_on_a_published_service_revises_and_keeps_the_old_rev
 ) -> None:
     account_id, endpoint_id = await _create_endpoint(db_session_factory, price_amount=250_000)
     await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
+    await create_signing_secret_record(db_session_factory, account_id=account_id)
     async with db_session_factory() as session:
         endpoint = await session.get(ServiceEndpoint, endpoint_id)
         assert endpoint is not None

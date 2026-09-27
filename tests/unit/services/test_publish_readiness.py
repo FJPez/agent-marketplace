@@ -3,7 +3,6 @@ from tests.fixtures.settings import TEST_PRICE_TERMS
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
-from app.core.json_types import JsonObject
 from app.db.models.listing_price import ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -50,13 +49,6 @@ def _build_endpoint(
             base_url="https://provider.internal",
             path="/translate",
             http_method="POST",
-            config={
-                "auth": {
-                    "type": "hmac_sha256",
-                    "key_id": "gateway-key",
-                    "secret": "super-secret",
-                },
-            },
         )
     endpoint.current_price = price
     return endpoint
@@ -69,7 +61,7 @@ def test_validate_service_for_publish_rejects_service_without_endpoints() -> Non
         InvalidInputError,
         match="service must define at least one endpoint before publish",
     ):
-        validate_service_for_publish(service)
+        validate_service_for_publish(service, has_signing_secret=True)
 
 
 def test_validate_service_for_publish_rejects_enabled_endpoint_without_upstream() -> None:
@@ -79,7 +71,7 @@ def test_validate_service_for_publish_rejects_enabled_endpoint_without_upstream(
         InvalidInputError,
         match="must define upstream before publish",
     ):
-        validate_service_for_publish(service)
+        validate_service_for_publish(service, has_signing_secret=True)
 
 
 def test_validate_service_for_publish_rejects_paid_endpoint_without_price() -> None:
@@ -89,7 +81,7 @@ def test_validate_service_for_publish_rejects_paid_endpoint_without_price() -> N
         InvalidInputError,
         match="must define a price before publish",
     ):
-        validate_service_for_publish(service)
+        validate_service_for_publish(service, has_signing_secret=True)
 
 
 def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price() -> None:
@@ -102,7 +94,7 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price
         ],
     )
 
-    validate_service_for_publish(service)
+    validate_service_for_publish(service, has_signing_secret=True)
 
 
 def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoints() -> None:
@@ -114,29 +106,21 @@ def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoin
         InvalidInputError,
         match="service must enable at least one endpoint before publish",
     ):
-        validate_service_for_publish(service)
+        validate_service_for_publish(service, has_signing_secret=True)
 
 
-@pytest.mark.parametrize(
-    "config",
-    [
-        {},
-        {"auth": "hmac_sha256"},
-        {"auth": {"type": "basic", "key_id": "gateway-key", "secret": "super-secret"}},
-        {"auth": {"type": "hmac_sha256", "key_id": 7, "secret": "super-secret"}},
-        {"auth": {"type": "hmac_sha256", "key_id": "gateway-key"}},
-    ],
-)
-def test_validate_service_for_publish_rejects_missing_or_incomplete_hmac_auth_config(
-    config: JsonObject,
-) -> None:
-    endpoint = _build_endpoint()
-    assert endpoint.upstream is not None
-    endpoint.upstream.config = config
-    service = _build_service(endpoints=[endpoint])
+def test_validate_service_for_publish_rejects_a_provider_without_a_signing_secret() -> None:
+    service = _build_service(endpoints=[_build_endpoint()])
 
     with pytest.raises(
         InvalidInputError,
-        match="must define hmac auth config before publish",
+        match="provider must create a signing secret before publish",
     ):
-        validate_service_for_publish(service)
+        validate_service_for_publish(service, has_signing_secret=False)
+
+
+def test_validate_service_for_publish_checks_endpoints_before_the_signing_secret() -> None:
+    service = _build_service(endpoints=[_build_endpoint(with_upstream=False)])
+
+    with pytest.raises(InvalidInputError, match="must define upstream before publish"):
+        validate_service_for_publish(service, has_signing_secret=False)

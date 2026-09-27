@@ -170,23 +170,14 @@ async def _insert_endpoint(
         ).scalar_one()
 
 
-async def _insert_provider_upstream_config(
-    db_engine: AsyncEngine,
-    *,
-    endpoint_id: int,
-    config: str,
-) -> None:
+async def _insert_upstream(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
             text(
-                """
-                INSERT INTO provider_upstreams (endpoint_id, base_url, path, http_method, config)
-                VALUES (
-                    :endpoint_id, 'http://127.0.0.1:9000', '/invoke', 'POST', CAST(:config AS jsonb)
-                )
-                """
+                "INSERT INTO provider_upstreams (endpoint_id, base_url, path, http_method) "
+                "VALUES (:endpoint_id, 'https://provider.example.com', '/invoke', 'POST')"
             ),
-            {"endpoint_id": endpoint_id, "config": config},
+            {"endpoint_id": endpoint_id},
         )
 
 
@@ -365,21 +356,6 @@ def test_head_migration_rejects_endpoint_timeout_outside_the_cap(
         )
 
 
-def test_head_migration_rejects_non_object_provider_upstream_config(
-    clean_database: None,
-    db_engine: AsyncEngine,
-) -> None:
-    service_id = asyncio.run(_seed_service(db_engine, slug="upstream-config-check"))
-    endpoint_id = asyncio.run(
-        _insert_endpoint(db_engine, service_id=service_id, key="upstream-config-check")
-    )
-
-    with pytest.raises(IntegrityError, match="ck_provider_upstreams_config_json_object"):
-        asyncio.run(
-            _insert_provider_upstream_config(db_engine, endpoint_id=endpoint_id, config="[1, 2]")
-        )
-
-
 def test_head_migration_requires_a_previous_signing_secret_to_expire(
     clean_database: None,
     db_engine: AsyncEngine,
@@ -455,6 +431,7 @@ def test_migrations_downgrade_cleanly_with_catalogue_rows(
         _insert_endpoint(engine, service_id=service_id, key="priced", access_mode="paid")
     )
     asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
+    asyncio.run(_insert_upstream(engine, endpoint_id=endpoint_id))
     asyncio.run(_insert_signing_secret(engine, service_id=service_id))
 
     try:

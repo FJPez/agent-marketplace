@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import InvalidInputError, InvalidStateError
+from app.db.models import ProviderSigningSecret
 from app.db.models.service import Service
 from app.services import moderation, revisions, service_access, service_health
 from app.services.moderation import ServiceUnavailableError
@@ -32,12 +33,14 @@ async def publish_service(
     except ServiceUnavailableError as exc:
         raise InvalidStateError(f"service is {exc.state.value}") from exc
 
+    has_signing_secret = await session.get(ProviderSigningSecret, account_id) is not None
+
     # Stamped after the lock wait and the gates so the timestamp reflects when the
     # row was actually mutated. One clock for the whole operation: the readiness
     # row and the service both carry this value.
     now = datetime.now(UTC)
     try:
-        validate_service_for_publish(service)
+        validate_service_for_publish(service, has_signing_secret=has_signing_secret)
     except InvalidInputError as exc:
         await service_health.record_check(
             session=session,

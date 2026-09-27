@@ -34,9 +34,6 @@ REQUEST_SCHEMA: JsonObject = {"type": "object", "properties": {"text": {"type": 
 RESPONSE_SCHEMA: JsonObject = {"type": "object", "properties": {"result": {"type": "string"}}}
 
 
-UPSTREAM_CONFIG: JsonObject = {"headers": {"x-api-key": "secret"}, "retries": 2}
-
-
 async def _create_draft_service(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
@@ -1000,7 +997,6 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
                 base_url=HttpUrl("http://127.0.0.1:9000"),
                 path="  /translate  ",
                 http_method="POST",
-                config=UPSTREAM_CONFIG,
             ),
         )
 
@@ -1011,7 +1007,6 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
     assert persisted.base_url == "http://127.0.0.1:9000/"
     assert persisted.path == "/translate"
     assert persisted.http_method == "POST"
-    assert persisted.config == UPSTREAM_CONFIG
 
 
 async def test_upsert_upstream_replaces_existing_row_in_place(
@@ -1036,7 +1031,6 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
                 base_url=HttpUrl("http://127.0.0.1:9000"),
                 path="/translate",
                 http_method="POST",
-                config=UPSTREAM_CONFIG,
             ),
         )
 
@@ -1055,7 +1049,6 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
                 base_url=HttpUrl("http://127.0.0.1:9100"),
                 path="/summarize",
                 http_method="PUT",
-                config={"headers": {}},
             ),
         )
 
@@ -1072,7 +1065,6 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
     assert persisted.base_url == "http://127.0.0.1:9100/"
     assert persisted.path == "/summarize"
     assert persisted.http_method == "PUT"
-    assert persisted.config == {"headers": {}}
     assert persisted.updated_at > first_updated_at
 
 
@@ -1093,7 +1085,6 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
         base_url="http://127.0.0.1:9000/",
         path="/translate",
         http_method="POST",
-        config=dict(UPSTREAM_CONFIG),
     )
 
     async with db_session_factory() as session:
@@ -1111,7 +1102,6 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
                 base_url=HttpUrl("http://127.0.0.1:9000"),
                 path=" /translate ",
                 http_method="POST",
-                config=UPSTREAM_CONFIG,
             ),
         )
 
@@ -1140,7 +1130,6 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
         base_url="http://127.0.0.1:9000/",
         path="/translate",
         http_method="POST",
-        config=dict(UPSTREAM_CONFIG),
     )
 
     async with db_session_factory() as session:
@@ -1153,7 +1142,6 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
                 base_url=HttpUrl("http://127.0.0.1:9000"),
                 path="/translate",
                 http_method="POST",
-                config=UPSTREAM_CONFIG,
             ),
         )
 
@@ -1182,7 +1170,6 @@ async def test_upsert_upstream_rejects_active_service(
                     base_url=HttpUrl("http://127.0.0.1:9000"),
                     path="/translate",
                     http_method="POST",
-                    config={},
                 ),
             )
 
@@ -1203,7 +1190,6 @@ async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
                     base_url=HttpUrl("http://127.0.0.1:9000"),
                     path="/translate",
                     http_method="POST",
-                    config={},
                 ),
             )
 
@@ -1232,7 +1218,6 @@ async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
                     base_url=HttpUrl("http://127.0.0.1:9000"),
                     path="/translate",
                     http_method="POST",
-                    config={},
                 ),
             )
 
@@ -1260,7 +1245,6 @@ async def test_upsert_upstream_rejects_unsafe_target(
                     base_url=HttpUrl("https://127.0.0.1:9000"),
                     path="/translate",
                     http_method="POST",
-                    config={},
                 ),
             )
 
@@ -1286,6 +1270,5 @@ async def test_upsert_upstream_validates_input_before_resolving_endpoint(
                     base_url=HttpUrl("https://127.0.0.1:9000"),
                     path="/translate",
                     http_method="POST",
-                    config={},
                 ),
             )

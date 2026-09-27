@@ -217,7 +217,6 @@ async def upsert_upstream(
         and upstream.base_url == validated_base_url
         and upstream.path == request.path
         and upstream.http_method == request.http_method
-        and upstream.config == request.config
     ):
         return
 
@@ -231,7 +230,6 @@ async def upsert_upstream(
             base_url=validated_base_url,
             path=request.path,
             http_method=request.http_method,
-            config=request.config,
         )
         session.add(upstream)
         endpoint.upstream = upstream
@@ -239,7 +237,6 @@ async def upsert_upstream(
         upstream.base_url = validated_base_url
         upstream.path = request.path
         upstream.http_method = request.http_method
-        upstream.config = request.config
         upstream.updated_at = now
 
     await session.commit()

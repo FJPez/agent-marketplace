@@ -11,6 +11,7 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
+    create_signing_secret_record,
     create_upstream_record,
     read_price_versions,
 )
@@ -188,6 +189,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
         access_mode=AccessMode.FREE,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_signing_secret_record(db_session_factory, account_id=provider_account_id)
 
     publish_has_lock = asyncio.Event()
     mutation_lookup_started = asyncio.Event()
@@ -295,6 +297,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
         access_mode=AccessMode.FREE,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_signing_secret_record(db_session_factory, account_id=provider_account_id)
 
     # Publish pauses between recording its readiness verdict and flipping the
     # lifecycle - the window in which it used to have already committed and

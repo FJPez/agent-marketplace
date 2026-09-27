@@ -10,6 +10,7 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
+    create_signing_secret_record,
     create_upstream_record,
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS
@@ -345,7 +346,6 @@ async def test_get_provider_service_hides_upstream_fields_in_endpoint_payload(
     assert "base_url" not in endpoint
     assert "path" not in endpoint
     assert "http_method" not in endpoint
-    assert "config" not in endpoint
 
 
 @pytest.mark.asyncio
@@ -703,7 +703,6 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
             "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -721,7 +720,6 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
     assert "base_url" not in endpoint
     assert "path" not in endpoint
     assert "http_method" not in endpoint
-    assert "config" not in endpoint
 
 
 @pytest.mark.asyncio
@@ -747,7 +745,6 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
             "base_url": "https://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -783,7 +780,6 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
             "base_url": "http://127.0.0.1:9000",
             "path": "translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -814,7 +810,6 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
             "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "GET",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -893,7 +888,6 @@ async def test_suspended_service_mutations_return_conflict(
             "base_url": "http://127.0.0.1:9000",
             "path": "/translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -1224,6 +1218,7 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
         service_id=service_id,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_signing_secret_record(db_session_factory, account_id=account_id)
 
     response = await async_client.post(
         f"/v1/provider/services/{service_id}/publish",
@@ -1269,6 +1264,7 @@ async def test_publish_service_replaces_stale_failed_publish_readiness_with_fres
         service_id=service_id,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_signing_secret_record(db_session_factory, account_id=account_id)
     await _seed_health_check(
         db_session_factory,
         service_id=service_id,
@@ -1320,6 +1316,7 @@ async def test_publish_succeeds_with_passing_health_check(
         key="healthy-ep",
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_signing_secret_record(db_session_factory, account_id=account_id)
     await _seed_health_check(
         db_session_factory,
         service_id=service_id,

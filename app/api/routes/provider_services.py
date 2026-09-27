@@ -355,13 +355,6 @@ async def put_provider_endpoint_upstream(
                         "base_url": "http://127.0.0.1:9000",
                         "path": "/free-ping",
                         "http_method": "POST",
-                        "config": {
-                            "auth": {
-                                "type": "hmac_sha256",
-                                "key_id": "demo-key",
-                                "secret": "demo-secret",
-                            }
-                        },
                     },
                 }
             }

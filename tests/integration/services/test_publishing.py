@@ -5,6 +5,7 @@ from tests.fixtures.domain import (
     create_endpoint_record,
     create_provider_account_record,
     create_service_record,
+    create_signing_secret_record,
     create_upstream_record,
 )
 
@@ -23,6 +24,7 @@ async def _seed_publishable_service(
     slug: str,
     access_mode: AccessMode = AccessMode.FREE,
     with_upstream: bool = True,
+    with_signing_secret: bool = True,
 ) -> int:
     service_id = await create_service_record(
         db_session_factory,
@@ -37,6 +39,8 @@ async def _seed_publishable_service(
     )
     if with_upstream:
         await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
+    if with_signing_secret:
+        await create_signing_secret_record(db_session_factory, account_id=provider_account_id)
     return service_id
 
 
@@ -188,6 +192,7 @@ async def test_publish_service_adds_pass_check_beside_earlier_failed_attempt(
         db_session_factory,
         service_id=service_id,
     )
+    await create_signing_secret_record(db_session_factory, account_id=provider_account_id)
 
     async with db_session_factory() as session:
         with pytest.raises(InvalidInputError):
@@ -216,3 +221,35 @@ async def test_publish_service_adds_pass_check_beside_earlier_failed_attempt(
         ServiceHealthStatus.PASS,
         ServiceHealthStatus.FAIL,
     ]
+
+
+async def test_publish_without_a_signing_secret_records_a_failed_readiness_check(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="unsigned-service",
+        with_signing_secret=False,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(
+            InvalidInputError,
+            match="provider must create a signing secret before publish",
+        ):
+            await publishing.publish_service(
+                session=session,
+                account_id=provider_account_id,
+                service_id=service_id,
+            )
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+        checks = await _health_checks(session, service_id=service_id)
+
+    assert service is not None
+    assert service.lifecycle is ServiceLifecycle.DRAFT
+    assert [check.status for check in checks] == [ServiceHealthStatus.FAIL]
+    assert checks[0].summary == "provider must create a signing secret before publish"
