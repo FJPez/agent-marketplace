@@ -123,7 +123,8 @@ async def test_drop_stale_test_databases_keeps_a_database_that_is_in_use(
 
         await drop_stale_test_databases(base_database_url)
 
-    assert await _database_exists(base_database_url, name)
+        # Checked while the connection is still open, so no other run can drop it first.
+        assert await _database_exists(base_database_url, name)
 
 
 async def test_drop_stale_test_databases_skips_a_database_it_cannot_drop(
@@ -132,7 +133,9 @@ async def test_drop_stale_test_databases_skips_a_database_it_cannot_drop(
 ) -> None:
     # A disabled logical replication subscription makes DROP DATABASE fail with
     # ObjectInUse while nobody is connected, as the reclaim's DROP does when someone
-    # connects after it has listed the unused databases.
+    # connects after it has listed the unused databases. If this test is killed before
+    # its `finally`, nothing can drop the database until someone connects to it and runs
+    # `DROP SUBSCRIPTION blocks_drop`; the reclaim skips it meanwhile.
     with _running_process() as pid:
         name = await create_database(f"{{base}}_test_local_{pid}")
         async with _connect(base_database_url, name) as connection:
