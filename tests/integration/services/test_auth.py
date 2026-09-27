@@ -523,8 +523,8 @@ async def test_resolve_actor_api_key_path_no_touch_leaves_last_used_none(
 @pytest.mark.parametrize(
     ("last_used_age", "touched"),
     [
-        pytest.param(timedelta(seconds=59), False, id="within_interval"),
-        pytest.param(timedelta(seconds=60), True, id="after_interval"),
+        pytest.param(timedelta(seconds=60), False, id="within_interval"),
+        pytest.param(timedelta(seconds=3600), True, id="after_interval"),
     ],
 )
 async def test_resolve_actor_touches_an_api_key_at_most_once_per_interval(
@@ -532,7 +532,7 @@ async def test_resolve_actor_touches_an_api_key_at_most_once_per_interval(
     last_used_age: timedelta,
     touched: bool,
 ) -> None:
-    settings = _auth_settings().model_copy(update={"api_key_touch_interval": 60})
+    settings = _auth_settings().model_copy(update={"api_key_touch_interval": 3600})
     account_id = await create_account(db_session_factory, display_name="Alpha")
     raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
     last_used_at = datetime.now(UTC) - last_used_age
@@ -546,8 +546,11 @@ async def test_resolve_actor_touches_an_api_key_at_most_once_per_interval(
         )
 
     stored = await _stored_last_used_at(db_session_factory, account_id)
-    assert stored is not None
-    assert (stored > last_used_at) is touched
+    if touched:
+        assert stored is not None
+        assert stored > last_used_at
+    else:
+        assert stored == last_used_at
 
 
 async def test_resolve_actor_does_not_overwrite_a_concurrent_touch(
