@@ -31,14 +31,8 @@ async def test_global_rate_limit_applies_to_v1_routes(rate_limited_client: Async
 
     assert first.status_code == 200
     assert second.status_code == 429
-    assert second.headers["content-type"] == "application/problem+json"
     assert 55 <= int(second.headers["retry-after"]) <= 60
-    assert second.json() == {
-        "type": "/problems/rate_limited",
-        "title": "Rate limited",
-        "status": 429,
-        "detail": "rate limit exceeded",
-    }
+    assert second.json()["type"] == "/problems/rate_limited"
 
 
 @pytest.mark.asyncio

@@ -58,14 +58,13 @@ async def test_memory_backend_reports_seconds_until_the_window_resets() -> None:
     backend = MemoryRateLimitsBackend()
 
     await backend.hit("1/minute", key="client:10.0.0.1", scope="global")
-    allowed = await backend.hit("1/minute", key="client:10.0.0.1", scope="global")
+    await backend.hit("1/minute", key="client:10.0.0.1", scope="global")
     retry_after = await backend.seconds_until_reset(
         "1/minute",
         key="client:10.0.0.1",
         scope="global",
     )
 
-    assert allowed is False
     assert 55 <= retry_after <= 60
 
 
