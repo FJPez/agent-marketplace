@@ -20,7 +20,12 @@ depends_on: Sequence[str] | None = None
 
 def upgrade() -> None:
     # The per-endpoint config held provider-chosen plaintext HMAC secrets, replaced by
-    # the marketplace-issued provider_signing_secrets. Its check constraint goes with it.
+    # the marketplace-issued provider_signing_secrets.
+    op.drop_constraint(
+        op.f("ck_provider_upstreams_config_json_object"),
+        "provider_upstreams",
+        type_="check",
+    )
     op.drop_column("provider_upstreams", "config")
 
 
