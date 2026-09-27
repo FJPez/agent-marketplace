@@ -66,6 +66,10 @@ class InvalidStateError(ApplicationError):
     """Operation is not valid for the entity's current lifecycle state; translates to HTTP 409."""
 
 
+class UnavailableError(ApplicationError):
+    """The server cannot handle the request now; translates to HTTP 503."""
+
+
 class UpstreamError(ApplicationError):
     """The upstream provider call failed; translates to HTTP 502."""
 

@@ -21,6 +21,7 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UnavailableError,
     UpstreamError,
     UpstreamTimeoutError,
 )
@@ -46,6 +47,7 @@ PROBLEM_MAPPINGS: dict[type[Exception], ProblemMapping] = {
     InvalidInputError: ProblemMapping(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_input"),
     UpstreamError: ProblemMapping(status.HTTP_502_BAD_GATEWAY, "upstream_error"),
     ReadinessCheckError: ProblemMapping(status.HTTP_503_SERVICE_UNAVAILABLE, "not_ready"),
+    UnavailableError: ProblemMapping(status.HTTP_503_SERVICE_UNAVAILABLE, "unavailable"),
     UpstreamTimeoutError: ProblemMapping(status.HTTP_504_GATEWAY_TIMEOUT, "upstream_timeout"),
 }
 

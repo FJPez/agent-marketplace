@@ -11,6 +11,7 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UnavailableError,
     UpstreamError,
     UpstreamTimeoutError,
 )
@@ -67,6 +68,12 @@ class ChildNotFoundError(NotFoundError):
             status.HTTP_504_GATEWAY_TIMEOUT,
             "/problems/upstream_timeout",
             "Upstream timeout",
+        ),
+        (
+            UnavailableError("boom"),
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "/problems/unavailable",
+            "Unavailable",
         ),
         (
             ReadinessCheckError("boom"),
