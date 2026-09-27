@@ -264,7 +264,7 @@ def test_endpoint_requests_check_the_request_schema(
     model: type[BaseModel],
     payload: dict[str, object],
 ) -> None:
-    with pytest.raises(ValidationError, match=r"Pointer '/\$defs/text' does not exist"):
+    with pytest.raises(ValidationError, match=r'\$ref "#/\$defs/text" must be a "#" fragment'):
         model.model_validate({**payload, "request_schema": {"$ref": "#/$defs/text"}})
 
 

@@ -191,12 +191,26 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `POST /v1/provider/domain-verification` returns. A new or changed record can take
   minutes to be visible, longer after a failed check because resolvers cache the
   miss (negative caching), so publish again once it is.
-- An endpoint's `request_schema` is checked when it is saved. It must be a JSON
-  Schema of draft 2020-12 (a `$schema`, if given, must name that draft), nest at
-  most 32 levels and take at most 32768 bytes as compact JSON. Every `$ref` must
-  resolve inside the schema itself: the marketplace never fetches a remote schema.
-  Patterns must suit a linear-time regex engine, so lookaround and backreferences
-  are refused. `format` is an annotation only, as the draft specifies by default.
+- An endpoint's `request_schema` is checked when it is saved, so that validating a
+  request body against it has a bounded cost: the validator holds the Python GIL.
+  It must be a JSON Schema of draft 2020-12 throughout (a `$schema`, in any
+  subschema, must name that draft), nest at most 32 levels and take at most 32768
+  bytes as compact JSON. `$id` may appear only at the root, and every `$ref` and
+  `$dynamicRef` must be a `#` fragment naming a subschema of the same schema: the
+  marketplace never fetches a remote schema. `unevaluatedProperties` and
+  `unevaluatedItems` are refused (use `additionalProperties` and `items`), and
+  `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else` and `dependentSchemas` nest
+  at most 8 deep on one value. For every value a request body can hold, the schema
+  may apply at most 32 subschemas to it (counting through `$ref`, so a recursive
+  `$ref` must not fan out), compare it with at most 4 numbers (each number in
+  `const` or `enum`, and each fractional bound or `multipleOf`) and 256 other
+  `const`, `enum` or dependency entries (an `enum` of strings counts once), and
+  match it, or each of its keys, against at most one pattern. A schema has at most
+  64 patterns, each compiled by a linear-time engine within 10 KiB: lookaround and
+  backreferences are refused, and so are patterns that compile larger, such as
+  `\p{L}+` or `[A-Za-z0-9+/]{0,256}`. Numbers must be integers of magnitude at most
+  2^53 - 1, or decimals that are 0 or of magnitude 1e-05 to 1e15. `format` is an
+  annotation only, as the draft specifies by default.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

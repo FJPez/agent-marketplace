@@ -217,10 +217,8 @@ async def test_create_endpoint_with_a_remote_ref_request_schema_is_an_invalid_in
     assert [(error["loc"], error["msg"]) for error in body["errors"]] == [
         (
             ["body", "request_schema"],
-            "Value error, request_schema is not a valid JSON Schema: Resource "
-            "'https://schemas.example.com/text.json' is not present in a registry and "
-            "retrieving it failed: Retrieval is disabled, cannot fetch "
-            "https://schemas.example.com/text.json",
+            'Value error, request_schema $ref "https://schemas.example.com/text.json" must '
+            'be a "#" fragment naming a subschema of this schema at /properties/text/$ref',
         ),
     ]
 
