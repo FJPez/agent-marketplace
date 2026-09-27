@@ -90,13 +90,9 @@ class _ExplodingMapping(Mapping[str, str]):
 
 
 @pytest.fixture
-def app_logger() -> Iterator[logging.Logger]:
-    """The `app` logger, with its handlers and level restored after the test."""
-    logger = logging.getLogger("app")
-    handlers, level = logger.handlers[:], logger.level
-    yield logger
-    logger.handlers = handlers
-    logger.setLevel(level)
+def app_logger() -> logging.Logger:
+    # tests/conftest.py restores its configuration after each test.
+    return logging.getLogger("app")
 
 
 def _json_lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import NamedTuple
 
 from alembic.config import Config
+from asyncpg.exceptions import ObjectInUseError
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, OperationalError
@@ -154,8 +155,7 @@ def _is_running(pid: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # The process exists but belongs to another user.
-        return True
+        pass  # The process exists but belongs to another user.
     return True
 
 
@@ -165,12 +165,14 @@ async def drop_stale_test_databases(database_url: str) -> None:
     A killed run (SIGTERM from a timeout, SIGKILL, a crashed xdist worker) never reaches
     the teardown that drops its databases, and the next run never reuses them because
     their names end in the creating process's id. A database is dropped only when its
-    name is one this harness creates for `database_url`, the process in that name no
-    longer exists on this host, and nobody is connected to it.
+    name is one this harness creates for `database_url`, no process with the id in that
+    name exists on this host, and nobody is connected to it. A database whose DROP still
+    finds it in use is kept. If an unrelated process has since taken the id, the database
+    stays until a later run finds the id free.
     """
     harness_name = re.compile(
-        rf"{re.escape(get_database_name(database_url))}{TEST_DATABASE_SUFFIX}"
-        rf"_(?:local|gw\d+)_(?P<pid>\d+)(?:{MIGRATION_DATABASE_SUFFIX})?",
+        rf"{re.escape(get_database_name(database_url))}{re.escape(TEST_DATABASE_SUFFIX)}"
+        rf"_(?:local|gw\d+)_(?P<pid>\d+)(?:{re.escape(MIGRATION_DATABASE_SUFFIX)})?",
     )
     async with admin_connection(database_url) as connection:
         unused_names = await connection.scalars(
@@ -181,5 +183,11 @@ async def drop_stale_test_databases(database_url: str) -> None:
         )
         for name in unused_names.all():
             match = harness_name.fullmatch(name)
-            if match is not None and not _is_running(int(match["pid"])):
+            if match is None or _is_running(int(match["pid"])):
+                continue
+            try:
                 await connection.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+            except DBAPIError as exc:
+                # Someone connected after the SELECT above: the database is in use after all.
+                if not isinstance(getattr(exc.orig, "__cause__", None), ObjectInUseError):
+                    raise
