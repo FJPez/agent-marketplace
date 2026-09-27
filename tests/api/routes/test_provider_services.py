@@ -185,6 +185,47 @@ async def test_create_paid_endpoint_returns_its_first_price_version(
 
 
 @pytest.mark.asyncio
+async def test_create_endpoint_with_a_remote_ref_request_schema_is_an_invalid_input_problem(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="schema-service",
+    )
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/endpoints",
+        headers=_auth_headers(account_id),
+        json={
+            "key": "translate",
+            "name": "Translate",
+            "access_mode": "free",
+            "request_schema": {
+                "properties": {"text": {"$ref": "https://schemas.example.com/text.json"}},
+            },
+            "response_schema": {"type": "object"},
+            "timeout_seconds": 20,
+        },
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["type"] == "/problems/invalid_input"
+    assert [(error["loc"], error["msg"]) for error in body["errors"]] == [
+        (
+            ["body", "request_schema"],
+            "Value error, request_schema is not a valid JSON Schema: Resource "
+            "'https://schemas.example.com/text.json' is not present in a registry and "
+            "retrieving it failed: Retrieval is disabled, cannot fetch "
+            "https://schemas.example.com/text.json",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_provider_service_routes_require_bearer_token(
     async_client: AsyncClient,
 ) -> None:

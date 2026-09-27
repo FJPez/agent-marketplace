@@ -144,7 +144,9 @@ database created before then cannot be upgraded. The migration that replaces the
 USD-cent `endpoint_prices` with `listing_prices` refuses to run while
 `endpoint_prices` still holds rows (for example from an earlier `make seed`),
 because a cent price has no asset, network or treasury to become a price version.
-In either case, drop and recreate the database:
+The migration that starts checking request schemas refuses to run while an
+endpoint stores a request schema the invoke path cannot compile. In any of these
+cases, drop and recreate the database:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"
@@ -189,6 +191,12 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `POST /v1/provider/domain-verification` returns. A new or changed record can take
   minutes to be visible, longer after a failed check because resolvers cache the
   miss (negative caching), so publish again once it is.
+- An endpoint's `request_schema` is checked when it is saved. It must be a JSON
+  Schema of draft 2020-12 (a `$schema`, if given, must name that draft), nest at
+  most 32 levels and take at most 32768 bytes as compact JSON. Every `$ref` must
+  resolve inside the schema itself: the marketplace never fetches a remote schema.
+  Patterns must suit a linear-time regex engine, so lookaround and backreferences
+  are refused. `format` is an annotation only, as the draft specifies by default.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

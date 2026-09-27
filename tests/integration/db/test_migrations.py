@@ -550,3 +550,39 @@ def test_dropping_endpoint_prices_refuses_to_discard_stored_cent_prices(
     finally:
         command.downgrade(config, "base")
         command.upgrade(config, "head")
+
+
+def test_request_schema_check_refuses_stored_schemas_the_invoke_path_cannot_compile(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "provider_domain_tokens_0007")
+    try:
+        service_id = asyncio.run(_seed_service(engine, slug="stored-schemas"))
+        asyncio.run(
+            _insert_endpoint(
+                engine,
+                service_id=service_id,
+                key="compilable",
+                request_schema='{"type": "object"}',
+            )
+        )
+        remote_ref_id = asyncio.run(
+            _insert_endpoint(
+                engine,
+                service_id=service_id,
+                key="remote-ref",
+                request_schema='{"$ref": "https://schemas.example.com/input.json"}',
+            )
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=rf"service endpoints \[{remote_ref_id}\] have request schemas",
+        ):
+            command.upgrade(config, "head")
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")

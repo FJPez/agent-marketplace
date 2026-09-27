@@ -3,6 +3,7 @@ from typing import Annotated, Literal, Self
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     HttpUrl,
@@ -17,6 +18,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
+from app.core.request_schema_validation import check_request_schema, check_request_schema_depth
 from app.core.service_fields import (
     DEFAULT_RESPONSE_CONTENT_TYPE,
     ENDPOINT_TIMEOUT_MAX_SECONDS,
@@ -69,6 +71,12 @@ Tag = Annotated[
     AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
+# The nesting is checked before the value is validated as a JSON object, the rest after.
+RequestSchema = Annotated[
+    JsonObject,
+    BeforeValidator(check_request_schema_depth),
+    AfterValidator(check_request_schema),
+]
 ResponseContentType = Annotated[str, AfterValidator(normalize_media_type)]
 TimeoutSeconds = Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
 
@@ -187,7 +195,7 @@ class EndpointCreateRequest(BaseModel):
     summary: Summary | None = None
     description: Description | None = None
     access_mode: AccessMode
-    request_schema: SchemaObject
+    request_schema: RequestSchema
     response_schema: SchemaObject
     response_content_type: ResponseContentType = DEFAULT_RESPONSE_CONTENT_TYPE
     timeout_seconds: TimeoutSeconds
@@ -232,7 +240,7 @@ class EndpointUpdateRequest(BaseModel):
     summary: Summary | None = None
     description: Description | None = None
     access_mode: AccessMode | SkipJsonSchema[None] = None
-    request_schema: SchemaObject | SkipJsonSchema[None] = None
+    request_schema: RequestSchema | SkipJsonSchema[None] = None
     response_schema: SchemaObject | SkipJsonSchema[None] = None
     response_content_type: ResponseContentType | SkipJsonSchema[None] = None
     timeout_seconds: TimeoutSeconds | SkipJsonSchema[None] = None

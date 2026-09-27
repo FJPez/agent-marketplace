@@ -25,7 +25,6 @@ from app.core.errors import (
     UpstreamTimeoutError,
 )
 from app.core.problems import problem_response
-from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.health_service import ReadinessCheckError
 
 Handler = Callable[[Request, Exception], Awaitable[Response]]
@@ -44,9 +43,6 @@ PROBLEM_MAPPINGS: dict[type[Exception], ProblemMapping] = {
     NotFoundError: ProblemMapping(status.HTTP_404_NOT_FOUND, "not_found"),
     ConflictError: ProblemMapping(status.HTTP_409_CONFLICT, "conflict"),
     InvalidStateError: ProblemMapping(status.HTTP_409_CONFLICT, "invalid_state"),
-    PayloadSchemaMismatchError: ProblemMapping(
-        status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_input"
-    ),
     InvalidInputError: ProblemMapping(status.HTTP_422_UNPROCESSABLE_CONTENT, "invalid_input"),
     UpstreamError: ProblemMapping(status.HTTP_502_BAD_GATEWAY, "upstream_error"),
     ReadinessCheckError: ProblemMapping(status.HTTP_503_SERVICE_UNAVAILABLE, "not_ready"),

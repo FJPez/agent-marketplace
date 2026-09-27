@@ -14,7 +14,6 @@ from app.core.errors import (
     UpstreamError,
     UpstreamTimeoutError,
 )
-from app.core.request_schema_validation import PayloadSchemaMismatchError
 from app.services.health_service import ReadinessCheckError
 
 
@@ -68,12 +67,6 @@ class ChildNotFoundError(NotFoundError):
             status.HTTP_504_GATEWAY_TIMEOUT,
             "/problems/upstream_timeout",
             "Upstream timeout",
-        ),
-        (
-            PayloadSchemaMismatchError("boom"),
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "/problems/invalid_input",
-            "Invalid input",
         ),
         (
             ReadinessCheckError("boom"),
