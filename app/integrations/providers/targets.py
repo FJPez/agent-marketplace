@@ -8,10 +8,13 @@ and a DNS answer that changes after validation cannot redirect the request.
 
 import re
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv6Network
+from ipaddress import IPv4Address, IPv6Address, IPv6Network
 from urllib.parse import urlsplit
 
+from app.core.logging import get_logger
 from app.integrations.providers.dns import DnsLookupError, DnsResolver, IpAddress
+
+logger = get_logger(__name__)
 
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 # Two or more labels, the last starting with a letter as every top-level domain does,
@@ -87,14 +90,25 @@ async def resolve_upstream_target(base_url: str, *, resolver: DnsResolver) -> Up
 
 
 async def resolve_public_addresses(host: str, *, resolver: DnsResolver) -> tuple[IpAddress, ...]:
-    """Every address of `host`, provided there is one and all of them are public."""
+    """The addresses to connect to for `host`, provided it has one and all are public.
+
+    Each address appears once, in the resolver's order, and an IPv4-mapped address as
+    the IPv4 address it maps.
+    """
     try:
         addresses = await resolver.resolve_addresses(host)
     except DnsLookupError as exc:
+        # The provider only learns the host did not resolve; operators see why.
+        logger.warning("upstream host lookup failed", extra={"host": host}, exc_info=exc)
         raise _not_public(host) from exc
     if not addresses or not all(_is_public(address) for address in addresses):
         raise _not_public(host)
-    return tuple(addresses)
+    return tuple(
+        dict.fromkeys(
+            (address.ipv4_mapped or address) if isinstance(address, IPv6Address) else address
+            for address in addresses
+        ),
+    )
 
 
 def _not_public(host: str) -> UnsafeUpstreamTargetError:

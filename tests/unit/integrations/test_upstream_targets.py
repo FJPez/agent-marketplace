@@ -1,3 +1,4 @@
+import logging
 from ipaddress import ip_address
 
 import pytest
@@ -225,16 +226,30 @@ async def test_a_host_with_any_non_public_address_is_rejected(address: str) -> N
 
 
 @pytest.mark.parametrize(
-    "address",
-    ["::ffff:93.184.215.14", "64:ff9b::5db8:d70e", "2606:4700::5efe:5db8:d70e"],
+    ("address", "pinned"),
+    [
+        (f"::ffff:{PUBLIC_IPV4}", PUBLIC_IPV4),
+        ("64:ff9b::5db8:d70e", "64:ff9b::5db8:d70e"),
+        ("2606:4700::5efe:5db8:d70e", "2606:4700::5efe:5db8:d70e"),
+    ],
     ids=["ipv4_mapped", "nat64", "isatap"],
 )
-async def test_ipv6_forms_of_a_public_ipv4_address_are_accepted(address: str) -> None:
+async def test_ipv6_forms_of_a_public_ipv4_address_are_accepted(address: str, pinned: str) -> None:
     resolver = FakeResolver({HOST: [address]})
 
     target = await resolve_upstream_target(f"https://{HOST}/", resolver=resolver)
 
-    assert target.addresses == (ip_address(address),)
+    assert target.addresses == (ip_address(pinned),)
+
+
+async def test_the_addresses_to_pin_are_unmapped_and_deduplicated_in_resolver_order() -> None:
+    resolver = FakeResolver(
+        {HOST: [PUBLIC_IPV6, f"::ffff:{PUBLIC_IPV4}", PUBLIC_IPV4, PUBLIC_IPV6]}
+    )
+
+    target = await resolve_upstream_target(f"https://{HOST}/", resolver=resolver)
+
+    assert target.addresses == (ip_address(PUBLIC_IPV6), ip_address(PUBLIC_IPV4))
 
 
 @pytest.mark.parametrize(
@@ -245,3 +260,23 @@ async def test_ipv6_forms_of_a_public_ipv4_address_are_accepted(address: str) ->
 async def test_a_host_that_does_not_resolve_is_rejected(resolver: FakeResolver) -> None:
     with pytest.raises(UnsafeUpstreamTargetError, match="must resolve, and only to public"):
         await resolve_upstream_target(f"https://{HOST}/", resolver=resolver)
+
+
+async def test_a_failed_lookup_is_logged_for_operators_but_not_told_to_the_provider(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    resolver = FakeResolver(failing_names={HOST})
+
+    with (
+        caplog.at_level(logging.WARNING, logger="app.integrations.providers"),
+        pytest.raises(UnsafeUpstreamTargetError) as rejected,
+    ):
+        await resolve_upstream_target(f"https://{HOST}/", resolver=resolver)
+
+    assert str(rejected.value) == f"upstream host {HOST} must resolve, and only to public addresses"
+    (record,) = [
+        record for record in caplog.records if record.name.startswith("app.integrations.providers")
+    ]
+    assert (record.levelno, record.getMessage()) == (logging.WARNING, "upstream host lookup failed")
+    assert getattr(record, "host", None) == HOST
+    assert f"DnsLookupError: DNS lookup for {HOST} failed" in caplog.text
