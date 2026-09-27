@@ -255,8 +255,8 @@ async def _ensure_signing_secret(
 ) -> str:
     """Give the demo provider a signing secret if it lacks one; return its current secret.
 
-    Phase 1 signs every forwarded request with a provider's secret, so a demo listing
-    seeded without one would only fail after a consumer paid. Uses its own short
+    Every forwarded request is signed with the provider's secret, and a listing whose
+    provider has none cannot be loaded, so the demo listings need one. Uses its own short
     session rather than the caller's transaction, matching how
     `provider_signing_secrets` commits its own work. Raises InvalidStateError, naming
     APP_PROVIDER_SECRET_ENCRYPTION_KEYS, when that setting is not configured.
@@ -415,8 +415,8 @@ async def seed_demo_data() -> SeedResult:
             free_endpoint_id = free_endpoint.id
             paid_endpoint_id = paid_endpoint.id
 
-        # Its own short transaction, after the one above commits: phase 1 must sign
-        # every forward, so the demo listings need this before they can load.
+        # Its own short transaction, after the one above commits: the demo listings need
+        # a signing secret before they can load.
         provider_signing_secret = await _ensure_signing_secret(
             session_factory,
             settings=settings,

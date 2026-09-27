@@ -55,10 +55,6 @@ MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 PATTERN_SIZE_LIMIT = 10 * 1024
 PATTERN_DFA_SIZE_LIMIT = 64 * 1024
 
-_MISMATCH = "request body does not match the request schema"
-_NOT_JSON = "request body is not valid JSON"
-_NOT_FINITE = "request body holds a number that is not finite"
-_LONE_SURROGATE = "request body holds a string that is not valid Unicode (a lone surrogate)"
 _TOO_DEEP = f"request body must nest at most {REQUEST_BODY_MAX_DEPTH} levels"
 _PATTERN_RULE = (
     "is not supported: patterns must avoid lookaround and backreferences "
@@ -157,20 +153,23 @@ def body_refusal(schema_json: str, body: bytes) -> str | None:
     except RecursionError:
         return _TOO_DEEP
     except _NotFiniteError:
-        return _NOT_FINITE
+        return "request body holds a number that is not finite"
     except _RepeatedKeyError as exc:
         return f"request body repeats the key {_cut(json.dumps(exc.key))}"
     except ValueError:  # malformed, or an integer of over 4,300 digits
-        return _NOT_JSON
+        return "request body is not valid JSON"
     if _nests_deeper_than(instance, REQUEST_BODY_MAX_DEPTH):
         return _TOO_DEEP
     try:
         validator.validate(instance)
     except jsonschema_rs.ValidationError as exc:
         location = json_pointer(exc.instance_path) or "the root"
-        return f"{_MISMATCH}: {_cut(exc.message)} at {_cut(location)}"
+        return (
+            "request body does not match the request schema: "
+            f"{_cut(exc.message)} at {_cut(location)}"
+        )
     except UnicodeEncodeError:
-        return _LONE_SURROGATE
+        return "request body holds a string that is not valid Unicode (a lone surrogate)"
     return None
 
 

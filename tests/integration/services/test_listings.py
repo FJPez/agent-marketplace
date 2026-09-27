@@ -14,7 +14,7 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import build_service_settings
 from tests.helpers.dns import TEST_UPSTREAM_BASE_URL
-from tests.helpers.request_validation import IN_PROCESS_REQUEST_VALIDATION_POOL
+from tests.helpers.request_validation import INLINE_REQUEST_VALIDATION_POOL
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidStateError, NotFoundError
@@ -328,7 +328,7 @@ async def test_every_endpoint_discovery_lists_can_be_loaded(
             await provider_endpoints.update_endpoint(
                 session=session,
                 settings=build_service_settings(),
-                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
+                validation_pool=INLINE_REQUEST_VALIDATION_POOL,
                 account_id=seeded.provider_account_id,
                 endpoint_id=unfinished_id,
                 changes=EndpointUpdateRequest(is_enabled=True),

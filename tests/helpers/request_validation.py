@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.request_validation_worker import body_refusal, schema_refusal
 
 
-class InProcessRequestValidationPool:
+class InlineRequestValidationPool:
     """A RequestValidationPool that compiles and validates in the test's own process.
 
     It applies the workers' own checks, without their isolation or deadlines, so tests that
@@ -17,11 +17,11 @@ class InProcessRequestValidationPool:
         return body_refusal(schema_json, body)
 
 
-IN_PROCESS_REQUEST_VALIDATION_POOL = InProcessRequestValidationPool()
+INLINE_REQUEST_VALIDATION_POOL = InlineRequestValidationPool()
 
 
-class TransactionWatchingPool(InProcessRequestValidationPool):
-    """Answers as the in-process pool does and records `session.in_transaction()` at
+class TransactionWatchingPool(InlineRequestValidationPool):
+    """Answers as the inline pool does and records `session.in_transaction()` at
     every compile.
 
     Proves a save compiles its request schema with no transaction open on `session`, or

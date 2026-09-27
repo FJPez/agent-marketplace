@@ -362,12 +362,8 @@ def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
 
 
 class PriceTerms(Protocol):
-    """The payment-terms fields `is_on_current_terms` compares.
-
-    Satisfied by both the ORM `ListingPrice` and the catalogue loader's frozen
-    `listings.ListingPriceTerms`: phase 1 calls this with a listing it loaded, not one
-    it fetched itself.
-    """
+    """The payment-terms fields `is_on_current_terms` compares, satisfied by the ORM
+    `ListingPrice` and by the catalogue loader's `listings.ListingPriceTerms`."""
 
     asset: str
     network: str

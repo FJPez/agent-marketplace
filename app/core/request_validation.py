@@ -3,28 +3,12 @@
 jsonschema-rs holds the GIL, and what a provider's schema costs, to compile or on a
 consumer's body, is not bounded in advance. So both run in worker processes
 (`app.core.request_validation_worker`), each within a deadline: a worker that overruns is
-killed, and the API process only waits on the worker's pipes, without blocking its event
-loop, whether that loop is asyncio's or uvloop's. The API process never compiles a schema.
+killed, and the API process only waits on the worker's pipes, so its event loop never
+blocks, whether it is asyncio's or uvloop's. The API process never compiles a schema.
 
-The interface, with the pool as `Resources.request_validation_pool`:
-- `check_request_schema_compiles(pool=..., schema=...)`: the endpoint services call it when
-  a provider saves a request schema, after the request model's own checks. It raises
-  InvalidInputError (422, located at `request_schema`) when the schema does not compile,
-  or not within the compile deadline (`APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS`).
-- `validate_request_body(pool=..., schema=..., body=...)`: the invoke path calls it with
-  the stored schema and the raw request body, at most REQUEST_BODY_MAX_BYTES of it, within
-  the validation deadline (`APP_REQUEST_VALIDATION_TIMEOUT_MS`). It raises
-  InvalidInputError (422) when the body is refused: too large, not JSON, nested too deep,
-  or not matching the schema (naming the first error and where it is). The problem type
-  is `request_validation_timeout` when validating overruns the deadline, and
-  `request_validation_failed` when it ends the worker: both are the schema and body's
-  doing, and would recur.
-- Both raise UnavailableError (503) when no worker is free within the validation deadline
-  (with `Retry-After: 1`), when workers cannot start, and when the pool is closing.
-
-The compile deadline is at most half the validation deadline (Settings). So a stored
+The compile deadline is at most half the validation deadline (Settings), so a stored
 schema, which compiled within the compile deadline when it was saved, leaves a worker that
-must compile it afresh at least half the validation deadline to validate the body.
+must compile it afresh at least half the validation deadline for the body.
 """
 
 import asyncio
@@ -68,9 +52,6 @@ ANSWER_MAX_BYTES = 64 * 1024
 # Run as a module from the directory that holds the `app` package.
 _WORKER_COMMAND = (sys.executable, "-m", "app.core.request_validation_worker")
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_TOO_EXPENSIVE = "request_schema is too expensive to compile"
-_TIME_LIMIT = "the request body could not be validated within the time limit"
-_FAILED = "the request body could not be validated"
 _KINDS = {CHECK_SCHEMA: "compile", VALIDATE_BODY: "validate"}
 # Every 503 the pool raises is a passing condition: busy, starting or shutting down.
 _RETRY_AFTER = {"Retry-After": "1"}
@@ -119,7 +100,11 @@ class RequestValidationPool(Protocol):
         ...
 
     async def validate(self, schema_json: str, body: bytes) -> str | None:
-        """Why `body` does not match the schema `schema_json`, or None when it does."""
+        """Why `body` does not match the schema `schema_json`, or None when it does.
+
+        Raises InvalidInputError when validating overruns the deadline or ends the worker,
+        and UnavailableError when it cannot run now or the schema no longer compiles.
+        """
         ...
 
 
@@ -167,7 +152,7 @@ class ProcessRequestValidationPool:
         try:
             answer = await self._call(CHECK_SCHEMA, schema_json, b"", self._compile_timeout_seconds)
         except TimeoutError:
-            return _TOO_EXPENSIVE
+            return "request_schema is too expensive to compile"
         except _CrashedError:
             return "request_schema could not be compiled"
         finally:
@@ -180,10 +165,14 @@ class ProcessRequestValidationPool:
             answer = await self._call(VALIDATE_BODY, schema_json, body, self._timeout_seconds)
         except TimeoutError:
             raise InvalidInputError(
-                _TIME_LIMIT, problem_type="request_validation_timeout"
+                "the request body could not be validated within the time limit",
+                problem_type="request_validation_timeout",
             ) from None
         except _CrashedError:
-            raise InvalidInputError(_FAILED, problem_type="request_validation_failed") from None
+            raise InvalidInputError(
+                "the request body could not be validated",
+                problem_type="request_validation_failed",
+            ) from None
         if answer.outcome == UNCOMPILABLE_SCHEMA:
             # The save check compiled it, so the library or the database changed since:
             # the provider's listing is at fault, and stays so until the schema is saved
@@ -276,8 +265,10 @@ class ProcessRequestValidationPool:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 cwd=_PROJECT_ROOT,
-                # None of the API's environment (its secrets) reaches native code that
-                # runs on untrusted input.
+                # The API's environment (its secrets) is not handed to native code that
+                # runs on untrusted input. This is not isolation: the worker runs as the
+                # same user, so it could still read /proc/<API pid>/environ. A separate
+                # user or a seccomp filter is a follow-up (phase 7).
                 env={},
                 # Out of the terminal's process group, so that its Ctrl-C does not reach
                 # the worker: the pool stops it.
@@ -366,8 +357,11 @@ class ProcessRequestValidationPool:
 async def check_request_schema_compiles(*, pool: RequestValidationPool, schema: JsonObject) -> None:
     """Refuse a request schema being saved that does not compile within the deadline.
 
-    Raises the errors of the module docstring. A refusal is reported as the request
-    models report theirs, at `request_schema`.
+    The endpoint services call this after the request models' own checks. Raises
+    InvalidInputError (422), located at `request_schema` as the request models report
+    their own refusals, when the schema does not compile, or does not compile in time.
+    Raises UnavailableError (503, with `Retry-After`) when no worker is free within the
+    validation deadline, when workers cannot start, or when the pool is closing.
     """
     refusal = await pool.check_schema(_canonical(schema))
     if refusal is not None:
@@ -385,9 +379,17 @@ async def validate_request_body(
     schema: JsonObject,
     body: bytes,
 ) -> None:
-    """Validate a raw JSON request body against its endpoint's stored request schema.
+    """Validate a raw request body against its endpoint's stored request schema.
 
-    Raises the errors of the module docstring.
+    The invoke path calls this with the loaded listing's `request_schema` and the body's
+    bytes as received. Raises InvalidInputError (422) when the body is refused: larger than
+    REQUEST_BODY_MAX_BYTES, not UTF-8 JSON, nested too deep, or not matching the schema,
+    naming its first error and where it is. The problem type is
+    `request_validation_timeout` when validating overruns the deadline, and
+    `request_validation_failed` when it ends the worker: both are the schema and body's
+    doing, and would recur. Raises UnavailableError (503, with `Retry-After`) when no
+    worker is free within the deadline, when workers cannot start, when the pool is
+    closing, or, as `listing_unavailable`, when the stored schema no longer compiles.
     """
     if len(body) > REQUEST_BODY_MAX_BYTES:
         msg = f"request body must be at most {REQUEST_BODY_MAX_BYTES} bytes"
