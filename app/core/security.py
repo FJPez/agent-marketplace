@@ -10,7 +10,12 @@ from typing import TYPE_CHECKING
 import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from eth_utils import is_address, to_checksum_address
+from eth_utils import (
+    is_address,
+    is_checksum_address,
+    is_checksum_formatted_address,
+    to_checksum_address,
+)
 from jwt import InvalidTokenError
 
 if TYPE_CHECKING:
@@ -57,11 +62,20 @@ class ApiKeyMaterial:
     key_hash: str
 
 
-def normalize_wallet_address(wallet_address: str) -> str:
-    if not is_address(wallet_address):
-        msg = "invalid wallet address"
+def checksum_address(value: str) -> str:
+    """Return the EIP-55 form of an EVM address.
+
+    An all-lowercase or all-uppercase address carries no checksum and is accepted. A
+    mixed-case one must already be correctly checksummed: a wrong checksum means a
+    mistyped address, which would sign in, or be paid, as someone else.
+    """
+    if not is_address(value):
+        msg = "invalid EVM address"
         raise ValueError(msg)
-    return to_checksum_address(wallet_address)
+    if is_checksum_formatted_address(value) and not is_checksum_address(value):
+        msg = "address has an invalid EIP-55 checksum"
+        raise ValueError(msg)
+    return to_checksum_address(value)
 
 
 def create_jwt(
@@ -90,7 +104,7 @@ def encode_token(settings: Settings, payload: TokenPayload) -> str:
     return jwt.encode(
         {
             "sub": payload.subject,
-            "wallet": normalize_wallet_address(payload.wallet_address),
+            "wallet": checksum_address(payload.wallet_address),
             "tv": payload.token_version,
             "type": payload.token_type,
             "iat": int(datetime.now(UTC).timestamp()),
@@ -187,7 +201,7 @@ def parse_siwe_message(message: str) -> ParsedSiweMessage:
         raise ValueError(msg)
 
     domain = first_line[: -len(suffix)]
-    address = normalize_wallet_address(lines[1].strip())
+    address = checksum_address(lines[1].strip())
     fields: dict[str, str] = {}
     for line in lines[3:]:
         if not line:
@@ -248,7 +262,7 @@ def verify_siwe_signature(
         msg = "signature is not valid"
         raise ValueError(msg) from exc
 
-    if normalize_wallet_address(recovered_address) != parsed.address:
+    if checksum_address(recovered_address) != parsed.address:
         msg = "signature is not valid"
         raise ValueError(msg)
 

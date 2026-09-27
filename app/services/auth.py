@@ -12,12 +12,12 @@ from app.core.errors import PermissionDeniedError, UnauthenticatedError
 from app.core.security import (
     AuthTokenType,
     ParsedSiweMessage,
+    checksum_address,
     create_jwt,
     decode_jwt,
     decode_token,
     generate_nonce,
     hash_api_key,
-    normalize_wallet_address,
     verify_siwe_signature,
 )
 from app.db.models import Account, ApiKey
@@ -58,7 +58,7 @@ def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
 
 
 async def issue_nonce(*, session: AsyncSession, settings: Settings, wallet_address: str) -> str:
-    normalized_wallet = normalize_wallet_address(wallet_address)
+    normalized_wallet = checksum_address(wallet_address)
     account = await session.scalar(
         select(Account).where(Account.wallet_address == normalized_wallet),
     )

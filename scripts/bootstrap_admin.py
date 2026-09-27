@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import normalize_database_url
-from app.core.security import normalize_wallet_address
+from app.core.security import checksum_address
 from app.db.models import Account
 
 ADMIN_WALLET_ENV_VAR = "APP_BOOTSTRAP_ADMIN_WALLET"
@@ -28,7 +28,7 @@ def _get_required_env_var(env_name: str) -> str:
 
 def _normalize_admin_wallet(admin_wallet: str) -> str:
     try:
-        return normalize_wallet_address(admin_wallet)
+        return checksum_address(admin_wallet)
     except ValueError as exc:
         msg = f"{ADMIN_WALLET_ENV_VAR} is not a valid wallet address"
         raise BootstrapAdminError(msg) from exc

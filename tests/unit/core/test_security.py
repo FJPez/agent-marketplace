@@ -8,14 +8,18 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.core.security import (
     TokenPayload,
+    checksum_address,
     decode_token,
     encode_token,
     generate_api_key,
     hash_api_key,
-    normalize_wallet_address,
     parse_siwe_message,
     verify_siwe_signature,
 )
+
+# An address in its EIP-55 form, and the same address with one letter's case flipped.
+CHECKSUMMED_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+MISTYPED_ADDRESS = "0x036cbD53842c5426634e7929541eC2318f3dCF7e"
 
 
 def _settings() -> Settings:
@@ -25,12 +29,47 @@ def _settings() -> Settings:
     )
 
 
-def test_normalize_wallet_address_returns_checksum_address() -> None:
-    signer = Account.create()
+@pytest.mark.parametrize(
+    "address",
+    [CHECKSUMMED_ADDRESS.lower(), "0x" + CHECKSUMMED_ADDRESS[2:].upper(), CHECKSUMMED_ADDRESS],
+    ids=["lowercase", "uppercase", "checksummed"],
+)
+def test_checksum_address_returns_the_eip55_form(address: str) -> None:
+    assert checksum_address(address) == CHECKSUMMED_ADDRESS
 
-    normalized = normalize_wallet_address(signer.address.lower())
 
-    assert normalized == signer.address
+@pytest.mark.parametrize(
+    ("address", "message"),
+    [
+        (MISTYPED_ADDRESS, "address has an invalid EIP-55 checksum"),
+        ("0x1234", "invalid EVM address"),
+    ],
+    ids=["mistyped_checksum", "not_an_address"],
+)
+def test_checksum_address_rejects_what_is_not_a_well_typed_address(
+    address: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        checksum_address(address)
+
+
+def test_parse_siwe_message_rejects_an_address_with_a_mistyped_checksum() -> None:
+    message = "\n".join(
+        [
+            "testserver wants you to sign in with your Ethereum account:",
+            MISTYPED_ADDRESS,
+            "",
+            "URI: http://testserver",
+            "Version: 1",
+            "Chain ID: 1",
+            "Nonce: abc123",
+            "Issued At: 2026-03-16T12:00:00Z",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="address has an invalid EIP-55 checksum"):
+        parse_siwe_message(message)
 
 
 def test_encode_and_decode_token_round_trip() -> None:

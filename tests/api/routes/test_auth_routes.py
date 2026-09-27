@@ -264,6 +264,21 @@ async def test_create_api_key_rejects_past_expiration(async_client: AsyncClient)
 
 
 @pytest.mark.asyncio
+async def test_get_auth_nonce_rejects_an_address_with_a_mistyped_checksum(
+    async_client: AsyncClient,
+) -> None:
+    response = await async_client.get(
+        "/v1/auth/nonce",
+        params={"address": "0x036cbD53842c5426634e7929541eC2318f3dCF7e"},
+    )
+
+    assert response.status_code == 422
+    assert [(error["loc"], error["msg"]) for error in response.json()["errors"]] == [
+        (["query", "address"], "Value error, address has an invalid EIP-55 checksum"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_auth_nonce_rejects_invalid_wallet_address(async_client: AsyncClient) -> None:
     response = await async_client.get(
         "/v1/auth/nonce",
@@ -276,6 +291,6 @@ async def test_get_auth_nonce_rejects_invalid_wallet_address(async_client: Async
     matching_errors = [
         error
         for error in body["errors"]
-        if error["loc"][-1] == "address" and "invalid wallet address" in error["msg"]
+        if error["loc"][-1] == "address" and "invalid EVM address" in error["msg"]
     ]
     assert matching_errors

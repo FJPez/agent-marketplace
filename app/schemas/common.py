@@ -6,11 +6,11 @@ from pydantic import AfterValidator, AwareDatetime, BaseModel, Field, StringCons
 
 from app.core.json_types import JsonObject as CoreJsonObject
 from app.core.json_types import JsonValue as CoreJsonValue
-from app.core.security import normalize_wallet_address
+from app.core.security import checksum_address
 
 Id = Annotated[int, Field(strict=True, gt=0)]
 Timestamp = AwareDatetime
-WalletAddress = Annotated[str, AfterValidator(normalize_wallet_address)]
+WalletAddress = Annotated[str, AfterValidator(checksum_address)]
 DisplayName = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=255),

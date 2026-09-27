@@ -197,6 +197,9 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `POST /v1/provider/domain-verification` returns. A new or changed record can take
   minutes to be visible, longer after a failed check because resolvers cache the
   miss (negative caching), so publish again once it is.
+- Every EVM address the API takes, from a wallet in a SIWE message to the treasury
+  and asset settings, may be all lowercase, all uppercase or EIP-55 checksummed; a
+  mixed-case address with a wrong checksum is refused as mistyped.
 - An endpoint's `request_schema` is checked when it is saved. It must be a JSON
   Schema of draft 2020-12 throughout (a `$schema`, in any subschema, must name that
   draft), nest at most 32 levels, take at most 32768 bytes as compact JSON, and hold

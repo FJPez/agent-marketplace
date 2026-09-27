@@ -212,6 +212,6 @@ async def test_wallet_change_initiate_rejects_invalid_wallet_address(
     matching_errors = [
         error
         for error in body["errors"]
-        if error["loc"][-1] == "wallet_address" and "invalid wallet address" in error["msg"]
+        if error["loc"][-1] == "wallet_address" and "invalid EVM address" in error["msg"]
     ]
     assert matching_errors
