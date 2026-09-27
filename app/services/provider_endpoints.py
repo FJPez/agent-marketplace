@@ -34,7 +34,7 @@ async def create_endpoint(
     new_price = (
         None
         if request.price is None
-        else _new_price_version(settings=settings, amount=request.price.amount)
+        else build_price_version(settings=settings, amount=request.price.amount)
     )
     service = await service_access.lock_owned_service(
         session=session,
@@ -69,7 +69,7 @@ async def create_endpoint(
             raise
         raise ConflictError("endpoint key already exists for this service") from exc
     if new_price is not None:
-        await _make_current_price(session=session, endpoint=endpoint, price=new_price)
+        await put_price_on_sale(session=session, endpoint=endpoint, price=new_price)
     await session.commit()
     return endpoint
 
@@ -129,7 +129,7 @@ async def update_endpoint(
         price_supplied
         and current_price is not None
         and settings.treasury_address is not None
-        and not _is_on_current_terms(current_price, settings=settings)
+        and not is_on_current_terms(current_price, settings=settings)
     )
 
     effective_changes: dict[str, object] = dict(column_changes)
@@ -154,7 +154,7 @@ async def update_endpoint(
     new_price = (
         None
         if not price_changed or resulting_amount is None
-        else _new_price_version(settings=settings, amount=resulting_amount)
+        else build_price_version(settings=settings, amount=resulting_amount)
     )
 
     for attribute_name, value in column_changes.items():
@@ -164,7 +164,7 @@ async def update_endpoint(
     endpoint.updated_at = datetime.now(UTC)
 
     if new_price is not None:
-        await _make_current_price(session=session, endpoint=endpoint, price=new_price)
+        await put_price_on_sale(session=session, endpoint=endpoint, price=new_price)
     elif price_changed:
         # Earlier versions stay: purchases and revisions still refer to them.
         endpoint.current_price = None
@@ -264,10 +264,10 @@ async def _ensure_endpoint_update_allowed(
     raise InvalidStateError("service is not mutable outside draft")
 
 
-def _new_price_version(*, settings: Settings, amount: int) -> ListingPrice:
+def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
     """Check a provider's amount and build its price version on the current terms.
 
-    The version is not added to the session: `_make_current_price` numbers it and
+    The version is not added to the session: `put_price_on_sale` numbers it and
     attaches it to its endpoint once every other check has passed.
     """
     if amount < settings.min_price_amount:
@@ -282,7 +282,7 @@ def _new_price_version(*, settings: Settings, amount: int) -> ListingPrice:
     return ListingPrice(amount=amount, **_current_payment_terms(settings))
 
 
-def _is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
+def is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
     """Whether `price` carries the payment terms a version created now would.
 
     The amount is not compared. Without a treasury no version can be created, so
@@ -304,17 +304,17 @@ def _current_payment_terms(settings: Settings) -> dict[str, str | int | None]:
     }
 
 
-async def _make_current_price(
+async def put_price_on_sale(
     *,
     session: AsyncSession,
     endpoint: ServiceEndpoint,
     price: ListingPrice,
 ) -> None:
-    """Store `price` as the endpoint's next version and put it on sale.
+    """Store `price` as the endpoint's next version and make it the current price.
 
-    Callers hold the service row lock, so max + 1 is normally free; the unique
-    (endpoint_id, version) key turns a writer that skipped the lock into a
-    conflict instead of a silently reused version number.
+    The editing services hold the service row lock, so max + 1 is normally free;
+    the unique (endpoint_id, version) key turns a writer without it (the demo
+    seed) into a conflict instead of a silently reused version number.
     """
     latest_version = await session.scalar(
         select(func.max(ListingPrice.version)).where(ListingPrice.endpoint_id == endpoint.id),

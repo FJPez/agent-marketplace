@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from eth_account import Account as EthAccount
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.core.config import Settings, get_settings
 from app.core.enums import AccessMode, ServiceLifecycle
@@ -21,6 +21,7 @@ from app.db.models import (
     ServiceTag,
 )
 from app.db.session import create_engine, create_session_factory
+from app.services import provider_endpoints
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -236,31 +237,22 @@ async def _ensure_paid_price(
     settings: Settings,
     endpoint: ServiceEndpoint,
 ) -> ListingPrice:
-    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT, adding a version if needed."""
-    if settings.treasury_address is None:
-        raise RuntimeError("APP_TREASURY_ADDRESS is required to price the paid demo endpoint")
+    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT on the current payment terms.
+
+    A new version is added when the amount or any term differs. Without a treasury
+    the service refuses to build one (InvalidStateError).
+    """
     if endpoint.current_price_id is not None:
         current = await session.get(ListingPrice, endpoint.current_price_id)
-        if current is not None and current.amount == PAID_ENDPOINT_AMOUNT:
+        if (
+            current is not None
+            and current.amount == PAID_ENDPOINT_AMOUNT
+            and provider_endpoints.is_on_current_terms(current, settings=settings)
+        ):
             return current
 
-    latest_version = await session.scalar(
-        select(func.max(ListingPrice.version)).where(ListingPrice.endpoint_id == endpoint.id),
-    )
-    price = ListingPrice(
-        endpoint_id=endpoint.id,
-        version=(latest_version or 0) + 1,
-        amount=PAID_ENDPOINT_AMOUNT,
-        asset=settings.payment_asset,
-        network=settings.payment_network,
-        pay_to=settings.treasury_address,
-        max_timeout_seconds=settings.payment_max_timeout_seconds,
-        fee_bps=settings.platform_fee_bps,
-    )
-    session.add(price)
-    await session.flush()
-    endpoint.current_price_id = price.id
-    await session.flush()
+    price = provider_endpoints.build_price_version(settings=settings, amount=PAID_ENDPOINT_AMOUNT)
+    await provider_endpoints.put_price_on_sale(session=session, endpoint=endpoint, price=price)
     return price
 
 
