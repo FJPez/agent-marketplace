@@ -191,44 +191,17 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `POST /v1/provider/domain-verification` returns. A new or changed record can take
   minutes to be visible, longer after a failed check because resolvers cache the
   miss (negative caching), so publish again once it is.
-- An endpoint's `request_schema` is checked when it is saved, so that validating a
-  request body against it has a bounded cost: the validator holds the Python GIL.
-  It must be a JSON Schema of draft 2020-12 throughout (a `$schema`, in any
-  subschema, must name that draft), nest at most 32 levels and take at most 32768
-  bytes as compact JSON. `$id` may appear only at the root, and every `$ref` and
-  `$dynamicRef` must be a `#` fragment naming a subschema of the same schema: the
-  marketplace never fetches a remote schema. `unevaluatedProperties` and
-  `unevaluatedItems` are refused (use `additionalProperties` and `items`), and
-  `allOf`, `anyOf`, `oneOf`, `not`, `if`/`then`/`else` and `dependentSchemas` nest
-  at most 8 deep on one value. For every value a request body can hold, the schema
-  may apply at most 32 subschemas to it (counting through `$ref`, so a recursive
-  `$ref` must not fan out), compare it with at most 4 numbers (each number in
-  `const` or `enum`, and each bound or `multipleOf` written as a decimal, `3.0`
-  included; integer bounds are not counted) and 256 other `const`, `enum` or
-  dependency entries (an `enum` of strings counts once), and match it, or each of
-  its keys, against at most one pattern. A schema has at most 64 patterns, each
-  compiled by a linear-time engine within 10 KiB: a pattern that can apply to a
-  request body must avoid lookaround and backreferences and compile no larger, so
-  `\p{L}+` or `[A-Za-z0-9+/]{0,256}` are refused. The schema's numbers must be
-  integers of magnitude at most 2^53 - 1, or decimals that are 0 or of magnitude
-  1e-05 to 1e15. `format` is an annotation only, as the draft specifies by default.
-- The invoke path checks a request body against a budget derived from its
-  endpoint's request schema before validating it. Each value costs what the schema
-  can apply to it, estimated from costs measured on an Apple M2 (about 0.7 µs to walk
-  a value, 0.6 µs per subschema, 7.5 µs per number compared, 20 ns per entry, and
-  21 µs per `uniqueItems` above it, per level), and all values must fit 75 ms; there
-  are also at most 100000 values, nested at most 128 deep. So `{}` or a list of
-  numbers accepts 100000 values, while a schema at every per-value limit accepts
-  about 1,400. Numbers must be finite and integers at most 2^256 in magnitude; when
-  the schema compares numbers (numeric keywords, numbers in `const` or `enum`, or
-  `uniqueItems`), they must be in the schema's range above. When the schema has a
-  pattern, the body holds at most 65536 bytes of text. When the schema reaches no
-  `anyOf`, `oneOf` or pattern, a refused body names its first error and where it is;
-  otherwise it is only refused, because describing the error there costs
-  jsonschema-rs up to ten times more. The costliest validation measured is about
-  89 ms: one pattern scanning 65 KB, after an earlier body left its matcher in its
-  slow state (about 67 ms alone), plus 1,366 numbers each compared with 4 decimals
-  and 30 other subschemas.
+- An endpoint's `request_schema` is checked when it is saved. It must be a JSON
+  Schema of draft 2020-12 throughout (a `$schema`, in any subschema, must name that
+  draft), nest at most 32 levels, take at most 32768 bytes as compact JSON, and hold
+  only valid Unicode and finite numbers. `$id` may appear only at the root, an anchor
+  may be declared only once, and every `$ref` and `$dynamicRef` must be a `#` fragment
+  naming a subschema of the same schema: the marketplace never fetches a remote
+  schema. A schema has at most 64 patterns, each compiled by a linear-time engine
+  within 10 KiB, so compiling one stays cheap: a pattern that can apply to a request
+  body must avoid lookaround and backreferences and compile no larger, so `\p{L}+` or
+  `[A-Za-z0-9+/]{0,256}` are refused. `format` is an annotation only, as the draft
+  specifies by default. These rules do not bound what validating a body costs.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base
