@@ -206,14 +206,18 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
 - A request body is validated against its endpoint's `request_schema` in a worker
   process, because the validator (jsonschema-rs) holds the Python GIL and what a
   schema costs on a body is not known in advance. `APP_REQUEST_VALIDATION_WORKERS`
-  (default 2) workers start on the first validation. A validation must finish
-  within `APP_REQUEST_VALIDATION_TIMEOUT_MS` (default 250); otherwise its worker is
-  killed and replaced, and the body is refused. A body also waits at most that long
-  for a free worker. A body must be at most 1 MiB of JSON (`NaN` and `Infinity` are
-  not JSON) nested at most 128 levels, and a refused body names its first error and
-  where it is, each cut to 200 characters. Each worker keeps its 256 most recently
-  used compiled schemas and, on Linux, at most 512 MiB of address space (macOS does
-  not enforce that limit).
+  (default 2, at most 32) workers start on the first validation, each a fresh
+  interpreter with an empty environment. A validation must finish within
+  `APP_REQUEST_VALIDATION_TIMEOUT_MS` (default 250, at most 10000); otherwise its
+  worker is killed and the body is refused with 422 and the problem type
+  `request_validation_timeout`. A body that makes its worker exit (a stack overflow,
+  or, on Linux, the worker's 512 MiB address-space limit, which macOS does not
+  enforce) is refused with 422 and `request_validation_failed`. A body waits at most
+  the same deadline for a free worker, then gets 503 with `Retry-After: 1`; 503 also
+  means workers cannot start, or the API is shutting down. A body must be at most
+  1 MiB of JSON with finite numbers (not `NaN`, `Infinity` or `1e400`), nested at most
+  128 levels, and a refused body names its first error and where it is, each cut to
+  200 characters. Each worker keeps its 256 most recently used compiled schemas.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

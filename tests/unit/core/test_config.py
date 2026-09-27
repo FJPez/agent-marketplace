@@ -382,6 +382,28 @@ def test_settings_reject_non_positive_timeout_and_touch_interval_settings(
 
 
 @pytest.mark.parametrize(
+    "env_overrides",
+    [
+        pytest.param(
+            {"APP_REQUEST_VALIDATION_TIMEOUT_MS": "10001"},
+            id="request-validation-timeout-over-10-s",
+        ),
+        pytest.param(
+            {"APP_REQUEST_VALIDATION_WORKERS": "33"}, id="request-validation-workers-over-32"
+        ),
+    ],
+)
+def test_settings_bound_the_request_validation_pool(
+    env_overrides: dict[str, str],
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env=env_overrides)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+@pytest.mark.parametrize(
     "treasury_address",
     [
         "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",

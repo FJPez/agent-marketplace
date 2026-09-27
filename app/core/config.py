@@ -119,9 +119,10 @@ class Settings(BaseSettings):
     # How long a rotated-out signing secret keeps signing beside its replacement.
     provider_secret_grace_seconds: int = Field(default=86_400, gt=0)
     # Request bodies are validated in this many worker processes, each validation within
-    # this deadline (app/core/request_body_validation.py).
-    request_validation_timeout_ms: int = Field(default=250, gt=0)
-    request_validation_workers: int = Field(default=2, gt=0)
+    # this deadline (app/core/request_validation.py). A caller also waits at most the
+    # deadline for a free worker, and each worker takes about 25 to 200 MiB.
+    request_validation_timeout_ms: int = Field(default=250, gt=0, le=10_000)
+    request_validation_workers: int = Field(default=2, gt=0, le=32)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"

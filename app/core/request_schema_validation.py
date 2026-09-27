@@ -7,7 +7,7 @@ ever fetched), and that it compiles. Its patterns are compiled within PATTERN_SI
 bytes, at most REQUEST_SCHEMA_MAX_PATTERNS of them, so compiling a schema stays cheap.
 
 What validating a body costs is not bounded here: request bodies are validated in worker
-processes under a deadline (`app.core.request_body_validation`), which compile each schema
+processes under a deadline (`app.core.request_validation_worker`), which compile each schema
 with `compile_request_schema`, as the save check does.
 """
 
