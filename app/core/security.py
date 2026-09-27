@@ -96,7 +96,7 @@ def encode_token(settings: Settings, payload: TokenPayload) -> str:
             "iat": int(datetime.now(UTC).timestamp()),
             "exp": int(payload.expires_at.timestamp()),
         },
-        settings.jwt_secret_key,
+        settings.jwt_secret_key.get_secret_value(),
         algorithm="HS256",
     )
 
@@ -154,13 +154,13 @@ def decode_token(
 ) -> TokenPayload:
     claims = decode_jwt(
         token,
-        secret_key=settings.jwt_secret_key,
+        secret_key=settings.jwt_secret_key.get_secret_value(),
         expected_token_type=AuthTokenType(expected_type),
         now=now,
     )
     payload = jwt.decode(
         token,
-        settings.jwt_secret_key,
+        settings.jwt_secret_key.get_secret_value(),
         algorithms=["HS256"],
         options={"verify_exp": False, "verify_iat": False},
     )

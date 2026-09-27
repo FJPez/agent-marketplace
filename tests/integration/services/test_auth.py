@@ -5,6 +5,7 @@ import pytest
 from eth_account import Account as EthAccount
 from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
+from pydantic import SecretStr
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
@@ -26,7 +27,7 @@ pytestmark = [pytest.mark.asyncio]
 
 def _auth_settings() -> Settings:
     return Settings(
-        jwt_secret_key="test-secret-key-with-32-bytes-123",
+        jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
         siwe_domain="testserver",
         siwe_nonce_expiry=300,
     )
@@ -388,7 +389,7 @@ async def test_resolve_actor_jwt_path_unknown_account_raises_unauthenticated(
 ) -> None:
     settings = _auth_settings()
     token = create_jwt(
-        secret_key=settings.jwt_secret_key,
+        secret_key=settings.jwt_secret_key.get_secret_value(),
         account_id=999_999,
         wallet_address="0x" + "1" * 40,
         token_version=1,
@@ -417,7 +418,7 @@ async def test_resolve_actor_jwt_path_stale_token_version_raises_unauthenticated
     assert wallet_address is not None
 
     token = create_jwt(
-        secret_key=settings.jwt_secret_key,
+        secret_key=settings.jwt_secret_key.get_secret_value(),
         account_id=account_id,
         wallet_address=wallet_address,
         token_version=1,

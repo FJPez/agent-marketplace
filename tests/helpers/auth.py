@@ -47,7 +47,7 @@ async def auth_headers_for_account(
     assert account is not None
     assert account.wallet_address is not None
     token = create_jwt(
-        secret_key=get_settings().jwt_secret_key,
+        secret_key=get_settings().jwt_secret_key.get_secret_value(),
         account_id=account.id,
         wallet_address=account.wallet_address,
         token_version=account.token_version,
@@ -80,7 +80,7 @@ def auth_headers_for_account_id(
 ) -> dict[str, str]:
     settings = get_settings()
     token = create_jwt(
-        secret_key=settings.jwt_secret_key,
+        secret_key=settings.jwt_secret_key.get_secret_value(),
         account_id=account_id,
         wallet_address=wallet_address_for_index(account_id),
         token_version=token_version,

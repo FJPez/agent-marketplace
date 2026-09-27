@@ -2,6 +2,7 @@ import importlib
 import importlib.util
 
 import pytest
+from pydantic import SecretStr
 from starlette.requests import Request
 
 from app.core.config import Settings
@@ -90,7 +91,7 @@ def test_create_rate_limits_backend_defaults_to_memory_without_redis_url() -> No
 
     backend = backend_factory(
         Settings(
-            jwt_secret_key="test-secret-key-with-32-bytes-123",
+            jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
             redis_url=None,
         )
     )
@@ -108,7 +109,7 @@ def test_create_rate_limits_backend_supports_redis_backends() -> None:
 
     backend = backend_factory(
         Settings(
-            jwt_secret_key="test-secret-key-with-32-bytes-123",
+            jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
             redis_url="redis://localhost:6379/0",
         )
     )

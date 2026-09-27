@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     title: str = "Agent Marketplace Backend"
     debug: bool = False
     database_url: str = _DEFAULT_DATABASE_URL
-    jwt_secret_key: str = ""
+    jwt_secret_key: SecretStr = SecretStr("")
     jwt_access_token_expiry: int = 900
     jwt_refresh_token_expiry: int = 604800
     siwe_domain: str = _DEFAULT_SIWE_DOMAIN
@@ -175,7 +175,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":
         self.database_url = normalize_database_url(self.database_url)
-        if not self.jwt_secret_key:
+        if not self.jwt_secret_key.get_secret_value():
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
         if self.env in {AppEnv.PROD, AppEnv.STAGING}:

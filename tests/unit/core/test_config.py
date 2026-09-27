@@ -86,7 +86,7 @@ def test_settings_use_default_values(
     assert settings.env is AppEnv.DEV
     assert settings.title == "Agent Marketplace Backend"
     assert settings.debug is False
-    assert settings.jwt_secret_key == TEST_JWT_SECRET_KEY
+    assert settings.jwt_secret_key.get_secret_value() == TEST_JWT_SECRET_KEY
     assert settings.jwt_access_token_expiry == 900
     assert settings.jwt_refresh_token_expiry == 604800
     assert settings.siwe_domain == "testserver"
@@ -143,6 +143,19 @@ def test_settings_require_jwt_secret_key(
         Settings()
 
 
+def test_settings_keep_the_jwt_secret_key_out_of_their_repr_and_dump(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory()
+
+    settings = Settings()
+
+    assert settings.jwt_secret_key.get_secret_value() == TEST_JWT_SECRET_KEY
+    assert TEST_JWT_SECRET_KEY not in repr(settings)
+    assert TEST_JWT_SECRET_KEY not in str(settings.model_dump())
+    assert TEST_JWT_SECRET_KEY not in settings.model_dump_json()
+
+
 def test_get_settings_allow_environment_overrides(
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
@@ -176,7 +189,7 @@ def test_settings_load_local_dotenv_by_default(
 
     settings = Settings()
 
-    assert settings.jwt_secret_key == "dotenv-secret-key-with-32-bytes-minimum"
+    assert settings.jwt_secret_key.get_secret_value() == "dotenv-secret-key-with-32-bytes-minimum"
     assert settings.siwe_domain == "127.0.0.1"
 
 
@@ -200,7 +213,7 @@ def test_settings_environment_variables_override_local_dotenv(
 
     settings = Settings()
 
-    assert settings.jwt_secret_key == "env-secret-key-with-32-bytes-minimum"
+    assert settings.jwt_secret_key.get_secret_value() == "env-secret-key-with-32-bytes-minimum"
     assert settings.siwe_domain == "api.example.com"
 
 
@@ -230,7 +243,9 @@ def test_settings_use_app_env_file_instead_of_default_dotenv(
 
     settings = Settings()
 
-    assert settings.jwt_secret_key == "custom-dotenv-secret-key-with-32-bytes-okay"
+    assert (
+        settings.jwt_secret_key.get_secret_value() == "custom-dotenv-secret-key-with-32-bytes-okay"
+    )
     assert settings.siwe_domain == "custom.example.com"
 
 

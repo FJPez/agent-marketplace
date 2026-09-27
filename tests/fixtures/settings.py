@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
+from pydantic import SecretStr
 
 from app.core.config import Settings, get_settings
 from app.core.enums import AppEnv
@@ -43,7 +44,7 @@ def build_service_settings() -> Settings:
     """
     return Settings(
         env=AppEnv.TEST,
-        jwt_secret_key=TEST_JWT_SECRET_KEY,
+        jwt_secret_key=SecretStr(TEST_JWT_SECRET_KEY),
         treasury_address=TEST_TREASURY_ADDRESS,
     )
 
