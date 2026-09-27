@@ -10,7 +10,7 @@ from eth_account import Account as EthAccount
 from sqlalchemy import select
 
 from app.core.config import Settings, get_settings
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.db.models import (
     Account,
     ListingPrice,
@@ -348,8 +348,12 @@ async def _ensure_revision(
 
 
 async def seed_demo_data() -> SeedResult:
-    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     settings = get_settings()
+    # It creates a signing secret that main() prints, so never in a deployed environment.
+    if settings.env not in {AppEnv.DEV, AppEnv.TEST}:
+        msg = f"the demo seed runs only in dev and test, not {settings.env}"
+        raise RuntimeError(msg)
+    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     try:
