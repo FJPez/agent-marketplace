@@ -137,14 +137,17 @@ database created before then cannot be upgraded. The migration that replaces the
 USD-cent `endpoint_prices` with `listing_prices` refuses to run while
 `endpoint_prices` still holds rows (for example from an earlier `make seed`),
 because a cent price has no asset, network or treasury to become a price version.
-In either case, drop and recreate the database, then run `make seed` again if you
-use the demo data:
+In either case, drop and recreate the database:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"
 docker compose exec -T postgres psql -U postgres -c "CREATE DATABASE agent_marketplace"
 uv run alembic upgrade head
 ```
+
+To reload the demo data, set `APP_TREASURY_ADDRESS` (the paid demo endpoint's
+`pay_to`, in `.env` or the environment) and export `PROVIDER_PRIVATE_KEY` (the
+demo provider's wallet key), then run `make seed` again.
 
 ## Admin Bootstrap
 
