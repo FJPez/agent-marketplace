@@ -163,6 +163,44 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
             {"detail": "authorization=[REDACTED]"},
             id="header_in_extra_text",
         ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"headers": [("Authorization", f"Bearer {SECRET}"), ("Accept", "application/json")]},
+            {"headers": [["Authorization", "[REDACTED]"], ["Accept", "application/json"]]},
+            id="list_of_str_pairs_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {
+                "headers": (
+                    (b"authorization", f"Bearer {SECRET}".encode()),
+                    (b"accept", b"application/json"),
+                )
+            },
+            {
+                "headers": [
+                    ["b'authorization'", "[REDACTED]"],
+                    ["b'accept'", "b'application/json'"],
+                ]
+            },
+            id="tuple_of_bytes_pairs_in_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"authorization": f"Bearer {SECRET}"},
+            {"authorization": "[REDACTED]"},
+            id="flat_authorization_extra",
+        ),
+        pytest.param(
+            "forwarding",
+            (),
+            {"payment_signature": SECRET},
+            {"payment_signature": "[REDACTED]"},
+            id="flat_payment_signature_extra",
+        ),
     ],
 )
 def test_configure_logging_redacts_sensitive_header_values(
@@ -180,6 +218,23 @@ def test_configure_logging_redacts_sensitive_header_values(
     (entry,) = _json_lines(capsys)
     assert SECRET not in json.dumps(entry)
     assert expected.items() <= entry.items()
+
+
+def test_configure_logging_keeps_standard_fields_when_extra_uses_their_names(
+    app_logger: logging.Logger,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+
+    app_logger.getChild("tests").info(
+        "forwarding",
+        extra={"level": "CRITICAL", "logger": "evil", "time": "not-a-time"},
+    )
+
+    (entry,) = _json_lines(capsys)
+    assert entry["level"] == "INFO"
+    assert entry["logger"] == "app.tests"
+    assert datetime.fromisoformat(str(entry["time"])).tzinfo is not None
 
 
 def test_configure_logging_redacts_sensitive_header_values_in_exceptions(

@@ -62,23 +62,51 @@ def _redact_text(text: str) -> str:
     return _SENSITIVE_HEADER_IN_TEXT.sub(rf"\1\2{_REDACTED}", text)
 
 
+def _is_sensitive_header_name(name: object) -> bool:
+    """True if `name` is a sensitive header, as a str or bytes (decoded latin-1).
+
+    `-` and `_` are treated alike so `payment_signature` matches `PAYMENT-SIGNATURE`.
+    """
+    if isinstance(name, bytes):
+        try:
+            name = name.decode("latin-1")
+        except UnicodeDecodeError:
+            return False
+    if not isinstance(name, str):
+        return False
+    return name.lower().replace("_", "-") in _SENSITIVE_HEADERS
+
+
 def _redact(value: object) -> object:
     if isinstance(value, str):
         return _redact_text(value)
     if isinstance(value, Mapping):
         return {
-            key: _REDACTED if str(key).lower() in _SENSITIVE_HEADERS else _redact(item)
+            key: _REDACTED if _is_sensitive_header_name(key) else _redact(item)
             for key, item in value.items()
         }
+    if isinstance(value, (list, tuple)):
+        return type(value)(_redact_sequence_item(item) for item in value)
     return value
+
+
+def _redact_sequence_item(item: object) -> object:
+    # A `(name, value)` pair, as in `list(headers.items())` or `Headers.raw`.
+    if isinstance(item, list) and len(item) == 2 and _is_sensitive_header_name(item[0]):
+        return [item[0], _REDACTED]
+    if isinstance(item, tuple) and len(item) == 2 and _is_sensitive_header_name(item[0]):
+        return (item[0], _REDACTED)
+    return _redact(item)
 
 
 class RedactionFilter(logging.Filter):
     """Remove Authorization, Cookie, PAYMENT-SIGNATURE and X-PAYMENT values from a record.
 
-    Covers the rendered message, `extra` values (header mappings by key, strings by
-    pattern) and the exception text. The record is edited in place, so every handler
-    after this one, including the root logger's, sees only the redacted record.
+    Covers the rendered message, `extra` values (an `extra` field named after a
+    sensitive header, header mappings by key, `(name, value)` pairs in a list or
+    tuple, and strings by pattern) and the exception text. The record is edited in
+    place, so every handler after this one, including the root logger's, sees only
+    the redacted record.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -92,7 +120,8 @@ class RedactionFilter(logging.Filter):
         record.msg = _redact_text(message)
         record.args = ()
         for key in vars(record).keys() - _RECORD_ATTRIBUTES:
-            setattr(record, key, _redact(getattr(record, key)))
+            value = _REDACTED if _is_sensitive_header_name(key) else _redact(getattr(record, key))
+            setattr(record, key, value)
         if record.exc_info and not record.exc_text:
             # logging.Formatter reuses exc_text, so the traceback is rendered once, here.
             record.exc_text = logging.Formatter().formatException(record.exc_info)
@@ -117,9 +146,12 @@ class JsonFormatter(logging.Formatter):
         request_id = get_request_id()
         if request_id is not None:
             entry[REQUEST_ID_FIELD] = request_id
-        entry.update(
-            (key, value) for key, value in vars(record).items() if key not in _RECORD_ATTRIBUTES
-        )
+        for key, value in vars(record).items():
+            # The standard output members above win: an extra field cannot rename
+            # itself "level", "logger", "time" or "message" and overwrite them.
+            if key in _RECORD_ATTRIBUTES or key in entry:
+                continue
+            entry[key] = value
         if record.exc_text:
             entry["exception"] = record.exc_text
         return json.dumps(entry, default=str)
