@@ -7,14 +7,18 @@ its purpose, under a server-issued nonce that expires and can be used once, so n
 a login signature (EIP-191 text) nor a proof made for another account, address or
 network can pass for it. Every proof is kept, and the latest one on a network decides
 where payouts go, once its hold has ended.
+
+Challenges and proofs are timed by the database's clock, so skew between API hosts, or
+between an API host and the payout builder, cannot shorten a hold or stretch a
+challenge.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from eth_account import Account
 from eth_account.messages import encode_typed_data
 from eth_keys.exceptions import BadSignature
-from sqlalchemy import select
+from sqlalchemy import DateTime, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +27,10 @@ from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.core.security import canonical_signature, checksum_address, generate_nonce
 from app.db.models import PayoutAddress, PayoutAddressChallenge
+
+# The database's time when the statement starts. Not now(): that is when the
+# transaction started, which can be before a lock wait.
+_DATABASE_NOW = func.statement_timestamp(type_=DateTime(timezone=True))
 
 
 async def request_payout_address_challenge(
@@ -49,8 +57,7 @@ async def request_payout_address_challenge(
         "network": network,
         "address": checksummed,
         "nonce": generate_nonce(),
-        "expires_at": datetime.now(UTC)
-        + timedelta(seconds=settings.payout_address_challenge_seconds),
+        "expires_at": _DATABASE_NOW + timedelta(seconds=settings.payout_address_challenge_seconds),
     }
     challenge = (
         await session.execute(
@@ -121,7 +128,7 @@ async def prove_payout_address(
     )
     if challenge is None:
         raise InvalidStateError("no payout address challenge is pending; request one first")
-    now = datetime.now(UTC)
+    now = (await session.execute(select(_DATABASE_NOW))).scalar_one()
     if challenge.expires_at <= now:
         raise InvalidStateError("the payout address challenge has expired; request a new one")
     # A canonical signature can still carry an r or s that recovers no key.
@@ -174,16 +181,22 @@ async def effective_payout_address(
     session: AsyncSession,
     account_id: int,
     network: str,
-    at: datetime,
+    at: datetime | None = None,
 ) -> str | None:
     """The address payouts to the provider on `network` may be sent to at `at`.
 
     None while payouts are held: before the provider's latest proof becomes effective,
     even when an earlier address was effective (a change holds payouts), and when the
-    provider has proven none. For the payout builder.
+    provider has proven none. For the payout builder, which should leave `at` out: it
+    defaults to the database's clock, which timed the proofs, so a host clock that is
+    ahead cannot end a hold early.
     """
     latest = await _latest_payout_address(session=session, account_id=account_id, network=network)
-    if latest is None or latest.effective_at > at:
+    if latest is None:
+        return None
+    if at is None:
+        at = (await session.execute(select(_DATABASE_NOW))).scalar_one()
+    if latest.effective_at > at:
         return None
     return latest.address
 

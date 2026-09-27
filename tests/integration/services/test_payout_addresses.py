@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Self
 
 import pytest
 from eth_account import Account
@@ -22,6 +23,7 @@ from app.db.models import PayoutAddress, PayoutAddressChallenge
 from app.services import payout_addresses
 
 PAYMENT_NETWORK = "eip155:84532"
+PAYOUT_ADDRESS = "0x1111111111111111111111111111111111111111"
 
 
 def _signed(challenge: PayoutAddressChallenge, wallet: LocalAccount) -> SignedMessage:
@@ -85,7 +87,7 @@ async def _effective(
     db_session_factory: async_sessionmaker[AsyncSession],
     account_id: int,
     *,
-    at: datetime,
+    at: datetime | None,
     network: str = PAYMENT_NETWORK,
 ) -> str | None:
     async with db_session_factory() as session:
@@ -94,6 +96,33 @@ async def _effective(
             account_id=account_id,
             network=network,
             at=at,
+        )
+
+
+async def _database_now(db_session_factory: async_sessionmaker[AsyncSession]) -> datetime:
+    async with db_session_factory() as session:
+        return (await session.execute(select(func.now()))).scalar_one()
+
+
+async def _insert_proof(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    account_id: int,
+    *,
+    verified_at: datetime,
+    effective_at: datetime,
+) -> None:
+    """Record a proof directly, as a process with another clock might have."""
+    async with db_session_factory.begin() as session:
+        session.add(
+            PayoutAddress(
+                account_id=account_id,
+                network=PAYMENT_NETWORK,
+                address=PAYOUT_ADDRESS,
+                nonce="an-inserted-proofs-nonce",
+                signature="0x",
+                verified_at=verified_at,
+                effective_at=effective_at,
+            ),
         )
 
 
@@ -341,7 +370,7 @@ async def test_an_expired_challenge_cannot_be_proven(
         await session.execute(
             update(PayoutAddressChallenge)
             .where(PayoutAddressChallenge.account_id == account_id)
-            .values(expires_at=datetime.now(UTC) - timedelta(seconds=1)),
+            .values(expires_at=func.now() - timedelta(seconds=1)),
         )
 
     with pytest.raises(InvalidStateError, match="challenge has expired"):
@@ -522,12 +551,61 @@ async def test_deleting_an_account_deletes_its_payout_addresses_and_challenge(
     assert (await _count_payout_addresses(db_session_factory), challenge) == (0, None)
 
 
+async def test_a_skewed_host_clock_moves_neither_an_expiry_nor_a_hold(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ClockAYearAhead(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            return super().now(tz) + timedelta(days=365)
+
+    monkeypatch.setattr(payout_addresses, "datetime", ClockAYearAhead)
+    settings = build_service_settings()
+    account_id = await create_provider_account_record(db_session_factory)
+    wallet = Account.create()
+    before = await _database_now(db_session_factory)
+
+    challenge = await _request(db_session_factory, account_id, wallet)
+    proven = await _prove(db_session_factory, account_id, _sign(challenge, wallet))
+
+    after = await _database_now(db_session_factory)
+    expiry = timedelta(seconds=settings.payout_address_challenge_seconds)
+    assert before + expiry <= challenge.expires_at <= after + expiry
+    assert before <= proven.verified_at <= after
+    assert proven.effective_at == proven.verified_at + timedelta(
+        seconds=settings.payout_address_hold_seconds,
+    )
+
+
+@pytest.mark.parametrize(
+    ("effective_in", "expected"),
+    [(timedelta(hours=-1), PAYOUT_ADDRESS), (timedelta(hours=1), None)],
+    ids=["hold_ended", "held"],
+)
+async def test_the_effective_address_is_judged_by_the_database_clock_by_default(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    effective_in: timedelta,
+    expected: str | None,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    effective_at = await _database_now(db_session_factory) + effective_in
+    await _insert_proof(
+        db_session_factory,
+        account_id,
+        verified_at=effective_at - timedelta(days=1),
+        effective_at=effective_at,
+    )
+
+    assert await _effective(db_session_factory, account_id, at=None) == expected
+
+
 async def test_no_payout_address_is_effective_before_one_is_proven(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
 
-    assert await _effective(db_session_factory, account_id, at=datetime.now(UTC)) is None
+    assert await _effective(db_session_factory, account_id, at=None) is None
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError, match="no payout address has been proven"):
             await payout_addresses.get_payout_address(
