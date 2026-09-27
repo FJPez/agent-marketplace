@@ -24,6 +24,13 @@ PATTERN_RULE = (
 )
 
 
+def _nested_items(levels: int) -> JsonObject:
+    schema: JsonObject = {}
+    for _ in range(levels):
+        schema = {"items": schema}
+    return schema
+
+
 def _canonical(schema: JsonObject) -> str:
     return json.dumps(schema, separators=(",", ":"), sort_keys=True)
 
@@ -106,6 +113,30 @@ def test_a_schema_that_compiles_is_not_refused(schema: JsonObject) -> None:
             {"pattern": "^[A-Za-z0-9+/]{0,256}$"},
             f'request_schema pattern "^[A-Za-z0-9+/]{{0,256}}$" {PATTERN_RULE} at /pattern',
             id="long_bounded_pattern",
+        ),
+        # jsonschema-rs raises a plain ValueError, not a ValidationError, for this. The
+        # request models refuse any schema over 32 levels long before it reaches a worker.
+        pytest.param(
+            _nested_items(500),
+            "request_schema is not a valid JSON Schema: Recursion limit reached",
+            id="past_the_compilers_recursion_limit",
+        ),
+        # Each part a refusal repeats from the schema is cut, as a body's refusal is.
+        pytest.param(
+            {"required": "x" * 300},
+            f'request_schema is not a valid JSON Schema: "{"x" * (CUT - 1)}... at /required',
+            id="long_message_cut",
+        ),
+        pytest.param(
+            {"pattern": "(?=a)" + "b" * 300},
+            f'request_schema pattern "(?=a){"b" * (CUT - 6)}... {PATTERN_RULE} at /pattern',
+            id="long_pattern_cut",
+        ),
+        pytest.param(
+            {"properties": {"k" * 300: {"minLength": -1}}},
+            "request_schema is not a valid JSON Schema: -1 is less than the minimum of 0 "
+            f"at /properties/{'k' * (CUT - 12)}...",
+            id="long_location_cut",
         ),
     ],
 )

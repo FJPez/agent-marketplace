@@ -33,7 +33,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from app.core.errors import InvalidInputError, UnavailableError
 from app.core.json_types import JsonObject
@@ -41,7 +41,9 @@ from app.core.logging import get_logger
 from app.core.request_validation_worker import (
     ANSWER_HEADER,
     CHECK_SCHEMA,
+    NO_REFUSAL,
     REQUEST_HEADER,
+    UNCOMPILABLE_SCHEMA,
     VALIDATE_BODY,
 )
 
@@ -51,6 +53,9 @@ REQUEST_BODY_MAX_BYTES = 1024 * 1024
 # How long a new worker may take to start, and a killed one to exit.
 WORKER_START_TIMEOUT_SECONDS = 10.0
 WORKER_EXIT_TIMEOUT_SECONDS = 1.0
+# A worker's answers are refusals of at most a few hundred characters; a longer one means
+# the worker broke the protocol.
+ANSWER_MAX_BYTES = 64 * 1024
 
 # Run as a module from the directory that holds the `app` package.
 _WORKER_COMMAND = (sys.executable, "-m", "app.core.request_validation_worker")
@@ -68,7 +73,19 @@ class _NotReceivedError(Exception):
 
 
 class _CrashedError(Exception):
-    """The worker ended while it answered the request."""
+    """The worker ended, or broke the protocol, while it answered the request."""
+
+
+class _MalformedAnswerError(Exception):
+    """An answer the worker should never send."""
+
+
+class _Answer(NamedTuple):
+    outcome: int
+    text: str
+
+
+_EMPTY = _Answer(NO_REFUSAL, "")
 
 
 @dataclass(frozen=True, eq=False)
@@ -129,16 +146,19 @@ class ProcessRequestValidationPool:
     async def check_schema(self, schema_json: str) -> str | None:
         """Why the schema `schema_json` does not compile in time, or None when it does."""
         try:
-            return await self._call(
+            answer = await self._call(
                 _request(CHECK_SCHEMA, schema_json, b""), self._compile_timeout_seconds
             )
-        except (TimeoutError, _CrashedError):
+        except TimeoutError:
             return _TOO_EXPENSIVE
+        except _CrashedError:
+            return "request_schema could not be compiled"
+        return answer.text or None
 
     async def validate(self, schema_json: str, body: bytes) -> str | None:
         """Why `body` does not match the schema `schema_json`, or None when it does."""
         try:
-            return await self._call(
+            answer = await self._call(
                 _request(VALIDATE_BODY, schema_json, body), self._timeout_seconds
             )
         except TimeoutError:
@@ -147,6 +167,16 @@ class ProcessRequestValidationPool:
             ) from None
         except _CrashedError:
             raise InvalidInputError(_FAILED, problem_type="request_validation_failed") from None
+        if answer.outcome == UNCOMPILABLE_SCHEMA:
+            # The save check compiled it, so the library or the database changed since:
+            # the provider's listing is at fault, and stays so until the schema is saved
+            # again, hence the long Retry-After.
+            raise UnavailableError(
+                "the listing is unavailable: its request schema does not compile",
+                problem_type="listing_unavailable",
+                headers={"Retry-After": "60"},
+            )
+        return answer.text or None
 
     async def close(self) -> None:
         """Fail the calls waiting and running at once, and stop every worker."""
@@ -159,7 +189,7 @@ class ProcessRequestValidationPool:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(process.wait(), WORKER_EXIT_TIMEOUT_SECONDS)
 
-    async def _call(self, request: bytes, deadline_seconds: float) -> str | None:
+    async def _call(self, request: bytes, deadline_seconds: float) -> _Answer:
         self._raise_if_closed()
         try:
             slot = await asyncio.wait_for(self._free.get(), self._timeout_seconds)
@@ -177,7 +207,7 @@ class ProcessRequestValidationPool:
             if not self._closed:
                 self._free.put_nowait(slot)
 
-    async def _call_in(self, slot: _Slot, request: bytes, deadline_seconds: float) -> str | None:
+    async def _call_in(self, slot: _Slot, request: bytes, deadline_seconds: float) -> _Answer:
         # A worker that ends before it has read the request (killed while idle, or unable
         # to start) is not the request's doing: try once more on a new one.
         for _ in range(2):
@@ -215,14 +245,16 @@ class ProcessRequestValidationPool:
             raise RuntimeError(msg)
         slot.worker = _Worker(process, process.stdin, process.stdout)
         try:
-            await asyncio.wait_for(_read_answer(slot.worker.answers), WORKER_START_TIMEOUT_SECONDS)
-        except (TimeoutError, asyncio.IncompleteReadError) as exc:
+            ready = await asyncio.wait_for(
+                _read_answer(slot.worker.answers), WORKER_START_TIMEOUT_SECONDS
+            )
+        except (TimeoutError, asyncio.IncompleteReadError, _MalformedAnswerError) as exc:
             raise _NotReceivedError from exc
+        if ready != _EMPTY:
+            raise _NotReceivedError
         return slot.worker
 
-    async def _exchange(
-        self, worker: _Worker, request: bytes, deadline_seconds: float
-    ) -> str | None:
+    async def _exchange(self, worker: _Worker, request: bytes, deadline_seconds: float) -> _Answer:
         async with asyncio.timeout(deadline_seconds):
             try:
                 # uvloop raises on a write to a pipe it has closed; asyncio drops it.
@@ -230,11 +262,18 @@ class ProcessRequestValidationPool:
                     raise ConnectionResetError
                 worker.requests.write(request)
                 await worker.requests.drain()
-                await _read_answer(worker.answers)  # it has read the request
+                read = await _read_answer(worker.answers)
             except (ConnectionError, asyncio.IncompleteReadError) as exc:
                 raise _NotReceivedError from exc
-            with contextlib.suppress(asyncio.IncompleteReadError):
-                return await _read_answer(worker.answers)
+            try:
+                # An acknowledgement with text would shift every later answer by one.
+                if read != _EMPTY:
+                    raise _MalformedAnswerError
+                with contextlib.suppress(asyncio.IncompleteReadError):
+                    return await _read_answer(worker.answers)
+            except _MalformedAnswerError:
+                logger.warning("request validation worker sent a malformed answer")
+                raise _CrashedError from None
         # The worker ended while it answered: the request's doing, unless the pool closed.
         self._raise_if_closed()
         with contextlib.suppress(TimeoutError):
@@ -301,6 +340,11 @@ def _discard(slot: _Slot) -> None:
         slot.worker = None
 
 
-async def _read_answer(answers: asyncio.StreamReader) -> str | None:
-    (size,) = ANSWER_HEADER.unpack(await answers.readexactly(ANSWER_HEADER.size))
-    return (await answers.readexactly(size)).decode() or None
+async def _read_answer(answers: asyncio.StreamReader) -> _Answer:
+    outcome, size = ANSWER_HEADER.unpack(await answers.readexactly(ANSWER_HEADER.size))
+    if size > ANSWER_MAX_BYTES:
+        raise _MalformedAnswerError
+    try:
+        return _Answer(outcome, (await answers.readexactly(size)).decode())
+    except UnicodeDecodeError:
+        raise _MalformedAnswerError from None

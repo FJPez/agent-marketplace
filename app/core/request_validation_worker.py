@@ -32,8 +32,14 @@ VALIDATE_BODY = 1
 # A request: its kind, then the byte lengths of the schema's canonical JSON and of the body
 # that follow.
 REQUEST_HEADER = struct.Struct("!BII")
-# An answer: the byte length of the UTF-8 text that follows.
-ANSWER_HEADER = struct.Struct("!I")
+# An answer: its outcome, then the byte length of the UTF-8 text that follows.
+ANSWER_HEADER = struct.Struct("!BI")
+# Outcomes. NO_REFUSAL also marks the empty frames that say the worker is ready and has
+# read a request. UNCOMPILABLE_SCHEMA answers a body sent with a schema that does not
+# compile, which the save check makes a provider-side fault.
+NO_REFUSAL = 0
+REFUSAL = 1
+UNCOMPILABLE_SCHEMA = 2
 # Far deeper than real bodies. It does not prevent every stack overflow (a long `$ref`
 # chain applied at each level can still overflow), but those only end the worker.
 REQUEST_BODY_MAX_DEPTH = 128
@@ -68,16 +74,20 @@ def main() -> None:
         with contextlib.suppress(ValueError):
             resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT_BYTES, MEMORY_LIMIT_BYTES))
     requests, answers = sys.stdin.buffer, sys.stdout.buffer
-    _answer(answers, None)  # ready
+    _answer(answers)  # ready
     while header := requests.read(REQUEST_HEADER.size):
         kind, schema_size, body_size = REQUEST_HEADER.unpack(header)
         schema_json = requests.read(schema_size).decode()
         body = requests.read(body_size)
-        _answer(answers, None)  # read
+        _answer(answers)  # read
         if kind == CHECK_SCHEMA:
-            _answer(answers, schema_refusal(schema_json))
+            refusal = schema_refusal(schema_json)
+        elif schema_refusal(schema_json) is None:
+            refusal = body_refusal(schema_json, body)
         else:
-            _answer(answers, body_refusal(schema_json, body))
+            _answer(answers, UNCOMPILABLE_SCHEMA)
+            continue
+        _answer(answers, NO_REFUSAL if refusal is None else REFUSAL, refusal or "")
 
 
 def schema_refusal(schema_json: str) -> str | None:
@@ -86,16 +96,18 @@ def schema_refusal(schema_json: str) -> str | None:
         _compile(schema_json)
     except jsonschema_rs.ValidationError as exc:
         path = tuple(str(part) for part in exc.instance_path)
+        location = _cut(json_pointer(path))
         if exc.kind.as_dict() == {"format": "regex"}:
             # A refused `pattern` is the value itself; a refused patternProperties key is
             # the subschema's key.
             pattern = exc.instance if isinstance(exc.instance, str) else path[-1]
             return (
-                f"request_schema pattern {json.dumps(pattern)} {_PATTERN_RULE} "
-                f"at {json_pointer(path)}"
+                f"request_schema pattern {_cut(json.dumps(pattern))} {_PATTERN_RULE} at {location}"
             )
-        msg = f"request_schema is not a valid JSON Schema: {exc.message}"
-        return f"{msg} at {json_pointer(path)}" if path else msg
+        msg = f"request_schema is not a valid JSON Schema: {_cut(exc.message)}"
+        return f"{msg} at {location}" if path else msg
+    except ValueError as exc:  # such as the compiler's own recursion limit
+        return f"request_schema is not a valid JSON Schema: {_cut(str(exc))}"
     return None
 
 
@@ -135,9 +147,9 @@ def _compile(schema_json: str) -> jsonschema_rs.Draft202012Validator:
     )
 
 
-def _answer(answers: BinaryIO, text: str | None) -> None:
-    data = (text or "").encode()
-    answers.write(ANSWER_HEADER.pack(len(data)) + data)
+def _answer(answers: BinaryIO, outcome: int = NO_REFUSAL, text: str = "") -> None:
+    data = text.encode()
+    answers.write(ANSWER_HEADER.pack(outcome, len(data)) + data)
     answers.flush()
 
 

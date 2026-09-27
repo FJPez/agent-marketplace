@@ -26,7 +26,11 @@ from app.core.request_validation import (
     check_request_schema_compiles,
     validate_request_body,
 )
-from app.core.request_validation_worker import MEMORY_LIMIT_BYTES
+from app.core.request_validation_worker import (
+    ANSWER_HEADER,
+    MEMORY_LIMIT_BYTES,
+    REQUEST_HEADER,
+)
 from app.core.resources import open_resources
 
 # The workers of one test would compete for CPU with another's: run them one at a time.
@@ -56,6 +60,38 @@ UNAVAILABLE = "request validation is unavailable"
 CLOSING = "request validation is shutting down"
 MISMATCH = "request body does not match the request schema"
 LOGGER = "app.core.request_validation"
+# A worker that breaks the answer protocol in the way named by its first argument.
+MISBEHAVING_WORKER = f"""
+import struct
+import sys
+
+requests, answers = sys.stdin.buffer, sys.stdout.buffer
+
+
+def answer(outcome, text):
+    answers.write(struct.pack({ANSWER_HEADER.format!r}, outcome, len(text)) + text)
+    answers.flush()
+
+
+answer(0, b"")  # ready
+_, schema_size, body_size = struct.unpack(
+    {REQUEST_HEADER.format!r}, requests.read({REQUEST_HEADER.size})
+)
+requests.read(schema_size + body_size)
+if sys.argv[1] == "acknowledgement_with_text":
+    answer(0, b"stray")
+elif sys.argv[1] == "exit_after_reading":
+    answer(0, b"")  # read
+    sys.exit(1)
+else:
+    answer(0, b"")  # read
+    if sys.argv[1] == "answer_too_long":
+        answers.write(struct.pack({ANSWER_HEADER.format!r}, 1, 64 * 1024 + 1))
+        answers.flush()
+    else:
+        answer(1, b"\\xff")
+requests.read()
+"""
 
 
 class OpenPool(Protocol):
@@ -104,6 +140,19 @@ def _exists(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+async def _all_reaped(pids: tuple[int, ...]) -> bool:
+    """Whether the processes `pids` end within about 5 s.
+
+    A killed process remains a zombie, which `_exists` still finds, until the event loop
+    reaps it.
+    """
+    for _ in range(500):
+        if not any(_exists(pid) for pid in pids):
+            return True
+        await asyncio.sleep(0.01)
+    return False
 
 
 def _address_space_limits(pid: int) -> list[str]:
@@ -187,6 +236,70 @@ async def test_a_request_schema_that_does_not_compile_in_time_is_refused_at_requ
         ],
     }
     await check_request_schema_compiles(pool=pool, schema={"type": "object"})
+
+
+async def test_a_worker_that_ends_while_compiling_is_a_failed_compile(
+    open_pool: OpenPool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        request_validation,
+        "_WORKER_COMMAND",
+        (sys.executable, "-c", MISBEHAVING_WORKER, "exit_after_reading"),
+    )
+
+    with pytest.raises(
+        InvalidInputError,
+        match=r"^request_schema could not be compiled$",
+    ):
+        await check_request_schema_compiles(pool=open_pool(), schema={"type": "object"})
+
+
+async def test_a_stored_schema_that_no_longer_compiles_makes_the_listing_unavailable(
+    open_pool: OpenPool,
+) -> None:
+    pool = open_pool(workers=1)
+    await validate_request_body(pool=pool, schema={}, body=b"{}")
+    worker = pool.pids
+
+    with pytest.raises(UnavailableError) as unavailable:
+        await validate_request_body(pool=pool, schema={"minLength": -1}, body=b"{}")
+
+    assert str(unavailable.value) == (
+        "the listing is unavailable: its request schema does not compile"
+    )
+    assert unavailable.value.problem_type == "listing_unavailable"
+    assert unavailable.value.headers == {"Retry-After": "60"}
+    assert pool.pids == worker  # the provider's schema is no reason to end the worker
+
+
+@pytest.mark.parametrize(
+    "misbehaviour",
+    ["acknowledgement_with_text", "answer_too_long", "answer_not_utf_8"],
+)
+async def test_a_malformed_answer_ends_the_worker_as_a_crash(
+    open_pool: OpenPool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    misbehaviour: str,
+) -> None:
+    monkeypatch.setattr(
+        request_validation,
+        "_WORKER_COMMAND",
+        (sys.executable, "-c", MISBEHAVING_WORKER, misbehaviour),
+    )
+    pool = open_pool(workers=1)
+
+    with pytest.raises(InvalidInputError, match=f"^{re.escape(FAILED)}$") as refused:
+        await validate_request_body(pool=pool, schema={}, body=b"{}")
+
+    assert refused.value.problem_type == "request_validation_failed"
+    (record,) = [record for record in caplog.records if record.name == LOGGER]
+    assert (record.levelname, record.getMessage()) == (
+        "WARNING",
+        "request validation worker sent a malformed answer",
+    )
+    assert await _all_reaped(pool.pids)
 
 
 @pytest.mark.parametrize(
@@ -313,10 +426,7 @@ async def test_a_worker_killed_while_idle_is_replaced_without_failing_the_next_c
     await validate_request_body(pool=pool, schema={}, body=b"{}")
     (killed,) = pool.pids
     os.kill(killed, 9)
-    for _ in range(500):
-        if not _exists(killed):
-            break
-        await asyncio.sleep(0.01)
+    assert await _all_reaped((killed,))
 
     await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
 
