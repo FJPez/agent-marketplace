@@ -188,6 +188,30 @@ async def test_every_proof_holds_payouts_until_its_own_hold_ends(
     assert await _count_payout_addresses(db_session_factory) == 2
 
 
+async def test_the_latest_proof_by_id_decides_even_when_its_clock_was_behind(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    first = await _prove_address(db_session_factory, account_id, Account.create())
+
+    # Recorded after the first proof, by a process whose clock was a minute behind.
+    await _insert_proof(
+        db_session_factory,
+        account_id,
+        verified_at=first.verified_at - timedelta(minutes=1),
+        effective_at=first.effective_at - timedelta(minutes=1),
+    )
+
+    async with db_session_factory() as session:
+        latest = await payout_addresses.get_payout_address(
+            session=session,
+            settings=build_service_settings(),
+            account_id=account_id,
+        )
+    effective = await _effective(db_session_factory, account_id, at=first.effective_at)
+    assert (latest.address, effective) == (PAYOUT_ADDRESS, PAYOUT_ADDRESS)
+
+
 async def test_payout_addresses_on_different_networks_are_independent(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
