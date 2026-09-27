@@ -300,6 +300,7 @@ async def _make_current_price(
     try:
         await session.flush()
     except IntegrityError as exc:
+        await session.rollback()
         if unique_violation_constraint(exc) != LISTING_PRICE_VERSION_CONSTRAINT:
             raise
         raise ConflictError("the endpoint's price changed concurrently; retry") from exc

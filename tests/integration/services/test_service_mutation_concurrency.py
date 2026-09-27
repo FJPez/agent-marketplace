@@ -573,13 +573,17 @@ async def test_price_version_race_without_the_service_lock_is_a_conflict(
 
     async def edit_price() -> None:
         async with db_session_factory() as session:
-            await provider_endpoints.update_endpoint(
-                session=session,
-                settings=build_service_settings(),
-                account_id=provider_account_id,
-                endpoint_id=endpoint_id,
-                changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=20_000)),
-            )
+            with pytest.raises(ConflictError, match="price changed concurrently"):
+                await provider_endpoints.update_endpoint(
+                    session=session,
+                    settings=build_service_settings(),
+                    account_id=provider_account_id,
+                    endpoint_id=endpoint_id,
+                    changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=20_000)),
+                )
+            # The service rolled back, like on a duplicate endpoint key, so the
+            # session is usable again and has nothing left to commit.
+            await session.commit()
 
     # A writer that skips the service row lock claims version 2 first; the edit
     # reads version 1 as the latest, waits on the rival's uncommitted key, and
@@ -593,8 +597,7 @@ async def test_price_version_race_without_the_service_lock_is_a_conflict(
         await _wait_for_a_lock_wait(db_session_factory)
         await rival.commit()
 
-    with pytest.raises(ConflictError, match="price changed concurrently"):
-        await edit
+    await edit
 
     assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
         1,
