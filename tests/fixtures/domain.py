@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
-from tests.fixtures.settings import TEST_TREASURY_ADDRESS
+from sqlalchemy import select
+from tests.fixtures.settings import TEST_PRICE_TERMS
 from tests.helpers.auth import create_account
 
 from app.core.enums import (
@@ -314,18 +315,34 @@ async def create_listing_price_record(
             endpoint_id=endpoint_id,
             version=version,
             amount=amount,
-            asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            network="eip155:84532",
-            pay_to=TEST_TREASURY_ADDRESS,
-            max_timeout_seconds=120,
-            fee_bps=1_000,
+            **TEST_PRICE_TERMS,
         )
         session.add(price)
-        await session.flush()
+        # The get autoflushes the pending version, which assigns its id.
         endpoint = await session.get(ServiceEndpoint, endpoint_id)
         assert endpoint is not None
         endpoint.current_price_id = price.id
         return price.id
+
+
+async def read_price_versions(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+) -> tuple[int | None, list[tuple[int, int]]]:
+    """Return the current version (None when unpriced) and every stored (version, amount)."""
+    async with db_session_factory() as session:
+        current_version = await session.scalar(
+            select(ListingPrice.version)
+            .join(ServiceEndpoint, ServiceEndpoint.current_price_id == ListingPrice.id)
+            .where(ServiceEndpoint.id == endpoint_id),
+        )
+        rows = await session.execute(
+            select(ListingPrice.version, ListingPrice.amount)
+            .where(ListingPrice.endpoint_id == endpoint_id)
+            .order_by(ListingPrice.version),
+        )
+        return current_version, [(row.version, row.amount) for row in rows]
 
 
 async def create_upstream_record(

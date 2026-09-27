@@ -9,7 +9,7 @@ from tests.fixtures.domain import (
     create_provider_account_record,
     create_service_record,
 )
-from tests.fixtures.settings import TEST_TREASURY_ADDRESS
+from tests.fixtures.settings import TEST_PRICE_TERMS, TEST_TREASURY_ADDRESS
 
 from app.core.enums import AccessMode
 from app.db.errors import unique_violation_constraint
@@ -101,23 +101,10 @@ async def test_price_versions_reject_out_of_range_terms(
     constraint: str,
 ) -> None:
     endpoint_id = await _create_endpoint(db_session_factory)
-    terms = {
-        "version": 1,
-        "amount": 10_000,
-        "max_timeout_seconds": 120,
-        "fee_bps": 1_000,
-    }
+    row = {"version": 1, "amount": 10_000} | TEST_PRICE_TERMS | {column: value}
 
     async with db_session_factory() as session:
-        session.add(
-            ListingPrice(
-                endpoint_id=endpoint_id,
-                asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                network="eip155:84532",
-                pay_to=TEST_TREASURY_ADDRESS,
-                **(terms | {column: value}),
-            ),
-        )
+        session.add(ListingPrice(endpoint_id=endpoint_id, **row))
         with pytest.raises(IntegrityError, match=constraint):
             await session.flush()
 

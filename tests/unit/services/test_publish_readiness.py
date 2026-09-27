@@ -1,4 +1,5 @@
 import pytest
+from tests.fixtures.settings import TEST_PRICE_TERMS
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
@@ -61,19 +62,6 @@ def _build_endpoint(
     return endpoint
 
 
-def _build_price() -> ListingPrice:
-    return ListingPrice(
-        endpoint_id=1,
-        version=1,
-        amount=10_000,
-        asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        network="eip155:84532",
-        pay_to="0x1111111111111111111111111111111111111111",
-        max_timeout_seconds=120,
-        fee_bps=1_000,
-    )
-
-
 def test_validate_service_for_publish_rejects_service_without_endpoints() -> None:
     service = _build_service(endpoints=[])
 
@@ -109,7 +97,7 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price
         endpoints=[
             _build_endpoint(
                 access_mode=AccessMode.PAID,
-                price=_build_price(),
+                price=ListingPrice(endpoint_id=1, version=1, amount=10_000, **TEST_PRICE_TERMS),
             ),
         ],
     )

@@ -10,9 +10,9 @@ from tests.fixtures.domain import (
     create_service_record,
     create_upstream_record,
 )
+from tests.fixtures.settings import build_service_settings
 
-from app.core.config import Settings
-from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.db.models import ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
@@ -35,10 +35,6 @@ RESPONSE_SCHEMA: JsonObject = {"type": "object", "properties": {"result": {"type
 
 
 UPSTREAM_CONFIG: JsonObject = {"headers": {"x-api-key": "secret"}, "retries": 2}
-
-
-def _settings() -> Settings:
-    return Settings(env=AppEnv.TEST, jwt_secret_key="test-secret-key-with-32-bytes-123")
 
 
 async def _create_draft_service(
@@ -64,7 +60,7 @@ async def test_create_endpoint_persists_normalized_fields(
     async with db_session_factory() as session:
         endpoint = await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -103,7 +99,7 @@ async def test_create_endpoint_persists_invocation_fields(
     async with db_session_factory() as session:
         endpoint = await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -136,7 +132,7 @@ async def test_create_endpoint_returns_endpoint_with_loaded_relations(
     async with db_session_factory() as session:
         created = await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -164,7 +160,7 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
     async with db_session_factory() as session:
         await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_id,
             request=EndpointCreateRequest(
@@ -182,7 +178,7 @@ async def test_create_endpoint_rejects_duplicate_key_same_service(
         with pytest.raises(ConflictError):
             await create_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 service_id=service_id,
                 request=EndpointCreateRequest(
@@ -215,7 +211,7 @@ async def test_create_endpoint_allows_same_key_different_service(
     async with db_session_factory() as session:
         await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_a_id,
             request=EndpointCreateRequest(
@@ -232,7 +228,7 @@ async def test_create_endpoint_allows_same_key_different_service(
     async with db_session_factory() as session:
         endpoint_b = await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_b_id,
             request=EndpointCreateRequest(
@@ -265,7 +261,7 @@ async def test_create_endpoint_rejects_active_service(
         with pytest.raises(InvalidStateError):
             await create_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 service_id=service_id,
                 request=EndpointCreateRequest(
@@ -294,7 +290,7 @@ async def test_create_endpoint_rejects_other_accounts_service(
         with pytest.raises(NotFoundError):
             await create_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 service_id=service_id,
                 request=EndpointCreateRequest(
@@ -329,7 +325,7 @@ async def test_update_endpoint_clears_summary_and_description(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(summary=None, description=None),
@@ -363,7 +359,7 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(
@@ -402,7 +398,7 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -443,7 +439,7 @@ async def test_update_endpoint_active_invocation_field_change_creates_revision(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest.model_validate({field: value}),
@@ -494,7 +490,7 @@ async def test_update_endpoint_active_material_update_snapshots_sibling_endpoint
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=updated_endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -560,7 +556,7 @@ async def test_update_endpoint_returns_endpoint_renderable_without_lazy_loading(
     async with db_session_factory() as session:
         endpoint = await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -591,7 +587,7 @@ async def test_update_endpoint_active_name_only_update_creates_zero_revisions(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Renamed Endpoint"),
@@ -628,7 +624,7 @@ async def test_update_endpoint_active_paid_endpoint_without_pricing_rejects_mate
         with pytest.raises(InvalidInputError):
             await update_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -662,7 +658,7 @@ async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutati
         with pytest.raises(InvalidInputError):
             await update_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -700,7 +696,7 @@ async def test_update_endpoint_suspended_service_blocks_material_update(
         with pytest.raises(InvalidStateError):
             await update_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -728,7 +724,7 @@ async def test_update_endpoint_suspended_service_allows_name_only_update(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Renamed While Suspended"),
@@ -758,7 +754,7 @@ async def test_update_endpoint_rejects_other_accounts_endpoint(
         with pytest.raises(NotFoundError):
             await update_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(name="New Name"),
@@ -788,7 +784,7 @@ async def test_update_endpoint_draft_identical_values_leave_updated_at_unchanged
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Translate", timeout_seconds=30),
@@ -829,7 +825,7 @@ async def test_update_endpoint_active_identical_material_value_is_a_no_op(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=30),
@@ -873,7 +869,7 @@ async def test_update_endpoint_normalized_value_matching_stored_value_is_a_no_op
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="  Same  "),
@@ -913,7 +909,7 @@ async def test_update_endpoint_active_unchanged_material_field_creates_no_revisi
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(name="Renamed Endpoint", timeout_seconds=30),
@@ -965,7 +961,7 @@ async def test_update_endpoint_suspended_service_allows_no_op_update(
     async with db_session_factory() as session:
         await update_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(timeout_seconds=30),
@@ -997,7 +993,7 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1033,7 +1029,7 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1052,7 +1048,7 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1108,7 +1104,7 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1150,7 +1146,7 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1179,7 +1175,7 @@ async def test_upsert_upstream_rejects_active_service(
         with pytest.raises(InvalidStateError):
             await upsert_upstream(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
@@ -1200,7 +1196,7 @@ async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
         with pytest.raises(NotFoundError):
             await upsert_upstream(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=999_999,
                 request=EndpointUpstreamRequest(
@@ -1229,7 +1225,7 @@ async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
         with pytest.raises(NotFoundError):
             await upsert_upstream(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
@@ -1257,7 +1253,7 @@ async def test_upsert_upstream_rejects_unsafe_target(
         with pytest.raises(InvalidInputError, match="upstream target is not allowed"):
             await upsert_upstream(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
@@ -1283,7 +1279,7 @@ async def test_upsert_upstream_validates_input_before_resolving_endpoint(
         with pytest.raises(InvalidInputError):
             await upsert_upstream(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=999_999,
                 request=EndpointUpstreamRequest(

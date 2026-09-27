@@ -3,28 +3,24 @@
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
 from tests.fixtures.domain import (
     create_endpoint_record,
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
+    read_price_versions,
 )
-from tests.fixtures.settings import TEST_JWT_SECRET_KEY, TEST_TREASURY_ADDRESS
+from tests.fixtures.settings import TEST_TREASURY_ADDRESS, build_service_settings
 
 from app.core.config import Settings
-from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
+from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError, InvalidStateError
 from app.db.models import ListingPrice, ServiceEndpoint, ServiceRevision
 from app.schemas.pricing import ListingPriceRequest
 from app.schemas.service import EndpointCreateRequest, EndpointUpdateRequest
 from app.services import publishing
 from app.services.provider_endpoints import create_endpoint, update_endpoint
-
-
-def _settings() -> Settings:
-    return Settings(env=AppEnv.TEST, jwt_secret_key=TEST_JWT_SECRET_KEY)
 
 
 def _create_request(*, access_mode: AccessMode, amount: int | None) -> EndpointCreateRequest:
@@ -79,33 +75,11 @@ async def _update(
     async with db_session_factory() as session:
         return await update_endpoint(
             session=session,
-            settings=settings or _settings(),
+            settings=settings or build_service_settings(),
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=changes,
         )
-
-
-async def _prices(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    endpoint_id: int,
-) -> tuple[int | None, list[tuple[int, int]]]:
-    """Return the current version number and every stored (version, amount) pair."""
-    async with db_session_factory() as session:
-        endpoint = await session.scalar(
-            select(ServiceEndpoint)
-            .options(selectinload(ServiceEndpoint.current_price))
-            .where(ServiceEndpoint.id == endpoint_id),
-        )
-        rows = await session.execute(
-            select(ListingPrice.version, ListingPrice.amount)
-            .where(ListingPrice.endpoint_id == endpoint_id)
-            .order_by(ListingPrice.version),
-        )
-        versions = [(row.version, row.amount) for row in rows]
-    assert endpoint is not None
-    current = None if endpoint.current_price is None else endpoint.current_price.version
-    return current, versions
 
 
 async def _revision_count(
@@ -130,7 +104,7 @@ async def test_create_endpoint_stores_a_first_price_version_with_the_current_ter
         provider_account_id=account_id,
         lifecycle=ServiceLifecycle.DRAFT,
     )
-    settings = _settings().model_copy(update={"platform_fee_bps": 250})
+    settings = build_service_settings().model_copy(update={"platform_fee_bps": 250})
 
     async with db_session_factory() as session:
         endpoint = await create_endpoint(
@@ -170,13 +144,13 @@ async def test_create_endpoint_without_a_price_stores_no_version(
     async with db_session_factory() as session:
         endpoint = await create_endpoint(
             session=session,
-            settings=_settings(),
+            settings=build_service_settings(),
             account_id=account_id,
             service_id=service_id,
             request=_create_request(access_mode=access_mode, amount=None),
         )
 
-    assert await _prices(db_session_factory, endpoint.id) == (None, [])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint.id) == (None, [])
 
 
 async def test_create_endpoint_below_the_minimum_price_creates_nothing(
@@ -193,7 +167,7 @@ async def test_create_endpoint_below_the_minimum_price_creates_nothing(
         with pytest.raises(InvalidInputError, match="at least 10000 atomic units"):
             await create_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 service_id=service_id,
                 request=_create_request(access_mode=AccessMode.PAID, amount=9_999),
@@ -225,7 +199,10 @@ async def test_price_at_the_minimum_is_accepted_and_one_unit_below_is_rejected(
             endpoint_id=endpoint_id,
             changes=changes,
         )
-        assert await _prices(db_session_factory, endpoint_id) == (1, [(1, amount)])
+        assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+            1,
+            [(1, amount)],
+        )
     else:
         with pytest.raises(InvalidInputError, match="at least 10000 atomic units"):
             await _update(
@@ -234,7 +211,7 @@ async def test_price_at_the_minimum_is_accepted_and_one_unit_below_is_rejected(
                 endpoint_id=endpoint_id,
                 changes=changes,
             )
-        assert await _prices(db_session_factory, endpoint_id) == (None, [])
+        assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (None, [])
 
 
 async def test_price_version_needs_a_treasury_address(
@@ -248,10 +225,10 @@ async def test_price_version_needs_a_treasury_address(
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=10_000)),
-            settings=_settings().model_copy(update={"treasury_address": None}),
+            settings=build_service_settings().model_copy(update={"treasury_address": None}),
         )
 
-    assert await _prices(db_session_factory, endpoint_id) == (None, [])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (None, [])
 
 
 async def test_price_edit_creates_a_new_version_and_keeps_the_old_one(
@@ -268,7 +245,10 @@ async def test_price_edit_creates_a_new_version_and_keeps_the_old_one(
 
     assert updated.current_price is not None
     assert updated.current_price.version == 2
-    assert await _prices(db_session_factory, endpoint_id) == (2, [(1, 250_000), (2, 99_999)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        2,
+        [(1, 250_000), (2, 99_999)],
+    )
 
 
 async def test_price_edit_repeating_the_current_amount_is_a_no_op(
@@ -291,7 +271,10 @@ async def test_price_edit_repeating_the_current_amount_is_a_no_op(
         persisted = await session.get(ServiceEndpoint, endpoint_id)
     assert persisted is not None
     assert persisted.updated_at == seeded_updated_at
-    assert await _prices(db_session_factory, endpoint_id) == (1, [(1, 250_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        1,
+        [(1, 250_000)],
+    )
 
 
 async def test_omitting_the_price_keeps_the_current_version(
@@ -306,7 +289,10 @@ async def test_omitting_the_price_keeps_the_current_version(
         changes=EndpointUpdateRequest(timeout_seconds=20),
     )
 
-    assert await _prices(db_session_factory, endpoint_id) == (1, [(1, 250_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        1,
+        [(1, 250_000)],
+    )
 
 
 async def test_clearing_a_draft_price_keeps_its_versions(
@@ -321,7 +307,10 @@ async def test_clearing_a_draft_price_keeps_its_versions(
         changes=EndpointUpdateRequest(price=None),
     )
 
-    assert await _prices(db_session_factory, endpoint_id) == (None, [(1, 250_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        None,
+        [(1, 250_000)],
+    )
 
 
 async def test_paid_to_free_to_paid_keeps_old_versions_and_numbers_the_new_one_next(
@@ -335,14 +324,14 @@ async def test_paid_to_free_to_paid_keeps_old_versions_and_numbers_the_new_one_n
         endpoint_id=endpoint_id,
         changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
     )
-    free_state = await _prices(db_session_factory, endpoint_id)
+    free_state = await read_price_versions(db_session_factory, endpoint_id=endpoint_id)
     await _update(
         db_session_factory,
         account_id=account_id,
         endpoint_id=endpoint_id,
         changes=EndpointUpdateRequest(access_mode=AccessMode.PAID),
     )
-    unpriced_state = await _prices(db_session_factory, endpoint_id)
+    unpriced_state = await read_price_versions(db_session_factory, endpoint_id=endpoint_id)
     await _update(
         db_session_factory,
         account_id=account_id,
@@ -352,7 +341,10 @@ async def test_paid_to_free_to_paid_keeps_old_versions_and_numbers_the_new_one_n
 
     assert free_state == (None, [(1, 250_000)])
     assert unpriced_state == (None, [(1, 250_000)])
-    assert await _prices(db_session_factory, endpoint_id) == (2, [(1, 250_000), (2, 40_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        2,
+        [(1, 250_000), (2, 40_000)],
+    )
 
 
 async def test_price_on_a_free_endpoint_is_rejected(
@@ -409,7 +401,7 @@ async def test_active_paid_endpoint_rejects_clearing_its_price_without_mutating_
         with pytest.raises(InvalidInputError, match="active paid endpoints must define a price"):
             await update_endpoint(
                 session=session,
-                settings=_settings(),
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20, price=None),
@@ -420,7 +412,10 @@ async def test_active_paid_endpoint_rejects_clearing_its_price_without_mutating_
         persisted = await session.get(ServiceEndpoint, endpoint_id)
     assert persisted is not None
     assert persisted.timeout_seconds == 30
-    assert await _prices(db_session_factory, endpoint_id) == (1, [(1, 250_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        1,
+        [(1, 250_000)],
+    )
     assert await _revision_count(db_session_factory, endpoint_id) == 1
 
 
@@ -461,7 +456,10 @@ async def test_active_free_to_paid_with_a_price_creates_a_version_and_a_revision
         ),
     )
 
-    assert await _prices(db_session_factory, endpoint_id) == (1, [(1, 10_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        1,
+        [(1, 10_000)],
+    )
     assert await _revision_count(db_session_factory, endpoint_id) == 2
 
 
@@ -483,7 +481,7 @@ async def test_active_paid_to_free_clears_the_current_price_and_revises(
         changes=EndpointUpdateRequest(access_mode=AccessMode.FREE),
     )
 
-    current_version, _ = await _prices(db_session_factory, endpoint_id)
+    current_version, _ = await read_price_versions(db_session_factory, endpoint_id=endpoint_id)
     assert current_version is None
     assert await _revision_count(db_session_factory, endpoint_id) == 2
 
@@ -535,4 +533,7 @@ async def test_price_change_on_a_published_service_revises_and_keeps_the_old_rev
         [endpoint_snapshot | {"price": {"id": first_price_id, "version": 1}}],
         [endpoint_snapshot | {"price": {"id": updated.current_price.id, "version": 2}}],
     ]
-    assert await _prices(db_session_factory, endpoint_id) == (2, [(1, 250_000), (2, 500_000)])
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
+        2,
+        [(1, 250_000), (2, 500_000)],
+    )

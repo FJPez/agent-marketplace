@@ -8,7 +8,6 @@ from tests.fixtures.domain import (
     create_endpoint_record,
     create_health_check_record,
     create_listing_price_record,
-    create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
     create_upstream_record,
@@ -118,19 +117,6 @@ async def _seed_health_check(
         service_id=service_id,
         status=status,
         summary=summary,
-    )
-
-
-async def _seed_moderation_action(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    *,
-    service_id: int,
-    action: str,
-) -> None:
-    await create_moderation_action_record(
-        db_session_factory,
-        service_id=service_id,
-        action=action,
     )
 
 

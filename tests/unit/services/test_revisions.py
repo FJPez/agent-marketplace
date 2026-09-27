@@ -1,4 +1,5 @@
 import pytest
+from tests.fixtures.settings import TEST_PRICE_TERMS
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models.listing_price import ListingPrice
@@ -56,11 +57,7 @@ def _service() -> Service:
         endpoint_id=second_endpoint.id,
         version=2,
         amount=25_000,
-        asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        network="eip155:84532",
-        pay_to="0x1111111111111111111111111111111111111111",
-        max_timeout_seconds=120,
-        fee_bps=1_000,
+        **TEST_PRICE_TERMS,
     )
     service.endpoints = [second_endpoint, first_endpoint]
     return service
