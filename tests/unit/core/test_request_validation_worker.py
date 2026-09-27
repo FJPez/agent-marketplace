@@ -15,6 +15,7 @@ from app.core.request_validation_worker import (
 
 MISMATCH = "request body does not match the request schema"
 NOT_JSON = "request body is not valid JSON"
+NOT_UTF_8 = "request body is not UTF-8"
 NOT_FINITE = "request body holds a number that is not finite"
 TOO_DEEP = f"request body must nest at most {REQUEST_BODY_MAX_DEPTH} levels"
 CUT = REQUEST_BODY_ERROR_TEXT_MAX_LENGTH
@@ -22,6 +23,13 @@ PATTERN_RULE = (
     "is not supported: patterns must avoid lookaround and backreferences "
     "and compile within 10240 bytes"
 )
+
+
+def _nested_items(levels: int) -> JsonObject:
+    schema: JsonObject = {}
+    for _ in range(levels):
+        schema = {"items": schema}
+    return schema
 
 
 def _canonical(schema: JsonObject) -> str:
@@ -106,6 +114,30 @@ def test_a_schema_that_compiles_is_not_refused(schema: JsonObject) -> None:
             {"pattern": "^[A-Za-z0-9+/]{0,256}$"},
             f'request_schema pattern "^[A-Za-z0-9+/]{{0,256}}$" {PATTERN_RULE} at /pattern',
             id="long_bounded_pattern",
+        ),
+        # jsonschema-rs raises a plain ValueError, not a ValidationError, for this. The
+        # request models refuse any schema over 32 levels long before it reaches a worker.
+        pytest.param(
+            _nested_items(500),
+            "request_schema is not a valid JSON Schema: Recursion limit reached",
+            id="past_the_compilers_recursion_limit",
+        ),
+        # Each part a refusal repeats from the schema is cut, as a body's refusal is.
+        pytest.param(
+            {"required": "x" * 300},
+            f'request_schema is not a valid JSON Schema: "{"x" * (CUT - 1)}... at /required',
+            id="long_message_cut",
+        ),
+        pytest.param(
+            {"pattern": "(?=a)" + "b" * 300},
+            f'request_schema pattern "(?=a){"b" * (CUT - 6)}... {PATTERN_RULE} at /pattern',
+            id="long_pattern_cut",
+        ),
+        pytest.param(
+            {"properties": {"k" * 300: {"minLength": -1}}},
+            "request_schema is not a valid JSON Schema: -1 is less than the minimum of 0 "
+            f"at /properties/{'k' * (CUT - 12)}...",
+            id="long_location_cut",
         ),
     ],
 )
@@ -194,7 +226,30 @@ def test_a_body_matching_the_schema_is_not_refused(schema: JsonObject, body: byt
             id="long_location_cut",
         ),
         pytest.param({}, b'{"a": ', NOT_JSON, id="malformed"),
-        pytest.param({}, b'"\xff"', NOT_JSON, id="not_utf_8"),
+        pytest.param({}, b'"\xff"', NOT_UTF_8, id="not_utf_8"),
+        # What the provider receives is these bytes: only UTF-8 without a byte order mark
+        # is JSON it must accept (RFC 8259), and parsers disagree on which value of a
+        # repeated key wins (I-JSON, RFC 7493).
+        pytest.param({}, '{"a": 1}'.encode("utf-16"), NOT_UTF_8, id="utf_16"),
+        pytest.param({}, '{"a": 1}'.encode("utf-32"), NOT_UTF_8, id="utf_32"),
+        pytest.param(
+            {},
+            b'\xef\xbb\xbf{"a": 1}',
+            "request body must not start with a byte order mark",
+            id="utf_8_byte_order_mark",
+        ),
+        pytest.param(
+            {"properties": {"amount": {"maximum": 100}}},
+            b'{"amount": 999999, "amount": 5}',
+            'request body repeats the key "amount"',
+            id="repeated_key",
+        ),
+        pytest.param(
+            {},
+            b'{"items": [{"id": 1, "id": 2}]}',
+            'request body repeats the key "id"',
+            id="repeated_nested_key",
+        ),
         pytest.param({}, b"1" * 4301, NOT_JSON, id="integer_of_4301_digits"),
         pytest.param({}, b"[NaN]", NOT_FINITE, id="nan"),
         pytest.param({}, b"[-Infinity]", NOT_FINITE, id="negative_infinity"),

@@ -1,13 +1,9 @@
 """Rules for the JSON Schemas providers give their endpoints' request bodies.
 
-A request schema is checked in two steps when it is saved. First the request models run
-`check_request_schema_shape` and `check_request_schema`, walks in Python whose cost is
-bounded by the size limit: the schema's size and nesting, valid Unicode and finite
-numbers, draft 2020-12 throughout, references only to its own subschemas (so nothing is
-ever fetched), anchors declared once, and at most REQUEST_SCHEMA_MAX_PATTERNS patterns.
-Then the endpoint services compile it, which can be costly (jsonschema-rs compiles some
-patterns in quadratic time), in a worker process under a deadline
-(`app.core.request_validation.check_request_schema_compiles`).
+A request schema is checked in two steps when it is saved: the request models run the
+Python walks below, whose cost the size limit bounds; then the endpoint services compile
+it in a worker process under a deadline (`app.core.request_validation`), because
+jsonschema-rs compiles some patterns in quadratic time.
 """
 
 import json
@@ -26,9 +22,6 @@ REQUEST_SCHEMA_MAX_PATTERNS = 64
 
 # A location in a schema: its JSON Pointer's reference tokens.
 type Pointer = tuple[str, ...]
-# A location in a schema's JSON: its parent's location and its key or index, or None at
-# the root. Linked rather than copied, so that walking costs the same at any depth.
-type Where = tuple[Where, str | int] | None
 
 # Keywords holding one subschema, a list of subschemas, or a map of names to subschemas.
 _ONE_SUBSCHEMA = (
@@ -57,12 +50,12 @@ _SUBSCHEMA_MAPS = (
 
 
 def check_request_schema_shape(value: JsonValue) -> JsonValue:
-    """Reject a request schema nested more than REQUEST_SCHEMA_MAX_DEPTH levels deep, or
-    holding more values than can fit REQUEST_SCHEMA_MAX_BYTES.
+    """Reject a request schema too deep or too large to walk.
 
-    Runs before the value is validated as JSON, whose errors multiply with the nesting and
-    whose cost grows with the size. Each container's members are counted before they are
-    walked, so an oversized value is refused early.
+    It may nest at most REQUEST_SCHEMA_MAX_DEPTH levels, and hold no more values than can
+    fit REQUEST_SCHEMA_MAX_BYTES. Runs before the value is validated as JSON, whose errors
+    multiply with the nesting and whose cost grows with the size. Each container's members
+    are counted before they are walked, so an oversized value is refused early.
     """
     if not isinstance(value, dict):
         return value  # refused next, as not a JSON object
@@ -95,10 +88,10 @@ def check_request_schema(schema: JsonObject) -> JsonObject:
     if len(compact.encode("utf-8", "surrogatepass")) > REQUEST_SCHEMA_MAX_BYTES:
         msg = f"request_schema must be at most {REQUEST_SCHEMA_MAX_BYTES} bytes of compact JSON"
         raise ValueError(msg)
-    for value, _, where in _json_values(schema):
+    for value, _, pointer in _json_values(schema):
         problem = _value_problem(value)
         if problem:
-            msg = f"request_schema {problem} at {_where_location(where)}"
+            msg = f"request_schema {problem} at {json_pointer(pointer) or 'the root'}"
             raise ValueError(msg)
     _check_subschemas(schema)
     return schema
@@ -141,7 +134,8 @@ def _check_subschemas(schema: JsonObject) -> None:
                     f"at {json_pointer((*pointer, keyword))}"
                 )
                 raise ValueError(msg)
-        patterns += isinstance(subschema.get("pattern"), str)
+        if isinstance(subschema.get("pattern"), str):
+            patterns += 1
         pattern_properties = subschema.get("patternProperties")
         patterns += len(pattern_properties) if isinstance(pattern_properties, dict) else 0
     if patterns > REQUEST_SCHEMA_MAX_PATTERNS:
@@ -204,23 +198,24 @@ def _names_a_subschema(
     return pointer in found
 
 
-def _json_values(document: JsonValue) -> Iterator[tuple[JsonValue, int, Where]]:
+def _json_values(document: JsonValue) -> Iterator[tuple[JsonValue, int, Pointer]]:
     """Every value in a JSON document, in document order, with its depth and location.
 
     A container's members are queued only when the walk resumes after it, so a caller can
     stop at a container too large to walk.
     """
-    pending: list[tuple[JsonValue, int, Where]] = [(document, 0, None)]
+    pending: list[tuple[JsonValue, int, Pointer]] = [(document, 0, ())]
     while pending:
-        value, depth, where = pending.pop()
-        yield value, depth, where
+        value, depth, pointer = pending.pop()
+        yield value, depth, pointer
         if isinstance(value, dict):
             pending.extend(
-                (member, depth + 1, (where, key)) for key, member in reversed(value.items())
+                (member, depth + 1, (*pointer, key)) for key, member in reversed(value.items())
             )
         elif isinstance(value, list):
             pending.extend(
-                (value[index], depth + 1, (where, index)) for index in range(len(value) - 1, -1, -1)
+                (value[index], depth + 1, (*pointer, str(index)))
+                for index in range(len(value) - 1, -1, -1)
             )
 
 
@@ -243,11 +238,3 @@ def _is_unicode(text: str) -> bool:
     except UnicodeEncodeError:
         return False
     return True
-
-
-def _where_location(where: Where) -> str:
-    tokens: list[str | int] = []
-    while where is not None:
-        where, token = where
-        tokens.append(token)
-    return json_pointer(reversed(tokens)) or "the root"

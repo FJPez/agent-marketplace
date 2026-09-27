@@ -10,7 +10,7 @@ from eth_account import Account as EthAccount
 from sqlalchemy import select
 
 from app.core.config import Settings, get_settings
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.db.models import (
     Account,
     ListingPrice,
@@ -255,8 +255,8 @@ async def _ensure_signing_secret(
 ) -> str:
     """Give the demo provider a signing secret if it lacks one; return its current secret.
 
-    Phase 1 signs every forwarded request with a provider's secret, so a demo listing
-    seeded without one would only fail after a consumer paid. Uses its own short
+    Every forwarded request is signed with the provider's secret, and a listing whose
+    provider has none cannot be loaded, so the demo listings need one. Uses its own short
     session rather than the caller's transaction, matching how
     `provider_signing_secrets` commits its own work. Raises InvalidStateError, naming
     APP_PROVIDER_SECRET_ENCRYPTION_KEYS, when that setting is not configured.
@@ -348,8 +348,12 @@ async def _ensure_revision(
 
 
 async def seed_demo_data() -> SeedResult:
-    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     settings = get_settings()
+    # It creates a signing secret that main() prints, so never in a deployed environment.
+    if settings.env not in {AppEnv.DEV, AppEnv.TEST}:
+        msg = f"the demo seed runs only in dev and test, not {settings.env}"
+        raise RuntimeError(msg)
+    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     try:
@@ -411,8 +415,8 @@ async def seed_demo_data() -> SeedResult:
             free_endpoint_id = free_endpoint.id
             paid_endpoint_id = paid_endpoint.id
 
-        # Its own short transaction, after the one above commits: phase 1 must sign
-        # every forward, so the demo listings need this before they can load.
+        # Its own short transaction, after the one above commits: the demo listings need
+        # a signing secret before they can load.
         provider_signing_secret = await _ensure_signing_secret(
             session_factory,
             settings=settings,

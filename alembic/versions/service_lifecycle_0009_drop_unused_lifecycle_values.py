@@ -35,24 +35,25 @@ def upgrade() -> None:
         $$
         """,
     )
-    _replace_lifecycle_column(length=6, values="'draft', 'active'")
+    _replace_lifecycle_column("draft", "active")
 
 
 def downgrade() -> None:
-    _replace_lifecycle_column(length=9, values="'draft', 'active', 'suspended', 'delisted'")
+    _replace_lifecycle_column("draft", "active", "suspended", "delisted")
 
 
-def _replace_lifecycle_column(*, length: int, values: str) -> None:
+def _replace_lifecycle_column(*values: str) -> None:
     op.drop_constraint(op.f("ck_services_service_lifecycle"), "services", type_="check")
     op.alter_column(
         "services",
         "lifecycle",
-        type_=sa.String(length=length),
+        type_=sa.String(length=max(map(len, values))),
         existing_nullable=False,
         existing_server_default="draft",
     )
+    quoted = ", ".join(f"'{value}'" for value in values)
     op.create_check_constraint(
         op.f("ck_services_service_lifecycle"),
         "services",
-        f"lifecycle IN ({values})",
+        f"lifecycle IN ({quoted})",
     )

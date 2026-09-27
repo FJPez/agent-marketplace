@@ -14,12 +14,15 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import build_service_settings
 from tests.helpers.dns import TEST_UPSTREAM_BASE_URL
+from tests.helpers.request_validation import INLINE_REQUEST_VALIDATION_POOL
 
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.db.models import ServiceEndpoint
-from app.services import listings, moderation, provider_endpoints
+from app.schemas.discovery import PublicServicePricingResponse
+from app.schemas.service import EndpointUpdateRequest
+from app.services import discovery, listings, moderation, provider_endpoints
 from app.services.listings import InvokableListing, ListingPriceTerms, ListingUpstream
 
 # The treasury before a rotation: price versions keep the pay_to they were stamped with.
@@ -162,26 +165,15 @@ async def test_a_paid_listing_loads_its_current_price_version_as_stored(
 @pytest.mark.parametrize(
     ("flaw", "lookup"),
     [
-        ({"lifecycle": ServiceLifecycle.DRAFT}, {}),
-        ({"moderation_actions": ("suspend",)}, {}),
-        ({"moderation_actions": ("delist",)}, {}),
-        ({"is_enabled": False}, {}),
-        ({"with_upstream": False}, {}),
-        ({"access_mode": AccessMode.PAID}, {}),
-        ({"with_signing_secret": False}, {}),
-        ({}, {"service_slug": "unknown"}),
-        ({}, {"endpoint_key": "unknown"}),
-    ],
-    ids=[
-        "draft_service",
-        "suspended_service",
-        "delisted_service",
-        "disabled_endpoint",
-        "no_upstream",
-        "paid_without_a_price",
-        "no_signing_secret",
-        "unknown_service",
-        "unknown_endpoint",
+        pytest.param({"lifecycle": ServiceLifecycle.DRAFT}, {}, id="draft_service"),
+        pytest.param({"moderation_actions": ("suspend",)}, {}, id="suspended_service"),
+        pytest.param({"moderation_actions": ("delist",)}, {}, id="delisted_service"),
+        pytest.param({"is_enabled": False}, {}, id="disabled_endpoint"),
+        pytest.param({"with_upstream": False}, {}, id="no_upstream"),
+        pytest.param({"access_mode": AccessMode.PAID}, {}, id="paid_without_a_price"),
+        pytest.param({"with_signing_secret": False}, {}, id="no_signing_secret"),
+        pytest.param({}, {"service_slug": "unknown"}, id="unknown_service"),
+        pytest.param({}, {"endpoint_key": "unknown"}, id="unknown_endpoint"),
     ],
 )
 async def test_a_listing_that_cannot_be_invoked_is_not_found(
@@ -217,27 +209,7 @@ async def test_an_endpoint_is_found_only_under_its_own_service(
     assert other.listing_id == other_endpoint_id
 
 
-async def test_a_suspension_after_a_load_hides_the_listing_from_the_next_load(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    seeded = await _seed_listing(db_session_factory)
-    admin_account_id = await create_admin_account_record(db_session_factory)
-    loaded = await _load(db_session_factory)
-
-    async with db_session_factory() as session:
-        await moderation.suspend_service(
-            session=session,
-            service_id=seeded.service_id,
-            actor_account_id=admin_account_id,
-            reason="abuse report",
-        )
-
-    assert loaded.listing_id == seeded.endpoint_id
-    with pytest.raises(NotFoundError):
-        await _load(db_session_factory)
-
-
-async def test_a_restored_service_loads_again(
+async def test_a_suspension_hides_the_listing_until_it_is_restored(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     seeded = await _seed_listing(db_session_factory)
@@ -268,8 +240,8 @@ async def test_a_restored_service_loads_again(
 async def test_a_loaded_price_can_be_checked_against_the_current_terms(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """is_on_current_terms takes a ListingPrice today; phase 1 will call it with the
-    loader's own ListingPriceTerms, so the two must be interchangeable for it."""
+    """is_on_current_terms accepts the loader's ListingPriceTerms as well as a stored
+    ListingPrice: both satisfy its PriceTerms protocol."""
     seeded = await _seed_listing(db_session_factory, access_mode=AccessMode.PAID)
     await create_listing_price_record(db_session_factory, endpoint_id=seeded.endpoint_id)
 
@@ -330,3 +302,43 @@ async def test_loading_ends_its_read_transaction(
                 endpoint_key="unknown",
             )
         assert not session.in_transaction()
+
+
+async def test_every_endpoint_discovery_lists_can_be_loaded(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_listing(db_session_factory)
+    paid_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=seeded.service_id,
+        key="summarize",
+        access_mode=AccessMode.PAID,
+    )
+    await create_upstream_record(db_session_factory, endpoint_id=paid_id)
+    await create_listing_price_record(db_session_factory, endpoint_id=paid_id)
+    unfinished_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=seeded.service_id,
+        key="unfinished",
+        is_enabled=False,
+    )
+    async with db_session_factory() as session:
+        # The one way an endpoint without an upstream could reach discovery.
+        with pytest.raises(InvalidStateError):
+            await provider_endpoints.update_endpoint(
+                session=session,
+                settings=build_service_settings(),
+                validation_pool=INLINE_REQUEST_VALIDATION_POOL,
+                account_id=seeded.provider_account_id,
+                endpoint_id=unfinished_id,
+                changes=EndpointUpdateRequest(is_enabled=True),
+            )
+
+    async with db_session_factory() as session:
+        service = await discovery.get_service(session=session, service_ref="translator")
+        listed = PublicServicePricingResponse.from_model(service).endpoints
+
+    assert sorted(endpoint.key for endpoint in listed) == ["summarize", "translate"]
+    for endpoint in listed:
+        loaded = await _load(db_session_factory, endpoint_key=endpoint.key)
+        assert loaded.service_id == seeded.service_id

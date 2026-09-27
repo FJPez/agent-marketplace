@@ -210,28 +210,37 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   schema. A schema has at most 64 patterns, each compiled by a linear-time engine
   within 10 KiB: a pattern that can apply to a request body must avoid lookaround and
   backreferences and compile no larger, so `\p{L}+` or `[A-Za-z0-9+/]{0,256}` are
-  refused. `format` is an annotation only, as the draft specifies by default. The
-  schema is compiled in a request validation worker (below), because compiling some
-  patterns takes time quadratic in their length, and must compile within
-  `APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS` (default 100, at most half of
-  `APP_REQUEST_VALIDATION_TIMEOUT_MS`), or it is refused as too expensive to compile.
-  So a worker that must compile a stored schema afresh still has at least half the
-  validation deadline for the body.
+  refused. `format` is an annotation only, as the draft specifies by default. Once the
+  caller is known to own the service or endpoint, the schema is compiled in a request
+  validation worker (below), because compiling some patterns takes time quadratic in
+  their length. It must compile within `APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS` (default
+  100, at most half of `APP_REQUEST_VALIDATION_TIMEOUT_MS`), or it is refused with 422
+  as too expensive to compile, so a worker that must compile a stored schema afresh
+  still has at least half the validation deadline for the body. Saves never hold every
+  worker: at most `APP_REQUEST_VALIDATION_WORKERS` minus one compiles run at once (one,
+  with a single worker). A save can get 503 with `Retry-After: 1` when no worker is
+  free, when workers cannot start, or while the API is shutting down.
 - A request body is validated against its endpoint's `request_schema` in a worker
   process, because the validator (jsonschema-rs) holds the Python GIL and what a
   schema costs on a body is not known in advance. `APP_REQUEST_VALIDATION_WORKERS`
-  (default 2, at most 32) workers start on the first validation, each a fresh
-  interpreter with an empty environment. A validation must finish within
+  (default 2, at most 32) workers start on the first compile or validation, each a
+  fresh interpreter with an empty environment. The body is validated as the exact bytes
+  the provider receives: it must be at most 1 MiB of UTF-8 JSON without a byte order
+  mark, with no object holding a key twice, with finite numbers (not `NaN`, `Infinity`
+  or `1e400`), nested at most 128 levels. A refused body names its first error and
+  where it is, each cut to 200 characters. A validation must finish within
   `APP_REQUEST_VALIDATION_TIMEOUT_MS` (default 250, at most 10000); otherwise its
   worker is killed and the body is refused with 422 and the problem type
   `request_validation_timeout`. A body that makes its worker exit (a stack overflow,
-  or, on Linux, the worker's 512 MiB address-space limit, which macOS does not
-  enforce) is refused with 422 and `request_validation_failed`. A body waits at most
-  the same deadline for a free worker, then gets 503 with `Retry-After: 1`; 503 also
-  means workers cannot start, or the API is shutting down. A body must be at most
-  1 MiB of JSON with finite numbers (not `NaN`, `Infinity` or `1e400`), nested at most
-  128 levels, and a refused body names its first error and where it is, each cut to
-  200 characters. Each worker keeps its 256 most recently used compiled schemas.
+  say) is refused with 422 and `request_validation_failed`. A body waits at most the
+  same deadline for a free worker, then gets 503 with `Retry-After: 1`; 503 also means
+  workers cannot start, or the API is shutting down, and, with the problem type
+  `listing_unavailable` and `Retry-After: 60`, that the endpoint's stored schema no
+  longer compiles. Each worker keeps its 256 most recently used compiled schemas and
+  starts at about 25 MiB; once it passes 384 MiB it exits after answering, and the next
+  call starts a fresh one. On Linux a worker can never pass 512 MiB of address space
+  (macOS does not enforce that limit), so each API process needs room for
+  `APP_REQUEST_VALIDATION_WORKERS` times 512 MiB.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base

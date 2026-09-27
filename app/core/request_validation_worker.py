@@ -20,11 +20,12 @@ import resource
 import struct
 import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import BinaryIO
 
 import jsonschema_rs
 
-from app.core.json_types import JsonValue
+from app.core.json_types import JsonObject, JsonValue
 from app.core.request_schema_validation import json_pointer
 
 CHECK_SCHEMA = 0
@@ -32,8 +33,15 @@ VALIDATE_BODY = 1
 # A request: its kind, then the byte lengths of the schema's canonical JSON and of the body
 # that follow.
 REQUEST_HEADER = struct.Struct("!BII")
-# An answer: the byte length of the UTF-8 text that follows.
-ANSWER_HEADER = struct.Struct("!I")
+# An answer: its outcome, whether the worker exits after it, then the byte length of the
+# UTF-8 text that follows.
+ANSWER_HEADER = struct.Struct("!B?I")
+# Outcomes. NO_REFUSAL also marks the empty frames that say the worker is ready and has
+# read a request. UNCOMPILABLE_SCHEMA answers a body sent with a schema that does not
+# compile, which the save check makes a provider-side fault.
+NO_REFUSAL = 0
+REFUSAL = 1
+UNCOMPILABLE_SCHEMA = 2
 # Far deeper than real bodies. It does not prevent every stack overflow (a long `$ref`
 # chain applied at each level can still overflow), but those only end the worker.
 REQUEST_BODY_MAX_DEPTH = 128
@@ -47,10 +55,6 @@ MEMORY_LIMIT_BYTES = 512 * 1024 * 1024
 PATTERN_SIZE_LIMIT = 10 * 1024
 PATTERN_DFA_SIZE_LIMIT = 64 * 1024
 
-_MISMATCH = "request body does not match the request schema"
-_NOT_JSON = "request body is not valid JSON"
-_NOT_FINITE = "request body holds a number that is not finite"
-_LONE_SURROGATE = "request body holds a string that is not valid Unicode (a lone surrogate)"
 _TOO_DEEP = f"request body must nest at most {REQUEST_BODY_MAX_DEPTH} levels"
 _PATTERN_RULE = (
     "is not supported: patterns must avoid lookaround and backreferences "
@@ -62,22 +66,46 @@ class _NotFiniteError(ValueError):
     """A number parsed as NaN or an infinity."""
 
 
+class _RepeatedKeyError(ValueError):
+    """An object that holds one key twice."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
 def main() -> None:
+    """Answer requests until the input ends, or the worker outgrows `sys.argv[1]` bytes."""
+    recycle_bytes = int(sys.argv[1])
     if sys.platform == "linux":
         # A lower limit already set bounds the worker more tightly.
         with contextlib.suppress(ValueError):
             resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT_BYTES, MEMORY_LIMIT_BYTES))
     requests, answers = sys.stdin.buffer, sys.stdout.buffer
-    _answer(answers, None)  # ready
+    _answer(answers)  # ready
     while header := requests.read(REQUEST_HEADER.size):
         kind, schema_size, body_size = REQUEST_HEADER.unpack(header)
         schema_json = requests.read(schema_size).decode()
         body = requests.read(body_size)
-        _answer(answers, None)  # read
-        if kind == CHECK_SCHEMA:
-            _answer(answers, schema_refusal(schema_json))
-        else:
-            _answer(answers, body_refusal(schema_json, body))
+        _answer(answers)  # read
+        outcome, text = _outcome(kind, schema_json, body)
+        # Exiting returns the memory of the validators it keeps to the system, which
+        # clearing their cache would not; the pool starts a fresh worker in its place.
+        exiting = _memory_bytes() > recycle_bytes
+        _answer(answers, outcome, text, exiting=exiting)
+        if exiting:
+            return
+
+
+def _outcome(kind: int, schema_json: str, body: bytes) -> tuple[int, str]:
+    """A request's outcome, and the text of its refusal."""
+    schema_problem = schema_refusal(schema_json)
+    if kind == CHECK_SCHEMA:
+        return (NO_REFUSAL, "") if schema_problem is None else (REFUSAL, schema_problem)
+    if schema_problem is not None:
+        return UNCOMPILABLE_SCHEMA, ""
+    refusal = body_refusal(schema_json, body)
+    return (NO_REFUSAL, "") if refusal is None else (REFUSAL, refusal)
 
 
 def schema_refusal(schema_json: str) -> str | None:
@@ -86,39 +114,62 @@ def schema_refusal(schema_json: str) -> str | None:
         _compile(schema_json)
     except jsonschema_rs.ValidationError as exc:
         path = tuple(str(part) for part in exc.instance_path)
+        location = _cut(json_pointer(path))
         if exc.kind.as_dict() == {"format": "regex"}:
             # A refused `pattern` is the value itself; a refused patternProperties key is
             # the subschema's key.
             pattern = exc.instance if isinstance(exc.instance, str) else path[-1]
             return (
-                f"request_schema pattern {json.dumps(pattern)} {_PATTERN_RULE} "
-                f"at {json_pointer(path)}"
+                f"request_schema pattern {_cut(json.dumps(pattern))} {_PATTERN_RULE} at {location}"
             )
-        msg = f"request_schema is not a valid JSON Schema: {exc.message}"
-        return f"{msg} at {json_pointer(path)}" if path else msg
+        msg = f"request_schema is not a valid JSON Schema: {_cut(exc.message)}"
+        return f"{msg} at {location}" if path else msg
+    except ValueError as exc:  # such as the compiler's own recursion limit
+        return f"request_schema is not a valid JSON Schema: {_cut(str(exc))}"
     return None
 
 
 def body_refusal(schema_json: str, body: bytes) -> str | None:
-    """Why the raw JSON `body` is refused against the schema `schema_json`, or None."""
+    """Why the raw JSON `body` is refused against the schema `schema_json`, or None.
+
+    The body is refused unless it is JSON exactly as the provider will read it: UTF-8
+    without a byte order mark (RFC 8259), and no object holding a key twice (I-JSON,
+    RFC 7493), since parsers disagree on which of its values wins.
+    """
     validator = _compile(schema_json)
     try:
-        instance = json.loads(body, parse_constant=_not_finite, parse_float=_finite_float)
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return "request body is not UTF-8"
+    if text.startswith("\ufeff"):
+        return "request body must not start with a byte order mark"
+    try:
+        instance = json.loads(
+            text,
+            parse_constant=_not_finite,
+            parse_float=_finite_float,
+            object_pairs_hook=_unique_keys,
+        )
     except RecursionError:
         return _TOO_DEEP
     except _NotFiniteError:
-        return _NOT_FINITE
-    except ValueError:  # malformed, not UTF-8, or an integer of over 4,300 digits
-        return _NOT_JSON
+        return "request body holds a number that is not finite"
+    except _RepeatedKeyError as exc:
+        return f"request body repeats the key {_cut(json.dumps(exc.key))}"
+    except ValueError:  # malformed, or an integer of over 4,300 digits
+        return "request body is not valid JSON"
     if _nests_deeper_than(instance, REQUEST_BODY_MAX_DEPTH):
         return _TOO_DEEP
     try:
         validator.validate(instance)
     except jsonschema_rs.ValidationError as exc:
         location = json_pointer(exc.instance_path) or "the root"
-        return f"{_MISMATCH}: {_cut(exc.message)} at {_cut(location)}"
+        return (
+            "request body does not match the request schema: "
+            f"{_cut(exc.message)} at {_cut(location)}"
+        )
     except UnicodeEncodeError:
-        return _LONE_SURROGATE
+        return "request body holds a string that is not valid Unicode (a lone surrogate)"
     return None
 
 
@@ -135,14 +186,40 @@ def _compile(schema_json: str) -> jsonschema_rs.Draft202012Validator:
     )
 
 
-def _answer(answers: BinaryIO, text: str | None) -> None:
-    data = (text or "").encode()
-    answers.write(ANSWER_HEADER.pack(len(data)) + data)
+def _answer(
+    answers: BinaryIO,
+    outcome: int = NO_REFUSAL,
+    text: str = "",
+    *,
+    exiting: bool = False,
+) -> None:
+    data = text.encode()
+    answers.write(ANSWER_HEADER.pack(outcome, exiting, len(data)) + data)
     answers.flush()
+
+
+def _memory_bytes() -> int:
+    """The worker's size: on Linux its address space, which MEMORY_LIMIT_BYTES bounds;
+    elsewhere its peak resident size."""
+    if sys.platform == "linux":
+        pages = int(Path("/proc/self/statm").read_text().split()[0])
+        return pages * resource.getpagesize()
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS
 
 
 def _not_finite(name: str) -> float:
     raise _NotFiniteError(name)
+
+
+def _unique_keys(pairs: list[tuple[str, JsonValue]]) -> JsonObject:
+    members = dict(pairs)
+    if len(members) < len(pairs):
+        seen: set[str] = set()
+        for key, _ in pairs:
+            if key in seen:
+                raise _RepeatedKeyError(key)
+            seen.add(key)
+    return members
 
 
 def _finite_float(text: str) -> float:

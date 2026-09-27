@@ -54,14 +54,14 @@ class InvokableListing:
     upstream: ListingUpstream
     # None for a free listing. A paid listing's version is returned as stored, even when
     # the marketplace's payment settings have changed since it was created (see
-    # provider_endpoints.is_on_current_terms): the invoke path decides what to do then.
+    # provider_endpoints.is_on_current_terms): the caller decides what to do then.
     price: ListingPriceTerms | None
     timeout_seconds: int
     supports_idempotency: bool
     response_content_type: str
-    # Validated per request in the worker pool with validate_request_body(pool=...,
-    # schema=listing.request_schema, body=...) (app.core.request_validation); never
-    # compiled here.
+    # Validated per request by app.core.request_validation.validate_request_body; never
+    # compiled in the API process. A fresh copy per load, so the frozen snapshot is not
+    # shared, though the dict itself can be changed.
     request_schema: JsonObject
 
 
@@ -74,17 +74,17 @@ async def load_invokable_listing(
     """Load the listing invoked at /v1/invoke/{service_slug}/{endpoint_key}.
 
     The one definition of "can be invoked": the service is active and neither suspended
-    nor delisted, its provider has a signing secret for phase 1 to sign the forwarded
-    request with, the endpoint is enabled and has an upstream, and a paid endpoint has a
-    current price version. Anything else is NotFoundError, so a consumer cannot tell a
-    moderated or unfinished listing from a missing one.
+    nor delisted, its provider has a signing secret to sign the forwarded request with,
+    the endpoint is enabled and has an upstream, and a paid endpoint has a current price
+    version. Anything else is NotFoundError, so a consumer cannot tell a moderated or
+    unfinished listing from a missing one.
 
-    `session` must have no transaction open, and ends this call with none: phase 1 calls
-    the facilitator or the provider next, and must not do so with a transaction, let
-    alone the caller's own, left open. Raises RuntimeError, a programming error rather
-    than a NotFoundError, if the caller passes a session with a transaction already
-    open; it does not touch that transaction, so the caller's work is left exactly as
-    it was.
+    `session` must have no transaction open, and ends this call with none: the invoke
+    path calls the facilitator or the provider next, and must not do so with a
+    transaction, let alone the caller's own, left open. Raises RuntimeError, a
+    programming error rather than a NotFoundError, if the caller passes a session with a
+    transaction already open; it does not touch that transaction, so the caller's work is
+    left exactly as it was.
     """
     if session.in_transaction():
         msg = "load_invokable_listing needs a session with no transaction open"
@@ -129,11 +129,11 @@ async def load_invokable_listing(
                 ServiceEndpoint.access_mode == AccessMode.FREE,
                 ServiceEndpoint.current_price_id.is_not(None),
             ),
-            # Phase 1 signs every forwarded request. A service published (by the seed
-            # script, say) whose provider never got a signing secret is not invokable,
-            # rather than failing only after a consumer has paid. The secret itself
-            # never leaves this query: InvokableListing carries no such field, so it
-            # cannot reach a log through its repr.
+            # Every forwarded request is signed with the provider's secret. A service
+            # published (by the seed script, say) whose provider never got a signing
+            # secret is not invokable, rather than failing only after a consumer has
+            # paid. The secret itself never leaves this query: InvokableListing carries
+            # no such field, so it cannot reach a log through its repr.
             has_signing_secret,
         )
     )
@@ -141,6 +141,18 @@ async def load_invokable_listing(
         row = (await session.execute(statement)).one_or_none()
         if row is None:
             raise NotFoundError("listing not found")
+        price = None
+        if row.price_id is not None:
+            price = ListingPriceTerms(
+                id=row.price_id,
+                version=row.version,
+                amount=row.amount,
+                asset=row.asset,
+                network=row.network,
+                pay_to=row.pay_to,
+                max_timeout_seconds=row.max_timeout_seconds,
+                fee_bps=row.fee_bps,
+            )
         return InvokableListing(
             listing_id=row.listing_id,
             service_id=row.service_id,
@@ -150,18 +162,7 @@ async def load_invokable_listing(
                 path=row.path,
                 http_method=row.http_method,
             ),
-            price=None
-            if row.price_id is None
-            else ListingPriceTerms(
-                id=row.price_id,
-                version=row.version,
-                amount=row.amount,
-                asset=row.asset,
-                network=row.network,
-                pay_to=row.pay_to,
-                max_timeout_seconds=row.max_timeout_seconds,
-                fee_bps=row.fee_bps,
-            ),
+            price=price,
             timeout_seconds=row.timeout_seconds,
             supports_idempotency=row.supports_idempotency,
             response_content_type=row.response_content_type,

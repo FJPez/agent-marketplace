@@ -30,7 +30,7 @@ from tests.helpers.dns import (
     TEST_UPSTREAM_HOST,
     FakeResolver,
 )
-from tests.helpers.request_validation import IN_PROCESS_REQUEST_VALIDATION_POOL
+from tests.helpers.request_validation import INLINE_REQUEST_VALIDATION_POOL
 from tests.integration.db.support import (
     MIGRATION_DATABASE_SUFFIX,
     MigrationDatabase,
@@ -235,7 +235,7 @@ def app(
     application.dependency_overrides[get_dns_resolver] = lambda: dns_resolver
     # Nor starts request validation workers, unless it removes this.
     application.dependency_overrides[get_request_validation_pool] = lambda: (
-        IN_PROCESS_REQUEST_VALIDATION_POOL
+        INLINE_REQUEST_VALIDATION_POOL
     )
     return application
 
