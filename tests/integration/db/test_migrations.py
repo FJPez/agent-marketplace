@@ -137,6 +137,7 @@ async def _insert_endpoint(
     key: str,
     request_schema: str = "{}",
     response_schema: str = "{}",
+    timeout_seconds: int = 30,
 ) -> int:
     async with db_engine.begin() as connection:
         return (
@@ -149,7 +150,8 @@ async def _insert_endpoint(
                     )
                     VALUES (
                         :service_id, :key, 'Check Endpoint', 'free',
-                        CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb), 30
+                        CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb),
+                        :timeout_seconds
                     )
                     RETURNING id
                     """
@@ -159,6 +161,7 @@ async def _insert_endpoint(
                     "key": key,
                     "request_schema": request_schema,
                     "response_schema": response_schema,
+                    "timeout_seconds": timeout_seconds,
                 },
             )
         ).scalar_one()
@@ -295,6 +298,25 @@ def test_head_migration_rejects_non_object_service_endpoint_schema(
         )
 
 
+@pytest.mark.parametrize("timeout_seconds", [0, 31])
+def test_head_migration_rejects_endpoint_timeout_outside_the_cap(
+    clean_database: None,
+    db_engine: AsyncEngine,
+    timeout_seconds: int,
+) -> None:
+    service_id = asyncio.run(_seed_service(db_engine, slug="timeout-cap-check"))
+
+    with pytest.raises(IntegrityError, match="ck_service_endpoints_timeout_seconds_range"):
+        asyncio.run(
+            _insert_endpoint(
+                db_engine,
+                service_id=service_id,
+                key="timeout-cap-check",
+                timeout_seconds=timeout_seconds,
+            )
+        )
+
+
 def test_head_migration_rejects_non_object_provider_upstream_config(
     clean_database: None,
     db_engine: AsyncEngine,
@@ -372,4 +394,47 @@ def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
 
         assert asyncio.run(get_table_names(engine)) <= {ALEMBIC_VERSION_TABLE}
     finally:
+        command.upgrade(config, "head")
+
+
+async def _read_endpoint_invocation_fields(
+    db_engine: AsyncEngine,
+    *,
+    endpoint_id: int,
+) -> tuple[int, bool, str]:
+    async with db_engine.connect() as connection:
+        row = (
+            await connection.execute(
+                text(
+                    "SELECT timeout_seconds, supports_idempotency, response_content_type "
+                    "FROM service_endpoints WHERE id = :endpoint_id"
+                ),
+                {"endpoint_id": endpoint_id},
+            )
+        ).one()
+    return row.timeout_seconds, row.supports_idempotency, row.response_content_type
+
+
+def test_endpoint_fields_migration_caps_existing_timeouts_and_fills_defaults(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "baseline_0001")
+    try:
+        service_id = asyncio.run(_seed_service(engine, slug="timeout-cap-upgrade"))
+        endpoint_id = asyncio.run(
+            _insert_endpoint(engine, service_id=service_id, key="slow", timeout_seconds=3600)
+        )
+
+        command.upgrade(config, "endpoint_fields_0002")
+
+        assert asyncio.run(_read_endpoint_invocation_fields(engine, endpoint_id=endpoint_id)) == (
+            30,
+            False,
+            "application/json",
+        )
+    finally:
+        command.downgrade(config, "base")
         command.upgrade(config, "head")

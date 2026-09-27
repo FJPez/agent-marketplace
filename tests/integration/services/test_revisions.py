@@ -47,7 +47,9 @@ async def test_create_revision_persists_snapshot_and_updates_current_token(
             access_mode=AccessMode.FREE,
             request_schema={"type": "object"},
             response_schema={"type": "object"},
+            response_content_type="application/json",
             timeout_seconds=30,
+            supports_idempotency=False,
             is_enabled=True,
         )
         session.add(endpoint)
@@ -91,12 +93,14 @@ async def test_create_revision_persists_snapshot_and_updates_current_token(
                 "access_mode": "free",
                 "request_schema": {"type": "object"},
                 "response_schema": {"type": "object"},
+                "response_content_type": "application/json",
                 "pricing": {
                     "pricing_type": "free",
                     "amount_minor": None,
                     "currency": None,
                 },
                 "timeout_seconds": 30,
+                "supports_idempotency": False,
                 "is_enabled": True,
             },
         ],

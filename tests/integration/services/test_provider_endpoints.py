@@ -155,6 +155,38 @@ async def test_create_endpoint_paid_without_pricing_creates_no_pricing_row(
     assert persisted_pricing is None
 
 
+async def test_create_endpoint_persists_invocation_fields(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
+
+    async with db_session_factory() as session:
+        endpoint = await create_endpoint(
+            session=session,
+            account_id=account_id,
+            service_id=service_id,
+            request=EndpointCreateRequest(
+                key="plain-text",
+                name="Plain Text",
+                access_mode=AccessMode.FREE,
+                request_schema=REQUEST_SCHEMA,
+                response_schema=RESPONSE_SCHEMA,
+                response_content_type="text/plain",
+                timeout_seconds=30,
+                supports_idempotency=True,
+            ),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint.id)
+
+    assert persisted is not None
+    assert persisted.response_content_type == "text/plain"
+    assert persisted.supports_idempotency is True
+    assert persisted.timeout_seconds == 30
+
+
 async def test_create_endpoint_returns_endpoint_with_loaded_relations(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -386,7 +418,7 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
             account_id=account_id,
             endpoint_id=endpoint_id,
             changes=EndpointUpdateRequest(
-                name="  New Name  ", summary="  New Summary  ", timeout_seconds=45
+                name="  New Name  ", summary="  New Summary  ", timeout_seconds=20
             ),
         )
 
@@ -396,7 +428,7 @@ async def test_update_endpoint_draft_persists_fields_and_bumps_updated_at(
     assert persisted is not None
     assert persisted.name == "New Name"
     assert persisted.summary == "New Summary"
-    assert persisted.timeout_seconds == 45
+    assert persisted.timeout_seconds == 20
     assert persisted.updated_at > before_updated_at
 
 
@@ -509,7 +541,7 @@ async def test_update_endpoint_draft_retains_price_when_pricing_is_omitted(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            changes=EndpointUpdateRequest(timeout_seconds=60),
+            changes=EndpointUpdateRequest(timeout_seconds=20),
         )
 
     async with db_session_factory() as session:
@@ -517,7 +549,7 @@ async def test_update_endpoint_draft_retains_price_when_pricing_is_omitted(
         persisted_pricing = await session.get(EndpointPrice, endpoint_id)
 
     assert persisted_endpoint is not None
-    assert persisted_endpoint.timeout_seconds == 60
+    assert persisted_endpoint.timeout_seconds == 20
     assert persisted_pricing is not None
     assert persisted_pricing.amount_minor == 500
     assert persisted_pricing.currency == "USD"
@@ -889,7 +921,7 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            changes=EndpointUpdateRequest(timeout_seconds=60),
+            changes=EndpointUpdateRequest(timeout_seconds=20),
         )
 
     async with db_session_factory() as session:
@@ -903,6 +935,48 @@ async def test_update_endpoint_active_material_update_creates_one_revision(
     assert persisted_service is not None
     assert revision_count == 2
     assert persisted_service.current_change_token != before_token
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("supports_idempotency", True), ("response_content_type", "text/plain")],
+)
+async def test_update_endpoint_active_invocation_field_change_creates_revision(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    field: str,
+    value: object,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+        with_revision=True,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+
+    async with db_session_factory() as session:
+        await update_endpoint(
+            session=session,
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            changes=EndpointUpdateRequest.model_validate({field: value}),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+        latest_revision = await session.scalar(
+            select(ServiceRevision)
+            .where(ServiceRevision.service_id == service_id)
+            .order_by(ServiceRevision.revision_number.desc())
+            .limit(1),
+        )
+
+    assert persisted is not None
+    assert getattr(persisted, field) == value
+    assert latest_revision is not None
+    assert latest_revision.revision_number == 2
 
 
 async def test_update_endpoint_active_material_update_snapshots_sibling_endpoints(
@@ -939,7 +1013,7 @@ async def test_update_endpoint_active_material_update_snapshots_sibling_endpoint
             session=session,
             account_id=account_id,
             endpoint_id=updated_endpoint_id,
-            changes=EndpointUpdateRequest(timeout_seconds=60),
+            changes=EndpointUpdateRequest(timeout_seconds=20),
         )
 
     async with db_session_factory() as session:
@@ -959,12 +1033,14 @@ async def test_update_endpoint_active_material_update_snapshots_sibling_endpoint
             "access_mode": "paid",
             "request_schema": {"type": "object"},
             "response_schema": {"type": "object"},
+            "response_content_type": "application/json",
             "pricing": {
                 "pricing_type": "fixed_per_call",
                 "amount_minor": 750,
                 "currency": "EUR",
             },
             "timeout_seconds": 30,
+            "supports_idempotency": False,
             "is_enabled": True,
         },
         {
@@ -973,12 +1049,14 @@ async def test_update_endpoint_active_material_update_snapshots_sibling_endpoint
             "access_mode": "free",
             "request_schema": {"type": "object"},
             "response_schema": {"type": "object"},
+            "response_content_type": "application/json",
             "pricing": {
                 "pricing_type": "free",
                 "amount_minor": None,
                 "currency": None,
             },
-            "timeout_seconds": 60,
+            "timeout_seconds": 20,
+            "supports_idempotency": False,
             "is_enabled": True,
         },
     ]
@@ -1013,12 +1091,12 @@ async def test_update_endpoint_returns_endpoint_renderable_without_lazy_loading(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
-            changes=EndpointUpdateRequest(timeout_seconds=60),
+            changes=EndpointUpdateRequest(timeout_seconds=20),
         )
         response = EndpointResponse.from_model(endpoint)
 
     assert response.id == endpoint_id
-    assert response.timeout_seconds == 60
+    assert response.timeout_seconds == 20
     assert response.has_upstream is True
     assert response.pricing is not None
     assert response.pricing.amount_minor == 500
@@ -1079,7 +1157,7 @@ async def test_update_endpoint_active_paid_endpoint_without_pricing_rejects_mate
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                changes=EndpointUpdateRequest(timeout_seconds=60),
+                changes=EndpointUpdateRequest(timeout_seconds=20),
             )
 
 
@@ -1112,7 +1190,7 @@ async def test_update_endpoint_rejects_active_paid_without_pricing_before_mutati
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                changes=EndpointUpdateRequest(timeout_seconds=60),
+                changes=EndpointUpdateRequest(timeout_seconds=20),
             )
         await session.commit()
 
@@ -1150,7 +1228,7 @@ async def test_update_endpoint_suspended_service_blocks_material_update(
                 session=session,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                changes=EndpointUpdateRequest(timeout_seconds=60),
+                changes=EndpointUpdateRequest(timeout_seconds=20),
             )
 
 

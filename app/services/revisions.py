@@ -17,8 +17,10 @@ MATERIAL_ENDPOINT_FIELDS = frozenset(
         "access_mode",
         "request_schema",
         "response_schema",
+        "response_content_type",
         "pricing",
         "timeout_seconds",
+        "supports_idempotency",
         "is_enabled",
     },
 )
@@ -52,8 +54,10 @@ def build_contract_snapshot(service: Service) -> dict[str, object]:
                 "access_mode": endpoint.access_mode.value,
                 "request_schema": endpoint.request_schema,
                 "response_schema": endpoint.response_schema,
+                "response_content_type": endpoint.response_content_type,
                 "pricing": _build_pricing_snapshot(endpoint),
                 "timeout_seconds": endpoint.timeout_seconds,
+                "supports_idempotency": endpoint.supports_idempotency,
                 "is_enabled": endpoint.is_enabled,
             }
             for endpoint in ordered_endpoints

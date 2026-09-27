@@ -290,7 +290,7 @@ async def update_provider_endpoint(
                     "summary": "Update endpoint pricing",
                     "value": {
                         "summary": "A paid endpoint that returns a compact summary.",
-                        "timeout_seconds": 45,
+                        "timeout_seconds": 20,
                         "pricing": {"amount_minor": 250, "currency": "USD"},
                     },
                 }

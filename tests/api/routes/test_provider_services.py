@@ -189,7 +189,7 @@ async def test_create_paid_endpoint_returns_fixed_per_call_pricing(
             "access_mode": "paid",
             "request_schema": {"type": "object"},
             "response_schema": {"type": "object"},
-            "timeout_seconds": 45,
+            "timeout_seconds": 20,
             "is_enabled": True,
             "pricing": {"amount_minor": 1500, "currency": "USD"},
         },
@@ -575,7 +575,7 @@ async def test_create_and_patch_endpoint_manage_owned_draft_endpoint(
             "access_mode": "free",
             "request_schema": {"type": "object"},
             "response_schema": {"type": "object"},
-            "timeout_seconds": 45,
+            "timeout_seconds": 20,
             "is_enabled": True,
         },
     )
@@ -583,6 +583,8 @@ async def test_create_and_patch_endpoint_manage_owned_draft_endpoint(
     assert create_response.status_code == 201
     endpoint_id = create_response.json()["id"]
     assert create_response.json()["has_upstream"] is False
+    assert create_response.json()["supports_idempotency"] is False
+    assert create_response.json()["response_content_type"] == "application/json"
 
     patch_response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
@@ -590,18 +592,22 @@ async def test_create_and_patch_endpoint_manage_owned_draft_endpoint(
         json={
             "name": "Translate Updated",
             "summary": "Translate text quickly",
-            "timeout_seconds": 90,
+            "timeout_seconds": 25,
             "is_enabled": False,
             "access_mode": "paid",
+            "supports_idempotency": True,
+            "response_content_type": "Text/Plain",
         },
     )
 
     assert patch_response.status_code == 200
     assert patch_response.json()["name"] == "Translate Updated"
     assert patch_response.json()["summary"] == "Translate text quickly"
-    assert patch_response.json()["timeout_seconds"] == 90
+    assert patch_response.json()["timeout_seconds"] == 25
     assert patch_response.json()["is_enabled"] is False
     assert patch_response.json()["access_mode"] == "paid"
+    assert patch_response.json()["supports_idempotency"] is True
+    assert patch_response.json()["response_content_type"] == "text/plain"
 
 
 @pytest.mark.asyncio
@@ -946,7 +952,7 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
     timeout_response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
-        json={"timeout_seconds": 60},
+        json={"timeout_seconds": 20},
     )
     pricing_response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
@@ -1052,11 +1058,11 @@ async def test_patch_active_provider_endpoint_material_change_creates_revision_a
     response = await async_client.patch(
         f"/v1/provider/endpoints/{endpoint_id}",
         headers=_auth_headers(account_id),
-        json={"timeout_seconds": 60},
+        json={"timeout_seconds": 20},
     )
 
     assert response.status_code == 200
-    assert response.json()["timeout_seconds"] == 60
+    assert response.json()["timeout_seconds"] == 20
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)

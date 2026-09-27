@@ -157,9 +157,9 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
                 changes=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
             )
 
-    first_update = asyncio.create_task(update_timeout(45))
+    first_update = asyncio.create_task(update_timeout(20))
     await first_revision_created.wait()
-    second_update = asyncio.create_task(update_timeout(60))
+    second_update = asyncio.create_task(update_timeout(25))
     release_first_revision.set()
     await asyncio.gather(first_update, second_update)
 
@@ -364,7 +364,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
                 session=session,
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
-                changes=EndpointUpdateRequest(timeout_seconds=45),
+                changes=EndpointUpdateRequest(timeout_seconds=20),
             )
 
     publish_task = asyncio.create_task(publish())
@@ -389,7 +389,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
     assert service.lifecycle is ServiceLifecycle.ACTIVE
     assert service.current_revision_id is not None
     assert service.current_change_token is not None
-    assert service.endpoints[0].timeout_seconds == 45
+    assert service.endpoints[0].timeout_seconds == 20
 
 
 @pytest.mark.asyncio

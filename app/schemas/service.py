@@ -18,6 +18,7 @@ from pydantic.json_schema import SkipJsonSchema
 from app.core.enums import AccessMode, PricingModelType, ServiceLifecycle
 from app.core.json_types import JsonObject, to_json_object
 from app.core.service_fields import (
+    DEFAULT_RESPONSE_CONTENT_TYPE,
     ENDPOINT_TIMEOUT_MAX_SECONDS,
     SERVICE_DESCRIPTION_MAX_LENGTH,
     SERVICE_NAME_MAX_LENGTH,
@@ -26,6 +27,7 @@ from app.core.service_fields import (
     SLUG_MAX_LENGTH,
     TAG_MAX_LENGTH,
     UPSTREAM_PATH_MAX_LENGTH,
+    normalize_media_type,
     normalize_slug,
     normalize_tag,
     normalize_upstream_path,
@@ -68,6 +70,8 @@ Tag = Annotated[
     AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
+ResponseContentType = Annotated[str, AfterValidator(normalize_media_type)]
+TimeoutSeconds = Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
 
 
 def reject_explicit_null(value: object, info: ValidationInfo) -> object:
@@ -186,7 +190,9 @@ class EndpointCreateRequest(BaseModel):
     access_mode: AccessMode
     request_schema: SchemaObject
     response_schema: SchemaObject
-    timeout_seconds: Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
+    response_content_type: ResponseContentType = DEFAULT_RESPONSE_CONTENT_TYPE
+    timeout_seconds: TimeoutSeconds
+    supports_idempotency: StrictBool = False
     is_enabled: StrictBool = True
     pricing: FixedPrice | None = None
 
@@ -213,7 +219,7 @@ class EndpointUpdateRequest(BaseModel):
             "examples": [
                 {
                     "summary": "Updated paid endpoint summary.",
-                    "timeout_seconds": 45,
+                    "timeout_seconds": 20,
                     "is_enabled": True,
                     "pricing": {"amount_minor": 250, "currency": "USD"},
                 }
@@ -227,9 +233,9 @@ class EndpointUpdateRequest(BaseModel):
     access_mode: AccessMode | SkipJsonSchema[None] = None
     request_schema: SchemaObject | SkipJsonSchema[None] = None
     response_schema: SchemaObject | SkipJsonSchema[None] = None
-    timeout_seconds: (
-        Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)] | SkipJsonSchema[None]
-    ) = None
+    response_content_type: ResponseContentType | SkipJsonSchema[None] = None
+    timeout_seconds: TimeoutSeconds | SkipJsonSchema[None] = None
+    supports_idempotency: StrictBool | SkipJsonSchema[None] = None
     is_enabled: StrictBool | SkipJsonSchema[None] = None
     pricing: FixedPrice | None = None
 
@@ -238,7 +244,9 @@ class EndpointUpdateRequest(BaseModel):
         "access_mode",
         "request_schema",
         "response_schema",
+        "response_content_type",
         "timeout_seconds",
+        "supports_idempotency",
         "is_enabled",
     )(reject_explicit_null)
     validate_any_field_supplied = model_validator(mode="after")(require_a_field)
@@ -312,7 +320,9 @@ class EndpointResponse(BaseModel):
     access_mode: AccessMode
     request_schema: SchemaObject
     response_schema: SchemaObject
+    response_content_type: str
     timeout_seconds: int
+    supports_idempotency: bool
     is_enabled: bool
     pricing: EndpointPricingResponse | None
     has_upstream: bool
@@ -330,7 +340,9 @@ class EndpointResponse(BaseModel):
             access_mode=endpoint.access_mode,
             request_schema=to_json_object(endpoint.request_schema),
             response_schema=to_json_object(endpoint.response_schema),
+            response_content_type=endpoint.response_content_type,
             timeout_seconds=endpoint.timeout_seconds,
+            supports_idempotency=endpoint.supports_idempotency,
             is_enabled=endpoint.is_enabled,
             pricing=EndpointPricingResponse.from_endpoint(endpoint),
             has_upstream=endpoint.upstream is not None,

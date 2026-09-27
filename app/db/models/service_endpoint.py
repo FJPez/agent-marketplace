@@ -23,6 +23,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.enums import AccessMode
 from app.core.json_types import JsonObject
 from app.core.service_fields import (
+    DEFAULT_RESPONSE_CONTENT_TYPE,
+    ENDPOINT_TIMEOUT_MAX_SECONDS,
     SERVICE_NAME_MAX_LENGTH,
     SERVICE_SUMMARY_MAX_LENGTH,
     SLUG_MAX_LENGTH,
@@ -47,6 +49,10 @@ class ServiceEndpoint(Base):
             "jsonb_typeof(response_schema) = 'object'",
             name="response_schema_json_object",
         ),
+        CheckConstraint(
+            f"timeout_seconds BETWEEN 1 AND {ENDPOINT_TIMEOUT_MAX_SECONDS}",
+            name="timeout_seconds_range",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
@@ -70,7 +76,14 @@ class ServiceEndpoint(Base):
     )
     request_schema: Mapped[JsonObject] = mapped_column(JSONB)
     response_schema: Mapped[JsonObject] = mapped_column(JSONB)
+    # A media type is at most 127 + 1 + 127 characters (MEDIA_TYPE_PATTERN).
+    response_content_type: Mapped[str] = mapped_column(
+        String(255),
+        server_default=DEFAULT_RESPONSE_CONTENT_TYPE,
+    )
     timeout_seconds: Mapped[int] = mapped_column(Integer)
+    # Provider-declared: a request re-sent with the same Idempotency-Key is safe.
+    supports_idempotency: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     is_enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
