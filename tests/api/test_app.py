@@ -3,8 +3,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from starlette.requests import Request
 
 import app.main as main_module
+from app.api.deps.dns import get_dns_resolver
 from app.core.config import AppEnv, Settings
 from app.core.lifespan import get_resources
 from app.core.rate_limits_backend import MemoryRateLimitsBackend, RedisRateLimitsBackend
@@ -27,6 +29,15 @@ def test_create_app_opens_resources_for_its_lifespan() -> None:
         assert isinstance(resources.rate_limits_backend, MemoryRateLimitsBackend)
 
     assert not hasattr(app.state, "resources")
+
+
+def test_the_dns_resolver_dependency_serves_the_resolver_the_app_opened() -> None:
+    app = create_app()
+
+    with TestClient(app):
+        request = Request({"type": "http", "app": app})
+
+        assert get_dns_resolver(request) is get_resources(app).dns_resolver
 
 
 @pytest.mark.parametrize(
