@@ -15,8 +15,6 @@ from app.services import domain_control, provider_signing_secrets
 
 router = APIRouter(prefix="/provider", tags=["provider-trust"])
 
-# The signing secret routes take a JWT only, like the API key routes: an API key can
-# neither mint signing material nor manage it.
 _SIGNING_SECRET_ABOUT = (
     "The marketplace signs every request it sends to the provider's upstreams with the "
     "provider's signing secret, so the provider can verify it came from the marketplace. "
@@ -52,6 +50,8 @@ def _issued(
     )
 
 
+# The signing secret routes take a JWT only, like the API key routes: an API key can
+# neither mint signing material nor manage it.
 @router.post(
     "/signing-secret",
     response_model=IssuedSigningSecretResponse,
@@ -131,19 +131,23 @@ async def get_signing_secret(actor: CurrentJwtActor, session: SessionDep) -> Sig
     return SigningSecretResponse.model_validate(stored)
 
 
+# Unlike the signing secret routes, this one accepts an API key too: the record it
+# returns is published in DNS, so it is no secret.
 @router.post(
     "/domain-verification",
     response_model=DomainVerificationResponse,
-    summary="Get the provider's domain verification record",
+    summary="Get or create the provider's domain verification record",
     description=(
         "Returns the TXT record that proves the provider controls its upstream hosts, "
         "creating the provider's token on the first call. Publish it at "
         "`<record_label>.<host>` for every upstream host; publishing a service checks "
-        "each of its hosts."
+        "each of its hosts. A new or changed record can take minutes to be visible, "
+        "longer after a failed check because resolvers cache the miss (negative "
+        "caching). Accepts a JWT or an API key."
     ),
     responses={200: {"description": "Domain verification record returned."}},
 )
-async def get_domain_verification_record(
+async def ensure_domain_verification_record(
     actor: CurrentActor,
     session: SessionDep,
 ) -> DomainVerificationResponse:

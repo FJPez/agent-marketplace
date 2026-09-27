@@ -176,3 +176,22 @@ async def test_the_domain_verification_record_is_stable_and_differs_per_account(
     assert first.json()["record_value"].startswith("agent-marketplace-verification=")
     assert second.json() == first.json()
     assert other.json()["record_value"] != first.json()["record_value"]
+
+
+async def test_the_domain_verification_record_accepts_an_api_key(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    with_jwt = await async_client.post(
+        DOMAIN_VERIFICATION_PATH,
+        headers=auth_headers_for_account_id(account_id),
+    )
+
+    with_api_key = await async_client.post(
+        DOMAIN_VERIFICATION_PATH,
+        headers=await api_key_headers_for_account(db_session_factory, account_id=account_id),
+    )
+
+    assert with_api_key.status_code == 200
+    assert with_api_key.json() == with_jwt.json()
