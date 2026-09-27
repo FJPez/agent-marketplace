@@ -78,5 +78,10 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
 ## Environment Notes
 
 - The local quick start assumes PostgreSQL and Redis are running.
+- Application logs are single-line JSON on stdout, at `APP_LOG_LEVEL` (default
+  `INFO`), with the request's `request_id`. Values of the `Authorization`,
+  `Cookie`, `PAYMENT-SIGNATURE` and `X-PAYMENT` headers are redacted. A client's
+  `X-Request-ID` is kept only if it is 1 to 128 letters, digits, `.`, `_`, `:`
+  or `-`; otherwise the API generates one.
 - Staging and production require a non-local `APP_DATABASE_URL`,
   `APP_REDIS_URL` and an explicit `APP_SIWE_DOMAIN`.

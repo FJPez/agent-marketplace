@@ -84,6 +84,7 @@ def test_settings_use_default_values(
     assert settings.api_key_prefix == "amp_"
     assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
+    assert settings.log_level == "INFO"
 
 
 def test_settings_require_jwt_secret_key(

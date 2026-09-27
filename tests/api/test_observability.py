@@ -84,6 +84,26 @@ def test_health_generates_request_id_when_header_is_absent(client: TestClient) -
     )
 
 
+@pytest.mark.parametrize(
+    "request_id",
+    [pytest.param("a" * 129, id="too_long"), pytest.param('x","level":"CRITICAL', id="json")],
+)
+def test_invalid_request_id_is_replaced_by_a_generated_one(
+    caplog: pytest.LogCaptureFixture,
+    request_id: str,
+) -> None:
+    with (
+        caplog.at_level(logging.INFO, logger="app.core.observability"),
+        TestClient(create_app()) as client,
+    ):
+        response = client.get("/health", headers={REQUEST_ID_HEADER: request_id})
+
+    generated = response.headers[REQUEST_ID_HEADER]
+    assert str(uuid.UUID(generated)) == generated
+    record = next(record for record in caplog.records if record.name == "app.core.observability")
+    assert RequestCompletedLog.from_record(record).request_id == generated
+
+
 def test_health_logs_request_context(
     client: TestClient,
     caplog: pytest.LogCaptureFixture,
