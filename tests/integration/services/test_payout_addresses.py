@@ -127,6 +127,17 @@ async def _insert_proof(
         )
 
 
+def _host_clock_off_by(offset: timedelta) -> type[datetime]:
+    """A stand-in for the service's `datetime`: the host clock, off by `offset`."""
+
+    class SkewedClock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            return super().now(tz) + offset
+
+    return SkewedClock
+
+
 async def _count_payout_addresses(db_session_factory: async_sessionmaker[AsyncSession]) -> int:
     async with db_session_factory() as session:
         count = await session.scalar(select(func.count()).select_from(PayoutAddress))
@@ -576,12 +587,7 @@ async def test_a_skewed_host_clock_moves_neither_an_expiry_nor_a_hold(
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class ClockAYearAhead(datetime):
-        @classmethod
-        def now(cls, tz: tzinfo | None = None) -> Self:
-            return super().now(tz) + timedelta(days=365)
-
-    monkeypatch.setattr(payout_addresses, "datetime", ClockAYearAhead)
+    monkeypatch.setattr(payout_addresses, "datetime", _host_clock_off_by(timedelta(days=365)))
     settings = build_service_settings()
     account_id = await create_provider_account_record(db_session_factory)
     wallet = Account.create()
@@ -599,16 +605,32 @@ async def test_a_skewed_host_clock_moves_neither_an_expiry_nor_a_hold(
     )
 
 
+# The host clock is off in the direction that would flip each answer.
 @pytest.mark.parametrize(
-    ("effective_in", "expected"),
-    [(timedelta(hours=-1), PAYOUT_ADDRESS), (timedelta(hours=1), None)],
-    ids=["hold_ended", "held"],
+    ("effective_in", "host_clock_off_by", "expected"),
+    [
+        pytest.param(
+            timedelta(hours=-1),
+            timedelta(days=-365),
+            PAYOUT_ADDRESS,
+            id="hold_ended_with_the_host_clock_behind",
+        ),
+        pytest.param(
+            timedelta(hours=1),
+            timedelta(days=365),
+            None,
+            id="held_with_the_host_clock_ahead",
+        ),
+    ],
 )
 async def test_the_effective_address_is_judged_by_the_database_clock_by_default(
     db_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
     effective_in: timedelta,
+    host_clock_off_by: timedelta,
     expected: str | None,
 ) -> None:
+    monkeypatch.setattr(payout_addresses, "datetime", _host_clock_off_by(host_clock_off_by))
     account_id = await create_provider_account_record(db_session_factory)
     effective_at = await _database_now(db_session_factory) + effective_in
     await _insert_proof(
