@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import time
 from functools import lru_cache
 from typing import TYPE_CHECKING, Protocol
 
@@ -32,6 +34,15 @@ class RateLimitsBackend(Protocol):
         scope: str,
     ) -> bool: ...
 
+    async def seconds_until_reset(
+        self,
+        limit_value: str,
+        *,
+        key: str,
+        scope: str,
+    ) -> int:
+        """Whole seconds, at least 1, until the window for `key` resets (`Retry-After`)."""
+
     async def reset(self) -> None: ...
 
 
@@ -48,6 +59,18 @@ class _FixedWindowRateLimitsBackend:
         scope: str,
     ) -> bool:
         return await self._limiter.hit(_parse_limit(limit_value), scope, key)
+
+    async def seconds_until_reset(
+        self,
+        limit_value: str,
+        *,
+        key: str,
+        scope: str,
+    ) -> int:
+        window = await self._limiter.get_window_stats(_parse_limit(limit_value), scope, key)
+        # Rounded up and never below 1, so a window that expires between the rejected hit
+        # and this lookup still tells the client to wait instead of retrying at once.
+        return max(1, math.ceil(window.reset_time - time.time()))
 
     async def reset(self) -> None:
         await self._storage.reset()

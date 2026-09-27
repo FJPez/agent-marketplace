@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Response, status
 
 from app.core.config import get_settings
 from app.core.errors import UnauthenticatedError
+from app.core.problems import problem_response
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
     build_client_rate_limit_key,
@@ -17,6 +17,7 @@ from app.services.auth import resolve_actor
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 _V1_PATH_PREFIX = "/v1/"
+_GLOBAL_SCOPE = "global"
 
 
 @dataclass(slots=True)
@@ -29,15 +30,21 @@ class ApiGuardrails:
         request: Request,
         call_next: RequestHandler,
     ) -> Response:
-        if request.url.path.startswith(_V1_PATH_PREFIX) and await self._is_rate_limited(request):
-            return JSONResponse(status_code=429, content={"detail": "rate limit exceeded"})
-        return await call_next(request)
-
-    async def _is_rate_limited(self, request: Request) -> bool:
-        return not await self.rate_limits_backend.hit(
+        if not request.url.path.startswith(_V1_PATH_PREFIX):
+            return await call_next(request)
+        key = await self._resolve_owner_key(request)
+        if await self.rate_limits_backend.hit(self.api_rate_limit, key=key, scope=_GLOBAL_SCOPE):
+            return await call_next(request)
+        retry_after = await self.rate_limits_backend.seconds_until_reset(
             self.api_rate_limit,
-            key=await self._resolve_owner_key(request),
-            scope="global",
+            key=key,
+            scope=_GLOBAL_SCOPE,
+        )
+        return problem_response(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            problem_type="rate_limited",
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(retry_after)},
         )
 
     async def _resolve_owner_key(self, request: Request) -> str:
