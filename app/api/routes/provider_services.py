@@ -199,7 +199,13 @@ async def replace_provider_service_tags(
     responses={
         200: {"description": "Service published successfully."},
         404: {"description": "The requested service does not exist or is not owned by the actor."},
-        409: {"description": "The requested service is not ready to publish."},
+        409: {
+            "description": (
+                "`conflict`: the service's upstreams changed while publishing; publish "
+                "again. `invalid_state`: the service is not a draft (it is already "
+                "active, suspended or delisted), or moderation suspended it."
+            ),
+        },
         422: {"description": "The service configuration is not publishable."},
     },
 )

@@ -1,8 +1,11 @@
+from collections.abc import Awaitable, Callable
+
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_endpoint_record,
+    create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
     create_signing_secret_record,
@@ -14,11 +17,18 @@ from tests.helpers.dns import (
     TEST_UPSTREAM_ADDRESS,
     TEST_UPSTREAM_HOST,
     FakeResolver,
+    TransactionWatchingResolver,
 )
 
-from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
+from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
-from app.db.models import ProviderUpstream, Service, ServiceHealthCheck, ServiceRevision
+from app.db.models import (
+    ProviderUpstream,
+    Service,
+    ServiceEndpoint,
+    ServiceHealthCheck,
+    ServiceRevision,
+)
 from app.services import publishing
 from app.services.domain_control import record_value
 from app.services.service_health import (
@@ -36,7 +46,6 @@ async def _seed_publishable_service(
     *,
     provider_account_id: int,
     slug: str,
-    access_mode: AccessMode = AccessMode.FREE,
     with_upstream: bool = True,
     trusted: bool = True,
 ) -> int:
@@ -46,11 +55,7 @@ async def _seed_publishable_service(
         slug=slug,
         lifecycle=ServiceLifecycle.DRAFT,
     )
-    endpoint_id = await create_endpoint_record(
-        db_session_factory,
-        service_id=service_id,
-        access_mode=access_mode,
-    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
     if with_upstream:
         await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
     if trusted:
@@ -149,7 +154,7 @@ async def test_publish_service_activates_service_with_revision_and_pass_checks(
     assert {check.checked_at for check in checks} == {service.updated_at}
 
 
-async def test_publish_service_rejects_second_publish_of_active_service(
+async def test_publish_service_rejects_second_publish_of_active_service_before_any_lookup(
     db_session_factory: async_sessionmaker[AsyncSession],
     dns_resolver: FakeResolver,
 ) -> None:
@@ -165,6 +170,7 @@ async def test_publish_service_rejects_second_publish_of_active_service(
         account_id=provider_account_id,
         service_id=service_id,
     )
+    dns_resolver.lookups.clear()
 
     with pytest.raises(InvalidStateError, match="service is not publishable outside draft"):
         await _publish(
@@ -173,6 +179,36 @@ async def test_publish_service_rejects_second_publish_of_active_service(
             account_id=provider_account_id,
             service_id=service_id,
         )
+
+    assert dns_resolver.lookups == []
+
+
+async def test_publish_service_rejects_a_suspended_draft_before_any_lookup(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="suspended-draft-service",
+    )
+    await create_moderation_action_record(
+        db_session_factory,
+        service_id=service_id,
+        action="suspend",
+    )
+
+    with pytest.raises(InvalidStateError, match="service is suspended"):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    assert dns_resolver.lookups == []
+    assert await _health_checks(db_session_factory, service_id=service_id) == []
 
 
 async def test_publish_service_rejects_unknown_service(
@@ -441,16 +477,9 @@ async def test_publish_holds_no_transaction_open_during_the_domain_check(
         provider_account_id=provider_account_id,
         slug="short-transaction-service",
     )
-    in_transaction_during_lookups: list[bool] = []
 
     async with db_session_factory() as session:
-
-        class _WatchingResolver(FakeResolver):
-            async def resolve_txt(self, name: str) -> list[str]:
-                in_transaction_during_lookups.append(session.in_transaction())
-                return await super().resolve_txt(name)
-
-        watching = _WatchingResolver(dns_resolver.addresses, txt_records=dns_resolver.txt_records)
+        watching = TransactionWatchingResolver(dns_resolver, session)
         await publishing.publish_service(
             session=session,
             resolver=watching,
@@ -458,13 +487,65 @@ async def test_publish_holds_no_transaction_open_during_the_domain_check(
             service_id=service_id,
         )
 
-    assert in_transaction_during_lookups == [False]
+    # The host's addresses, then its TXT record.
+    assert watching.in_transaction_during_lookups == [False, False]
     assert await _lifecycle(db_session_factory, service_id) is ServiceLifecycle.ACTIVE
 
 
-async def test_publish_rejects_an_upstream_changed_during_the_domain_check(
+async def _repoint_the_enabled_upstream(
+    session: AsyncSession,
+    *,
+    enabled_endpoint_id: int,
+    disabled_endpoint_id: int,
+) -> None:
+    upstream = await session.get(ProviderUpstream, enabled_endpoint_id)
+    assert upstream is not None
+    upstream.base_url = f"https://{OTHER_HOST}/"
+
+
+async def _add_an_upstream_on_the_disabled_endpoint(
+    session: AsyncSession,
+    *,
+    enabled_endpoint_id: int,
+    disabled_endpoint_id: int,
+) -> None:
+    session.add(
+        ProviderUpstream(
+            endpoint_id=disabled_endpoint_id,
+            base_url=f"https://{OTHER_HOST}/",
+            path="/invoke",
+            http_method="POST",
+        ),
+    )
+
+
+async def _remove_the_disabled_endpoints_upstream(
+    session: AsyncSession,
+    *,
+    enabled_endpoint_id: int,
+    disabled_endpoint_id: int,
+) -> None:
+    upstream = await session.get(ProviderUpstream, disabled_endpoint_id)
+    assert upstream is not None
+    await session.delete(upstream)
+
+
+type _UpstreamChange = Callable[..., Awaitable[None]]
+
+
+@pytest.mark.parametrize(
+    ("change", "disabled_endpoint_has_upstream"),
+    [
+        pytest.param(_repoint_the_enabled_upstream, False, id="repoint"),
+        pytest.param(_add_an_upstream_on_the_disabled_endpoint, False, id="add"),
+        pytest.param(_remove_the_disabled_endpoints_upstream, True, id="remove"),
+    ],
+)
+async def test_publish_rejects_upstreams_changed_during_the_domain_check(
     db_session_factory: async_sessionmaker[AsyncSession],
     dns_resolver: FakeResolver,
+    change: _UpstreamChange,
+    disabled_endpoint_has_upstream: bool,
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
     service_id = await _seed_publishable_service(
@@ -472,14 +553,38 @@ async def test_publish_rejects_an_upstream_changed_during_the_domain_check(
         provider_account_id=provider_account_id,
         slug="moving-service",
     )
+    async with db_session_factory() as session:
+        enabled_endpoint_id = await session.scalar(
+            select(ServiceEndpoint.id).where(ServiceEndpoint.service_id == service_id),
+        )
+    assert enabled_endpoint_id is not None
+    disabled_endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="later",
+        is_enabled=False,
+    )
+    if disabled_endpoint_has_upstream:
+        await create_upstream_record(
+            db_session_factory,
+            endpoint_id=disabled_endpoint_id,
+            base_url=f"https://{OTHER_HOST}/",
+        )
+    dns_resolver.addresses[OTHER_HOST] = [TEST_UPSTREAM_ADDRESS]
 
     class _MovingResolver(FakeResolver):
+        changed = False
+
         async def resolve_txt(self, name: str) -> list[str]:
-            # The provider points the upstream at another host while the check runs.
-            async with db_session_factory.begin() as other_session:
-                upstream = await other_session.scalar(select(ProviderUpstream))
-                assert upstream is not None
-                upstream.base_url = f"https://{OTHER_HOST}/"
+            # The provider changes the upstreams once while the check runs.
+            if not self.changed:
+                self.changed = True
+                async with db_session_factory.begin() as other_session:
+                    await change(
+                        other_session,
+                        enabled_endpoint_id=enabled_endpoint_id,
+                        disabled_endpoint_id=disabled_endpoint_id,
+                    )
             return await super().resolve_txt(name)
 
     moving = _MovingResolver(dns_resolver.addresses, txt_records=dns_resolver.txt_records)
@@ -494,3 +599,39 @@ async def test_publish_rejects_an_upstream_changed_during_the_domain_check(
 
     assert await _lifecycle(db_session_factory, service_id) is ServiceLifecycle.DRAFT
     assert await _health_checks(db_session_factory, service_id=service_id) == []
+
+
+async def test_publish_rejects_an_upstream_with_no_host_before_any_lookup(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="hostless-service",
+        with_upstream=False,
+    )
+    async with db_session_factory() as session:
+        endpoint_id = await session.scalar(
+            select(ServiceEndpoint.id).where(ServiceEndpoint.service_id == service_id),
+        )
+    assert endpoint_id is not None
+    # Stored outside the API, which only ever stores a validated https URL with a host.
+    await create_upstream_record(
+        db_session_factory, endpoint_id=endpoint_id, base_url="https:///v1"
+    )
+
+    with pytest.raises(
+        InvalidInputError,
+        match="endpoint 'translate' has an upstream with no host; set its upstream again",
+    ):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    assert dns_resolver.lookups == []
+    assert await _lifecycle(db_session_factory, service_id) is ServiceLifecycle.DRAFT

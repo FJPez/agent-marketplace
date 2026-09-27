@@ -13,13 +13,17 @@ from tests.fixtures.domain import (
     create_upstream_record,
 )
 from tests.fixtures.settings import build_service_settings
-from tests.helpers.dns import TEST_UPSTREAM_ADDRESS, TEST_UPSTREAM_HOST, FakeResolver
+from tests.helpers.dns import (
+    TEST_UPSTREAM_ADDRESS,
+    TEST_UPSTREAM_HOST,
+    FakeResolver,
+    TransactionWatchingResolver,
+)
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.db.models import ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
-from app.integrations.providers.dns import IpAddress
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointResponse,
@@ -1280,18 +1284,12 @@ async def test_upsert_upstream_resolves_the_host_with_no_transaction_open(
         lifecycle=ServiceLifecycle.DRAFT,
     )
     endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-    in_transaction_during_lookups: list[bool] = []
 
     async with db_session_factory() as session:
-
-        class _WatchingResolver(FakeResolver):
-            async def resolve_addresses(self, host: str) -> list[IpAddress]:
-                in_transaction_during_lookups.append(session.in_transaction())
-                return await super().resolve_addresses(host)
-
+        watching = TransactionWatchingResolver(dns_resolver, session)
         await upsert_upstream(
             session=session,
-            resolver=_WatchingResolver(dns_resolver.addresses),
+            resolver=watching,
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1304,7 +1302,7 @@ async def test_upsert_upstream_resolves_the_host_with_no_transaction_open(
     async with db_session_factory() as session:
         persisted = await session.get(ProviderUpstream, endpoint_id)
 
-    assert in_transaction_during_lookups == [False]
+    assert watching.in_transaction_during_lookups == [False]
     assert persisted is not None
 
 
