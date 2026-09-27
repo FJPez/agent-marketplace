@@ -12,7 +12,6 @@ from app.core.enums import (
     ServiceLifecycle,
 )
 from app.db.models import (
-    EndpointPrice,
     ListingPrice,
     ModerationAction,
     ProviderUpstream,
@@ -108,16 +107,6 @@ class EndpointFactory(Protocol):
         response_schema: JsonObject | None = ...,
         timeout_seconds: int = ...,
         is_enabled: bool = ...,
-    ) -> Awaitable[int]: ...
-
-
-class EndpointPriceFactory(Protocol):
-    def __call__(
-        self,
-        *,
-        endpoint_id: int,
-        amount_minor: int = ...,
-        currency: str = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -310,24 +299,6 @@ async def create_endpoint_record(
         session.add(endpoint)
         await session.flush()
         return endpoint.id
-
-
-async def create_endpoint_price_record(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    *,
-    endpoint_id: int,
-    amount_minor: int = 500,
-    currency: str = "USD",
-) -> int:
-    async with db_session_factory.begin() as session:
-        pricing = EndpointPrice(
-            endpoint_id=endpoint_id,
-            amount_minor=amount_minor,
-            currency=currency,
-        )
-        session.add(pricing)
-        await session.flush()
-        return endpoint_id
 
 
 async def create_listing_price_record(
@@ -577,26 +548,6 @@ def endpoint_factory(
         )
 
     return create_endpoint
-
-
-@pytest.fixture
-def endpoint_price_factory(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> EndpointPriceFactory:
-    async def create_endpoint_price(
-        *,
-        endpoint_id: int,
-        amount_minor: int = 500,
-        currency: str = "USD",
-    ) -> int:
-        return await create_endpoint_price_record(
-            db_session_factory,
-            endpoint_id=endpoint_id,
-            amount_minor=amount_minor,
-            currency=currency,
-        )
-
-    return create_endpoint_price
 
 
 @pytest.fixture

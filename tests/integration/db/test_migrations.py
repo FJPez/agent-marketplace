@@ -4,7 +4,7 @@ import pytest
 from alembic import command
 from sqlalchemy import inspect, text
 from sqlalchemy.engine.interfaces import ReflectedIndex
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.db.support import MigrationDatabase
 
@@ -12,7 +12,6 @@ ALEMBIC_VERSION_TABLE = "alembic_version"
 DOMAIN_TABLES = {
     "accounts",
     "api_keys",
-    "endpoint_prices",
     "listing_prices",
     "moderation_actions",
     "provider_upstreams",
@@ -466,6 +465,38 @@ def test_endpoint_fields_migration_caps_existing_timeouts_and_fills_defaults(
             False,
             "application/json",
         )
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+
+
+async def _insert_cent_price(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO endpoint_prices (endpoint_id, amount_minor, currency) "
+                "VALUES (:endpoint_id, 25, 'USD')"
+            ),
+            {"endpoint_id": endpoint_id},
+        )
+
+
+def test_dropping_endpoint_prices_refuses_to_discard_stored_cent_prices(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "listing_prices_0003")
+    try:
+        service_id = asyncio.run(_seed_service(engine, slug="cent-prices"))
+        endpoint_id = asyncio.run(
+            _insert_endpoint(engine, service_id=service_id, key="paid", access_mode="paid")
+        )
+        asyncio.run(_insert_cent_price(engine, endpoint_id=endpoint_id))
+
+        with pytest.raises(DBAPIError, match="reset the local database"):
+            command.upgrade(config, "head")
     finally:
         command.downgrade(config, "base")
         command.upgrade(config, "head")

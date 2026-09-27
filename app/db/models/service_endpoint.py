@@ -32,7 +32,6 @@ from app.core.service_fields import (
 from app.db.base import Base, utc_now
 
 if TYPE_CHECKING:
-    from app.db.models.endpoint_price import EndpointPrice
     from app.db.models.listing_price import ListingPrice
     from app.db.models.provider_upstream import ProviderUpstream
     from app.db.models.service import Service
@@ -113,11 +112,6 @@ class ServiceEndpoint(Base):
 
     service: Mapped[Service] = relationship(back_populates="endpoints")
     upstream: Mapped[ProviderUpstream | None] = relationship(
-        back_populates="endpoint",
-        cascade="all, delete-orphan",
-        uselist=False,
-    )
-    price: Mapped[EndpointPrice | None] = relationship(
         back_populates="endpoint",
         cascade="all, delete-orphan",
         uselist=False,

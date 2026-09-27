@@ -133,7 +133,12 @@ required on a staging deploy before production relies on
 ## Resetting a Local Database
 
 The migration history was squashed into a single baseline on 2026-09-26. A
-database created before then cannot be upgraded; drop and recreate it:
+database created before then cannot be upgraded. The migration that replaces the
+USD-cent `endpoint_prices` with `listing_prices` refuses to run while
+`endpoint_prices` still holds rows (for example from an earlier `make seed`),
+because a cent price has no asset, network or treasury to become a price version.
+In either case, drop and recreate the database, then run `make seed` again if you
+use the demo data:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"
