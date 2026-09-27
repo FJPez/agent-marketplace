@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 import pytest
 from pydantic import HttpUrl
 from sqlalchemy import func, select
@@ -25,6 +27,7 @@ from app.schemas.service import (
     EndpointUpstreamRequest,
 )
 from app.services.provider_endpoints import (
+    MAX_UPSTREAM_HOSTS_PER_SERVICE,
     create_endpoint,
     update_endpoint,
     upsert_upstream,
@@ -1303,6 +1306,71 @@ async def test_upsert_upstream_resolves_the_host_with_no_transaction_open(
 
     assert in_transaction_during_lookups == [False]
     assert persisted is not None
+
+
+async def test_upsert_upstream_caps_the_distinct_hosts_of_a_service(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
+    hosts = [
+        f"api{number}.provider.example" for number in range(MAX_UPSTREAM_HOSTS_PER_SERVICE + 1)
+    ]
+    for host in hosts:
+        dns_resolver.addresses[host] = [TEST_UPSTREAM_ADDRESS]
+    # Every host but the last two is already stored, one per endpoint.
+    for number, host in enumerate(hosts[:-2]):
+        endpoint_id = await create_endpoint_record(
+            db_session_factory,
+            service_id=service_id,
+            key=f"stored-{number}",
+        )
+        await create_upstream_record(
+            db_session_factory,
+            endpoint_id=endpoint_id,
+            base_url=f"https://{host}/",
+        )
+    last_id = await create_endpoint_record(db_session_factory, service_id=service_id, key="last")
+    extra_id = await create_endpoint_record(db_session_factory, service_id=service_id, key="extra")
+
+    async def upsert(endpoint_id: int, host: str) -> None:
+        async with db_session_factory() as session:
+            await upsert_upstream(
+                session=session,
+                resolver=dns_resolver,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                request=EndpointUpstreamRequest(
+                    base_url=HttpUrl(f"https://{host}"),
+                    path="/translate",
+                    http_method="POST",
+                ),
+            )
+
+    await upsert(last_id, hosts[-2])
+    with pytest.raises(
+        InvalidInputError,
+        match=(
+            f"a service's upstreams can name at most {MAX_UPSTREAM_HOSTS_PER_SERVICE} "
+            "distinct hosts; point this endpoint at one the service already uses"
+        ),
+    ):
+        await upsert(extra_id, hosts[-1])
+    await upsert(extra_id, hosts[0])
+    # The last endpoint's own host no longer counts once it moves, so it may move to a
+    # new host.
+    await upsert(last_id, hosts[-1])
+
+    async with db_session_factory() as session:
+        stored = await session.scalars(
+            select(ProviderUpstream.base_url)
+            .join(ServiceEndpoint)
+            .where(ServiceEndpoint.service_id == service_id),
+        )
+        stored_hosts = {urlsplit(base_url).hostname for base_url in stored}
+    assert len(stored_hosts) == MAX_UPSTREAM_HOSTS_PER_SERVICE
+    assert hosts[-2] not in stored_hosts
 
 
 async def test_upsert_upstream_validates_input_before_resolving_endpoint(
