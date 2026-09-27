@@ -58,6 +58,9 @@ def configure_logging(level: str) -> None:
     own settings, and records still propagate to the root logger, which has no handlers
     in production (pytest's caplog listens there). Calling it again replaces the handler
     instead of adding one.
+
+    uvicorn's `uvicorn.error` logger, which prints the traceback of any exception that
+    escapes the app, gets the redaction filter too (and keeps its own format).
     """
     handler = logging.StreamHandler(sys.stdout)
     handler.addFilter(RedactionFilter())
@@ -65,6 +68,8 @@ def configure_logging(level: str) -> None:
     app_logger = logging.getLogger("app")
     app_logger.handlers = [handler]
     app_logger.setLevel(level)
+    # `addFilter` ignores a filter the logger already has, so this never stacks.
+    logging.getLogger("uvicorn.error").addFilter(_UVICORN_ERROR_FILTER)
 
 
 def _redact_text(text: str) -> str:
@@ -173,6 +178,30 @@ class RedactionFilter(logging.Filter):
         if record.stack_info:
             record.stack_info = _redact_text(record.stack_info)
         return True
+
+
+class _UvicornErrorFilter(RedactionFilter):
+    """RedactionFilter for uvicorn's `uvicorn.error` logger.
+
+    In a terminal, uvicorn's formatter prints the `color_message` extra in place of the
+    message, rendered with the record's arguments. RedactionFilter consumes the
+    arguments, so `color_message` is rendered here first (and then redacted like any
+    other extra).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        fields = vars(record)
+        color_message = fields.get("color_message")
+        if isinstance(color_message, str) and record.args:
+            try:
+                fields["color_message"] = color_message % record.args
+            except Exception:
+                # uvicorn then prints the plain message, which always renders.
+                del fields["color_message"]
+        return super().filter(record)
+
+
+_UVICORN_ERROR_FILTER: Final[RedactionFilter] = _UvicornErrorFilter()
 
 
 class JsonFormatter(logging.Formatter):

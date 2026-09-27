@@ -9,6 +9,7 @@ from datetime import datetime
 import httpx
 import pytest
 from starlette.datastructures import Headers
+from uvicorn.logging import DefaultFormatter
 
 from app.core.logging import (
     DURATION_MS_FIELD,
@@ -20,6 +21,7 @@ from app.core.logging import (
     SERVICE_ID_FIELD,
     STATUS_CODE_FIELD,
     JsonFormatter,
+    RedactionFilter,
     bind_request_id,
     build_event_context,
     build_log_context,
@@ -545,3 +547,41 @@ def test_json_formatter_keeps_a_record_whose_fields_do_not_serialize() -> None:
         "message": "forwarding",
         "log_error": "TypeError",
     }
+
+
+def test_configure_logging_redacts_uvicorn_error_records_with_one_filter(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # uvicorn logs an exception that escapes the app on "uvicorn.error", traceback and all.
+    uvicorn_error = logging.getLogger("uvicorn.error")
+    configure_logging("INFO")
+    # create_app applies the configuration again every time it builds an app.
+    configure_logging("INFO")
+
+    try:
+        raise RuntimeError(f"facilitator rejected X-PAYMENT: {SECRET}")
+    except RuntimeError:
+        uvicorn_error.exception("Exception in ASGI application")
+
+    assert SECRET not in caplog.text
+    assert "RuntimeError: facilitator rejected X-PAYMENT: [REDACTED]" in caplog.text
+    assert sum(isinstance(f, RedactionFilter) for f in uvicorn_error.filters) == 1
+
+
+def test_configure_logging_keeps_uvicorn_colour_messages_rendered(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # uvicorn's coloured formatter renders the `color_message` extra with the record's
+    # arguments, which redaction consumes, so it must be rendered while they exist.
+    configure_logging("INFO")
+
+    with caplog.at_level(logging.INFO, logger="uvicorn.error"):
+        logging.getLogger("uvicorn.error").info(
+            "Started server process [%d]",
+            4242,
+            extra={"color_message": "Started server process [\x1b[36m%d\x1b[0m]"},
+        )
+
+    (record,) = caplog.records
+    formatter = DefaultFormatter("%(levelprefix)s %(message)s", use_colors=True)
+    assert "Started server process [\x1b[36m4242\x1b[0m]" in formatter.format(record)

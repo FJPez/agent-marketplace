@@ -131,9 +131,11 @@ def test_failing_request_logs_exception_context(
     def read_boom() -> None:
         raise RuntimeError("database password is hunter2")
 
+    # The client re-raises anything that escapes the app: the app must handle the error
+    # itself, so nothing reaches Starlette's ServerErrorMiddleware and uvicorn's logger.
     with (
-        caplog.at_level(logging.ERROR, logger="app.core.observability"),
-        TestClient(app, raise_server_exceptions=False) as client,
+        caplog.at_level(logging.ERROR, logger="app"),
+        TestClient(app) as client,
     ):
         response = client.get("/boom", headers={REQUEST_ID_HEADER: "request-123"})
 
@@ -148,7 +150,8 @@ def test_failing_request_logs_exception_context(
     assert "hunter2" not in response.text
     assert response.headers[REQUEST_ID_HEADER] == "request-123"
 
-    record = next(record for record in caplog.records if record.name == "app.core.observability")
+    (record,) = caplog.records
+    assert (record.name, record.getMessage()) == ("app.core.observability", "request failed")
     error_log = RequestFailedLog.from_record(record)
     assert error_log.request_id == "request-123"
     assert error_log.method == "GET"
@@ -204,7 +207,7 @@ def test_rate_limit_store_outage_renders_internal_error_problem(
 
     with (
         caplog.at_level(logging.ERROR, logger="app.core.observability"),
-        TestClient(app, raise_server_exceptions=False) as client,
+        TestClient(app) as client,
     ):
         response = client.get("/v1/services", headers={REQUEST_ID_HEADER: "request-500"})
 
