@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
+TEST_TREASURY_ADDRESS = "0x1111111111111111111111111111111111111111"
 # coredis rejects this URL as soon as a client is built from it (the port is out of range).
 MALFORMED_REDIS_URL = "redis://localhost:99999/0"
 # Nothing listens on port 1, so connecting fails at once.

@@ -1,9 +1,9 @@
 import os
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -12,10 +12,29 @@ from pydantic_settings import (
 )
 
 from app.core.enums import AppEnv
+from app.core.security import normalize_wallet_address
 
 _LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
 _DEFAULT_SIWE_DOMAIN = "testserver"
+
+
+def _checksum_address(value: str) -> str:
+    """Return the EIP-55 form of an EVM address.
+
+    An all-lowercase or all-uppercase address carries no checksum and is accepted. A
+    mixed-case one must already be correctly checksummed: a wrong checksum means a
+    mistyped address, and these addresses decide where payments go.
+    """
+    checksummed = normalize_wallet_address(value)
+    digits = value[-40:]
+    if digits not in {digits.lower(), digits.upper()} and digits != checksummed[2:]:
+        msg = "address has an invalid EIP-55 checksum"
+        raise ValueError(msg)
+    return checksummed
+
+
+EvmAddress = Annotated[str, AfterValidator(_checksum_address)]
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -59,6 +78,18 @@ class Settings(BaseSettings):
     api_rate_limit: str = "120/minute"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     worker_shutdown_timeout_seconds: float = Field(default=25.0, gt=0)
+    # Payment terms stamped on every new price version (spec section 12). The
+    # treasury is every paid listing's payTo; staging and prod refuse to start
+    # without one, and without one elsewhere no paid price can be set.
+    treasury_address: EvmAddress | None = None
+    payment_network: str = Field(default="eip155:84532", pattern=r"^eip155:[1-9][0-9]*$")
+    # USDC on Base Sepolia, as listed by Circle at
+    # https://developers.circle.com/stablecoins/usdc-contract-addresses
+    payment_asset: EvmAddress = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    # In atomic units of payment_asset: 10000 is 0.01 USDC.
+    min_price_amount: int = Field(default=10_000, gt=0)
+    platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
+    payment_max_timeout_seconds: int = Field(default=120, gt=0)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
@@ -116,6 +147,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if not self.redis_url:
             msg = "redis_url must be set when env is staging or prod"
+            raise ValueError(msg)
+        if self.treasury_address is None:
+            msg = "treasury_address must be set when env is staging or prod"
             raise ValueError(msg)
 
 
