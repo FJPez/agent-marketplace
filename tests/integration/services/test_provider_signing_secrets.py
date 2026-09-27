@@ -59,12 +59,14 @@ async def _rotate(
     account_id: int,
     *,
     settings: Settings | None = None,
+    idempotency_key: str | None = None,
 ) -> str:
     async with db_session_factory() as session:
         _, secret = await provider_signing_secrets.rotate_signing_secret(
             session=session,
             settings=settings or build_service_settings(),
             account_id=account_id,
+            idempotency_key=idempotency_key,
         )
     return secret
 
@@ -297,3 +299,60 @@ async def test_a_previous_secret_under_a_removed_key_is_skipped_and_logged(
     assert getattr(record, "account_id", None) == account_id
     assert stored.previous_ciphertext is not None
     assert stored.previous_ciphertext not in caplog.text
+
+
+async def test_a_rotation_retried_with_its_idempotency_key_returns_the_same_secret(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    first = await _create(db_session_factory, account_id)
+    second = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+    rotated = await _stored(db_session_factory, account_id)
+
+    # The response was lost, so the provider retries with the same key.
+    retried = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+
+    retried_row = await _stored(db_session_factory, account_id)
+    assert retried == second
+    assert (
+        retried_row.ciphertext,
+        retried_row.issued_at,
+        retried_row.previous_ciphertext,
+        retried_row.previous_expires_at,
+    ) == (
+        rotated.ciphertext,
+        rotated.issued_at,
+        rotated.previous_ciphertext,
+        rotated.previous_expires_at,
+    )
+    assert rotated.rotation_idempotency_key_hash is not None
+    assert "rotation-1" not in rotated.rotation_idempotency_key_hash
+    assert await _load(db_session_factory, account_id) == [second, first]
+
+
+async def test_a_rotation_with_another_idempotency_key_rotates(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    await _create(db_session_factory, account_id)
+    second = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+
+    third = await _rotate(db_session_factory, account_id, idempotency_key="rotation-2")
+
+    assert third != second
+    assert await _load(db_session_factory, account_id) == [third, second]
+
+
+async def test_a_rotation_without_an_idempotency_key_rotates_and_ends_the_earlier_keys_replay(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    await _create(db_session_factory, account_id)
+    second = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+
+    third = await _rotate(db_session_factory, account_id)
+    # The secret "rotation-1" issued is no longer current, so its key rotates again.
+    fourth = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+
+    assert len({second, third, fourth}) == 3
+    assert await _load(db_session_factory, account_id) == [fourth, third]

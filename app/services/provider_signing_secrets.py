@@ -7,6 +7,7 @@ only encrypted under `provider_secret_encryption_keys`.
 """
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from secrets import token_urlsafe
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -48,10 +49,13 @@ async def rotate_signing_secret(
     session: AsyncSession,
     settings: Settings,
     account_id: int,
+    idempotency_key: str | None = None,
 ) -> tuple[ProviderSigningSecret, str]:
     """Replace the current secret; it keeps signing for the grace window.
 
     A previous secret still in its grace window is dropped: at most two secrets sign.
+    A retry sent with the `idempotency_key` of the rotation that issued the current
+    secret returns that secret instead, so a lost response does not rotate twice.
     """
     cipher = _cipher(settings)
     stored = await session.scalar(
@@ -62,12 +66,20 @@ async def rotate_signing_secret(
     if stored is None:
         raise NotFoundError("the account has no signing secret; create one first")
 
+    key_hash = None if idempotency_key is None else sha256(idempotency_key.encode()).hexdigest()
+    if key_hash is not None and key_hash == stored.rotation_idempotency_key_hash:
+        secret = _decrypt(cipher, stored.ciphertext)
+        # Nothing changed; the commit only releases the row lock.
+        await session.commit()
+        return stored, secret
+
     secret, ciphertext = _issue(cipher)
     now = datetime.now(UTC)
     stored.previous_ciphertext = stored.ciphertext
     stored.previous_expires_at = now + timedelta(seconds=settings.provider_secret_grace_seconds)
     stored.ciphertext = ciphertext
     stored.issued_at = now
+    stored.rotation_idempotency_key_hash = key_hash
     await session.commit()
     return stored, secret
 

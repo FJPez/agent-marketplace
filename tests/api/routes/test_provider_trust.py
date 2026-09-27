@@ -72,6 +72,43 @@ async def test_rotating_returns_the_new_secret_and_the_old_ones_grace_deadline(
     }
 
 
+async def test_a_rotation_retried_with_its_idempotency_key_returns_the_same_secret(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    headers = auth_headers_for_account_id(account_id)
+    await async_client.post(SIGNING_SECRET_PATH, headers=headers)
+    keyed = {**headers, "Idempotency-Key": "8a1f7c52-rotation"}
+
+    rotated = await async_client.post(ROTATE_PATH, headers=keyed)
+    retried = await async_client.post(ROTATE_PATH, headers=keyed)
+
+    assert rotated.status_code == 200
+    assert retried.status_code == 200
+    assert retried.headers["cache-control"] == "no-store"
+    assert retried.json() == rotated.json()
+
+
+@pytest.mark.parametrize("idempotency_key", ["", "k" * 256], ids=["empty", "too_long"])
+async def test_a_rotation_rejects_a_malformed_idempotency_key(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    idempotency_key: str,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    headers = auth_headers_for_account_id(account_id)
+    await async_client.post(SIGNING_SECRET_PATH, headers=headers)
+
+    response = await async_client.post(
+        ROTATE_PATH,
+        headers={**headers, "Idempotency-Key": idempotency_key},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["loc"] == ["header", "Idempotency-Key"]
+
+
 @pytest.mark.parametrize(
     ("method", "path", "detail"),
     [

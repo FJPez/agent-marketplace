@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -37,3 +37,7 @@ class ProviderSigningSecret(Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     previous_ciphertext: Mapped[str | None] = mapped_column(Text)
     previous_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The SHA-256 of the Idempotency-Key sent with the rotation that issued the current
+    # secret: a retry with that key returns the current secret instead of rotating
+    # again. Null after the create and after a rotation sent without a key.
+    rotation_idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))

@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Response, status
+from typing import Annotated
+
+from fastapi import APIRouter, Header, Response, status
 
 from app.api.deps.auth import CurrentActor, CurrentJwtActor
 from app.api.deps.database import SessionDep
 from app.api.deps.settings import SettingsDep
+from app.db.models import ProviderSigningSecret
 from app.schemas.provider_trust import (
     DomainVerificationResponse,
     IssuedSigningSecretResponse,
@@ -19,6 +22,34 @@ _SIGNING_SECRET_ABOUT = (
     "provider's signing secret, so the provider can verify it came from the marketplace. "
     "The secret is shown once, in this response; store it at once."
 )
+
+_RotationIdempotencyKey = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=255,
+        description=(
+            "A fresh random value, such as a UUID, for each rotation. Retrying with the "
+            "same key returns the secret that rotation issued instead of rotating again."
+        ),
+    ),
+]
+
+
+def _issued(
+    response: Response,
+    stored: ProviderSigningSecret,
+    secret: str,
+) -> IssuedSigningSecretResponse:
+    """The response of a route that issues a secret, the only kind that carries one."""
+    # No cache along the way may keep the secret.
+    response.headers["Cache-Control"] = "no-store"
+    return IssuedSigningSecretResponse(
+        issued_at=stored.issued_at,
+        previous_expires_at=stored.previous_expires_at,
+        secret=secret,
+    )
 
 
 @router.post(
@@ -44,12 +75,7 @@ async def create_signing_secret(
         settings=settings,
         account_id=actor.account_id,
     )
-    response.headers["Cache-Control"] = "no-store"
-    return IssuedSigningSecretResponse(
-        issued_at=stored.issued_at,
-        previous_expires_at=stored.previous_expires_at,
-        secret=secret,
-    )
+    return _issued(response, stored, secret)
 
 
 @router.post(
@@ -59,7 +85,9 @@ async def create_signing_secret(
     description=(
         f"{_SIGNING_SECRET_ABOUT} The replaced secret keeps signing beside the new one "
         "until `previous_expires_at`, so deploy the new secret before then; rotating "
-        "again ends that grace period at once."
+        "again ends that grace period at once. If a rotate response is lost, retry with "
+        "the same `Idempotency-Key`: while the secret that rotation issued is still "
+        "current, the retry returns it instead of rotating again."
     ),
     responses={
         200: {"description": "Signing secret rotated; the response carries the new one once."},
@@ -73,18 +101,15 @@ async def rotate_signing_secret(
     session: SessionDep,
     settings: SettingsDep,
     response: Response,
+    idempotency_key: _RotationIdempotencyKey = None,
 ) -> IssuedSigningSecretResponse:
     stored, secret = await provider_signing_secrets.rotate_signing_secret(
         session=session,
         settings=settings,
         account_id=actor.account_id,
+        idempotency_key=idempotency_key,
     )
-    response.headers["Cache-Control"] = "no-store"
-    return IssuedSigningSecretResponse(
-        issued_at=stored.issued_at,
-        previous_expires_at=stored.previous_expires_at,
-        secret=secret,
-    )
+    return _issued(response, stored, secret)
 
 
 @router.get(

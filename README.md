@@ -202,3 +202,7 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   until its provider rotates it and `APP_PROVIDER_SECRET_GRACE_SECONDS` (default
   86400, one day, the time a rotated-out secret keeps signing beside its
   replacement) has passed.
+- If a rotate response is lost, retry with the same `Idempotency-Key`: while the
+  secret that rotation issued is still current, the retry returns it instead of
+  rotating again, which would end the grace of the secret the provider has deployed.
+  Use a fresh random key, such as a UUID, for each rotation.
