@@ -8,7 +8,6 @@ Create Date: 2026-09-27 12:00:00.000000
 import json
 from collections.abc import Sequence
 
-import jsonschema_rs
 import sqlalchemy as sa
 from alembic import op
 
@@ -20,6 +19,10 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # Imported here: alembic imports every revision for every command, and none but this
+    # one needs the library.
+    import jsonschema_rs
+
     # From here on a request schema is checked when it is saved, and the invoke path
     # compiles every stored one as below (app/core/request_validation_worker.py). Refuse
     # a stored schema it cannot compile rather than fail its invocations; nothing is
