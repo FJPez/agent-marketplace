@@ -1,8 +1,7 @@
 from collections.abc import Awaitable, Callable
 from time import perf_counter
 
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request, Response, status
 
 from app.core.logging import (
     REQUEST_ID_HEADER,
@@ -12,12 +11,20 @@ from app.core.logging import (
     reset_request_id,
     resolve_request_id,
 )
+from app.core.problems import problem_response
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 logger = get_logger(__name__)
 
 
 def install_observability(app: FastAPI) -> None:
+    """Install request logging and the catch-all 500 handler.
+
+    Call this after every other middleware is installed: the middleware installed last
+    runs outermost, and this one must wrap them all so their responses (for example a
+    guardrails 429) carry `X-Request-ID` and are logged.
+    """
+
     @app.middleware("http")
     async def request_id_middleware(
         request: Request,
@@ -59,6 +66,10 @@ def install_observability(app: FastAPI) -> None:
                 path=request.url.path,
             ),
         )
-        response = PlainTextResponse("Internal Server Error", status_code=500)
-        response.headers[REQUEST_ID_HEADER] = request_id
-        return response
+        # The exception text may hold internals, so it is logged above and never returned.
+        return problem_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            problem_type="internal_error",
+            detail="an unexpected error occurred",
+            headers={REQUEST_ID_HEADER: request_id},
+        )
