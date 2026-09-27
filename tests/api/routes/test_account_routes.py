@@ -1,5 +1,4 @@
 from datetime import UTC, datetime
-from http import HTTPStatus
 
 import pytest
 from eth_account import Account
@@ -104,8 +103,8 @@ async def test_patch_account_me_rejects_explicit_null_display_name(
     assert response.status_code == 422
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
-        "type": "about:blank",
-        "title": HTTPStatus.UNPROCESSABLE_ENTITY.phrase,
+        "type": "/problems/invalid_input",
+        "title": "Invalid input",
         "status": 422,
         "detail": "display_name cannot be null",
     }

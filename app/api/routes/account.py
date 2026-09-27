@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from app.api.deps.auth import CurrentJwtActor
 from app.api.deps.database import SessionDep
+from app.core.errors import InvalidInputError
 from app.schemas.account import AccountResponse, AccountUpdateRequest
 from app.services import accounts
 
@@ -51,15 +52,9 @@ async def patch_account_me(
     session: SessionDep,
 ) -> AccountResponse:
     if "display_name" not in request.model_fields_set:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="at least one field must be provided",
-        )
+        raise InvalidInputError("at least one field must be provided")
     if request.display_name is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="display_name cannot be null",
-        )
+        raise InvalidInputError("display_name cannot be null")
     account = await accounts.update_display_name(
         session=session,
         account_id=actor.account_id,
