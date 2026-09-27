@@ -180,6 +180,15 @@ async def update_endpoint(
         service=service,
         impact=impact,
     )
+    if (
+        service.lifecycle is ServiceLifecycle.ACTIVE
+        and column_changes.get("is_enabled") is True
+        and endpoint.upstream is None
+    ):
+        # Discovery lists every enabled endpoint of an active service, which can then only
+        # be invoked with an upstream: publishing requires one for the same reason.
+        msg = "an endpoint of an active service cannot be enabled without an upstream"
+        raise InvalidStateError(msg)
 
     _ensure_active_paid_endpoint_priced(
         lifecycle=service.lifecycle,

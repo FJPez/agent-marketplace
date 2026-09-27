@@ -14,12 +14,15 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import build_service_settings
 from tests.helpers.dns import TEST_UPSTREAM_BASE_URL
+from tests.helpers.request_validation import IN_PROCESS_REQUEST_VALIDATION_POOL
 
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.core.errors import NotFoundError
+from app.core.errors import InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.db.models import ServiceEndpoint
-from app.services import listings, moderation, provider_endpoints
+from app.schemas.discovery import PublicServicePricingResponse
+from app.schemas.service import EndpointUpdateRequest
+from app.services import discovery, listings, moderation, provider_endpoints
 from app.services.listings import InvokableListing, ListingPriceTerms, ListingUpstream
 
 # The treasury before a rotation: price versions keep the pay_to they were stamped with.
@@ -330,3 +333,43 @@ async def test_loading_ends_its_read_transaction(
                 endpoint_key="unknown",
             )
         assert not session.in_transaction()
+
+
+async def test_every_endpoint_discovery_lists_can_be_loaded(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    seeded = await _seed_listing(db_session_factory)
+    paid_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=seeded.service_id,
+        key="summarize",
+        access_mode=AccessMode.PAID,
+    )
+    await create_upstream_record(db_session_factory, endpoint_id=paid_id)
+    await create_listing_price_record(db_session_factory, endpoint_id=paid_id)
+    unfinished_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=seeded.service_id,
+        key="unfinished",
+        is_enabled=False,
+    )
+    async with db_session_factory() as session:
+        # The one way an endpoint without an upstream could reach discovery.
+        with pytest.raises(InvalidStateError):
+            await provider_endpoints.update_endpoint(
+                session=session,
+                settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
+                account_id=seeded.provider_account_id,
+                endpoint_id=unfinished_id,
+                changes=EndpointUpdateRequest(is_enabled=True),
+            )
+
+    async with db_session_factory() as session:
+        service = await discovery.get_service(session=session, service_ref="translator")
+        listed = PublicServicePricingResponse.from_model(service).endpoints
+
+    assert sorted(endpoint.key for endpoint in listed) == ["summarize", "translate"]
+    for endpoint in listed:
+        loaded = await _load(db_session_factory, endpoint_key=endpoint.key)
+        assert loaded.service_id == seeded.service_id

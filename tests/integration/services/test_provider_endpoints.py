@@ -905,6 +905,43 @@ async def test_update_endpoint_compiles_its_request_schema_with_no_transaction_o
     assert watching.in_transaction_during_compiles == [False]
 
 
+async def test_update_endpoint_refuses_to_enable_an_endpoint_without_an_upstream_when_active(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.ACTIVE,
+    )
+    # Published disabled, and upstreams cannot be added outside draft.
+    endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        is_enabled=False,
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(
+            InvalidStateError,
+            match=r"^an endpoint of an active service cannot be enabled without an upstream$",
+        ):
+            await update_endpoint(
+                session=session,
+                settings=build_service_settings(),
+                validation_pool=IN_PROCESS_REQUEST_VALIDATION_POOL,
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                changes=EndpointUpdateRequest(is_enabled=True),
+            )
+
+    async with db_session_factory() as session:
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+    assert endpoint is not None
+    assert endpoint.is_enabled is False
+
+
 async def test_update_endpoint_draft_identical_values_leave_updated_at_unchanged(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
