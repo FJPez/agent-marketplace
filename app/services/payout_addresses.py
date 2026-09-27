@@ -9,6 +9,7 @@ network can pass for it. Every proof is kept, and the latest one on a network de
 where payouts go, once its hold has ended.
 """
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from eth_account import Account
@@ -21,8 +22,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
-from app.core.security import generate_nonce
+from app.core.security import checksum_address, generate_nonce
 from app.db.models import PayoutAddress, PayoutAddressChallenge
+
+# A 65-byte signature (r, s, v) in hex, as eth_signTypedData_v4 returns it.
+_SIGNATURE_SHAPE = re.compile(r"0x[0-9a-fA-F]{130}")
 
 
 async def request_payout_address_challenge(
@@ -33,14 +37,21 @@ async def request_payout_address_challenge(
     address: str,
     network: str,
 ) -> PayoutAddressChallenge:
-    """Issue the challenge that proves `address` on `network`, replacing a pending one."""
+    """Issue the challenge that proves `address` on `network`, replacing a pending one.
+
+    The address is challenged, and later recorded, in its EIP-55 form.
+    """
     if network != settings.payment_network:
         raise InvalidInputError(
             f"network must be {settings.payment_network}, the network payouts are sent on",
         )
+    try:
+        checksummed = checksum_address(address)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
     values = {
         "network": network,
-        "address": address,
+        "address": checksummed,
         "nonce": generate_nonce(),
         "expires_at": datetime.now(UTC)
         + timedelta(seconds=settings.payout_address_challenge_seconds),
@@ -50,7 +61,10 @@ async def request_payout_address_challenge(
             insert(PayoutAddressChallenge)
             .values(account_id=account_id, **values)
             .on_conflict_do_update(index_elements=[PayoutAddressChallenge.account_id], set_=values)
-            .returning(PayoutAddressChallenge),
+            .returning(PayoutAddressChallenge)
+            # A challenge this session loaded earlier would otherwise be returned as it
+            # was, not as replaced.
+            .execution_options(populate_existing=True),
         )
     ).scalar_one()
     await session.commit()
@@ -100,6 +114,8 @@ async def prove_payout_address(
     It takes over at once from any earlier one, and payouts are held until it becomes
     effective. The challenge is consumed, so the same proof cannot be recorded twice.
     """
+    if not _SIGNATURE_SHAPE.fullmatch(signature):
+        raise InvalidInputError("signature is not valid")
     challenge = await session.scalar(
         select(PayoutAddressChallenge)
         .where(PayoutAddressChallenge.account_id == account_id)
@@ -110,6 +126,8 @@ async def prove_payout_address(
     now = datetime.now(UTC)
     if challenge.expires_at <= now:
         raise InvalidStateError("the payout address challenge has expired; request a new one")
+    # A well-formed signature can still carry an invalid v (ValueError) or an r or s
+    # that recovers no key (BadSignature).
     try:
         signer = Account.recover_message(
             encode_typed_data(full_message=proof_typed_data(challenge)),

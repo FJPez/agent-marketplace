@@ -10,7 +10,9 @@ class PayoutAddress(Base):
     """A payout address a provider proved it controls, on one network. Never updated.
 
     A new proof adds a row, which supersedes the provider's earlier ones at once: payouts
-    are held until its `effective_at` (`app/services/payout_addresses.py`).
+    are held until its `effective_at` (`app/services/payout_addresses.py`). The database
+    refuses to update a row (trigger `payout_addresses_immutable`, created by migration
+    payout_addresses_0010).
     """
 
     __tablename__ = "payout_addresses"

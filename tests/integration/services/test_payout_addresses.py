@@ -6,6 +6,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct, encode_typed_data
 from eth_account.signers.local import LocalAccount
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import create_provider_account_record
 from tests.fixtures.settings import build_service_settings
@@ -57,13 +58,13 @@ async def _prove(
         )
 
 
-async def _prove_new_address(
+async def _prove_address(
     db_session_factory: async_sessionmaker[AsyncSession],
     account_id: int,
+    wallet: LocalAccount,
     *,
     settings: Settings | None = None,
 ) -> PayoutAddress:
-    wallet = Account.create()
     challenge = await _request(db_session_factory, account_id, wallet, settings=settings)
     return await _prove(db_session_factory, account_id, _sign(challenge, wallet))
 
@@ -123,18 +124,26 @@ async def test_a_proven_address_is_recorded_and_held_before_it_takes_effect(
         assert await session.get(PayoutAddressChallenge, account_id) is None
 
 
-async def test_a_changed_address_holds_payouts_until_its_own_hold_ends(
+@pytest.mark.parametrize("same_address", [False, True], ids=["changed_address", "same_address"])
+async def test_every_proof_holds_payouts_until_its_own_hold_ends(
     db_session_factory: async_sessionmaker[AsyncSession],
+    same_address: bool,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
-    first = await _prove_new_address(db_session_factory, account_id)
+    first_wallet = Account.create()
+    second_wallet = first_wallet if same_address else Account.create()
+    first = await _prove_address(db_session_factory, account_id, first_wallet)
     before_the_change = await _effective(db_session_factory, account_id, at=first.effective_at)
 
-    second = await _prove_new_address(db_session_factory, account_id)
+    second = await _prove_address(db_session_factory, account_id, second_wallet)
 
     held = await _effective(db_session_factory, account_id, at=first.effective_at)
     after_the_hold = await _effective(db_session_factory, account_id, at=second.effective_at)
-    assert (before_the_change, held, after_the_hold) == (first.address, None, second.address)
+    assert (before_the_change, held, after_the_hold) == (
+        first_wallet.address,
+        None,
+        second_wallet.address,
+    )
     assert await _count_payout_addresses(db_session_factory) == 2
 
 
@@ -143,8 +152,13 @@ async def test_payout_addresses_on_different_networks_are_independent(
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     base_mainnet = build_service_settings().model_copy(update={"payment_network": "eip155:8453"})
-    on_sepolia = await _prove_new_address(db_session_factory, account_id)
-    on_mainnet = await _prove_new_address(db_session_factory, account_id, settings=base_mainnet)
+    on_sepolia = await _prove_address(db_session_factory, account_id, Account.create())
+    on_mainnet = await _prove_address(
+        db_session_factory,
+        account_id,
+        Account.create(),
+        settings=base_mainnet,
+    )
 
     at = on_mainnet.effective_at
     sepolia = await _effective(db_session_factory, account_id, at=at)
@@ -202,9 +216,10 @@ async def test_a_payout_proof_is_not_a_login_signature(
     [
         {"network": "eip155:8453"},
         {"account_id": 999_999},
+        {"address": Account.create().address},
         {"nonce": "an-earlier-challenges-nonce"},
     ],
-    ids=["another_network", "another_account", "another_nonce"],
+    ids=["another_network", "another_account", "another_address", "another_nonce"],
 )
 async def test_a_proof_signed_over_other_terms_is_rejected(
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -282,6 +297,28 @@ async def test_requesting_a_challenge_again_replaces_the_pending_one(
     assert proven.address == second_wallet.address
 
 
+async def test_a_challenge_requested_again_in_one_session_carries_the_new_terms(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    settings = build_service_settings()
+    first_wallet = Account.create()
+    second_wallet = Account.create()
+    async with db_session_factory() as session:
+        for wallet in (first_wallet, second_wallet):
+            challenge = await payout_addresses.request_payout_address_challenge(
+                session=session,
+                settings=settings,
+                account_id=account_id,
+                address=wallet.address,
+                network=settings.payment_network,
+            )
+
+    proven = await _prove(db_session_factory, account_id, _sign(challenge, second_wallet))
+
+    assert proven.address == second_wallet.address
+
+
 async def test_an_expired_challenge_cannot_be_proven(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -317,14 +354,86 @@ async def test_a_challenge_for_another_network_is_refused(
             )
 
 
+async def test_a_lowercase_address_is_challenged_in_its_checksummed_form(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    wallet = Account.create()
+
+    async with db_session_factory() as session:
+        challenge = await payout_addresses.request_payout_address_challenge(
+            session=session,
+            settings=build_service_settings(),
+            account_id=account_id,
+            address=wallet.address.lower(),
+            network=PAYMENT_NETWORK,
+        )
+    proven = await _prove(db_session_factory, account_id, _sign(challenge, wallet))
+
+    assert (challenge.address, proven.address) == (wallet.address, wallet.address)
+
+
+@pytest.mark.parametrize(
+    ("address", "message"),
+    [
+        ("0x" + "1" * 41, "invalid EVM address"),
+        ("0x036cbD53842c5426634e7929541eC2318f3dCF7e", "invalid EIP-55 checksum"),
+    ],
+    ids=["overlong", "mistyped_checksum"],
+)
+async def test_a_malformed_address_is_refused(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    address: str,
+    message: str,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidInputError, match=message):
+            await payout_addresses.request_payout_address_challenge(
+                session=session,
+                settings=build_service_settings(),
+                account_id=account_id,
+                address=address,
+                network=PAYMENT_NETWORK,
+            )
+        assert await session.get(PayoutAddressChallenge, account_id) is None
+
+
+@pytest.mark.parametrize(
+    "signature",
+    ["0x" + "00" * 65, "0x" + "11" * 63 + "1b", "0x" + "11" * 65 + "1b", ""],
+    ids=["unrecoverable", "too_short", "too_long", "empty"],
+)
 async def test_a_malformed_signature_is_rejected(
     db_session_factory: async_sessionmaker[AsyncSession],
+    signature: str,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     await _request(db_session_factory, account_id, Account.create())
 
     with pytest.raises(InvalidInputError, match="signature is not valid"):
-        await _prove(db_session_factory, account_id, "0x" + "00" * 65)
+        await _prove(db_session_factory, account_id, signature)
+
+
+async def test_a_recorded_proof_cannot_be_updated(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    proven = await _prove_address(db_session_factory, account_id, Account.create())
+
+    with pytest.raises(DBAPIError, match="payout_addresses rows are immutable"):
+        async with db_session_factory.begin() as session:
+            await session.execute(
+                update(PayoutAddress).values(
+                    address=Account.create().address,
+                    effective_at=proven.verified_at,
+                ),
+            )
+
+    held = await _effective(db_session_factory, account_id, at=proven.verified_at)
+    effective = await _effective(db_session_factory, account_id, at=proven.effective_at)
+    assert (held, effective) == (None, proven.address)
 
 
 async def test_no_payout_address_is_effective_before_one_is_proven(
