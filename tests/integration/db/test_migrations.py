@@ -244,19 +244,27 @@ async def _insert_signing_secret(
     *,
     service_id: int,
     previous_ciphertext: str | None = None,
+    previous_expires: bool = False,
 ) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
             text(
                 """
                 INSERT INTO provider_signing_secrets (
-                    account_id, ciphertext, issued_at, previous_ciphertext
+                    account_id, ciphertext, issued_at, previous_ciphertext,
+                    previous_expires_at
                 )
-                SELECT provider_account_id, 'ciphertext', now(), :previous_ciphertext
+                SELECT
+                    provider_account_id, 'ciphertext', now(), :previous_ciphertext,
+                    CASE WHEN :previous_expires THEN now() + interval '1 day' END
                 FROM services WHERE id = :service_id
                 """
             ),
-            {"service_id": service_id, "previous_ciphertext": previous_ciphertext},
+            {
+                "service_id": service_id,
+                "previous_ciphertext": previous_ciphertext,
+                "previous_expires": previous_expires,
+            },
         )
 
 
@@ -368,9 +376,18 @@ def test_head_migration_rejects_endpoint_timeout_outside_the_cap(
         )
 
 
-def test_head_migration_requires_a_previous_signing_secret_to_expire(
+@pytest.mark.parametrize(
+    ("previous_ciphertext", "previous_expires"),
+    [
+        pytest.param("old", False, id="secret_without_expiry"),
+        pytest.param(None, True, id="expiry_without_secret"),
+    ],
+)
+def test_head_migration_requires_a_previous_signing_secret_and_its_expiry_together(
     clean_database: None,
     db_engine: AsyncEngine,
+    previous_ciphertext: str | None,
+    previous_expires: bool,
 ) -> None:
     service_id = asyncio.run(_seed_service(db_engine, slug="previous-secret-check"))
 
@@ -379,7 +396,12 @@ def test_head_migration_requires_a_previous_signing_secret_to_expire(
         match="ck_provider_signing_secrets_previous_secret_complete",
     ):
         asyncio.run(
-            _insert_signing_secret(db_engine, service_id=service_id, previous_ciphertext="old"),
+            _insert_signing_secret(
+                db_engine,
+                service_id=service_id,
+                previous_ciphertext=previous_ciphertext,
+                previous_expires=previous_expires,
+            ),
         )
 
 
