@@ -20,6 +20,7 @@ import resource
 import struct
 import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import BinaryIO
 
 import jsonschema_rs
@@ -32,8 +33,9 @@ VALIDATE_BODY = 1
 # A request: its kind, then the byte lengths of the schema's canonical JSON and of the body
 # that follow.
 REQUEST_HEADER = struct.Struct("!BII")
-# An answer: its outcome, then the byte length of the UTF-8 text that follows.
-ANSWER_HEADER = struct.Struct("!BI")
+# An answer: its outcome, whether the worker exits after it, then the byte length of the
+# UTF-8 text that follows.
+ANSWER_HEADER = struct.Struct("!B?I")
 # Outcomes. NO_REFUSAL also marks the empty frames that say the worker is ready and has
 # read a request. UNCOMPILABLE_SCHEMA answers a body sent with a schema that does not
 # compile, which the save check makes a provider-side fault.
@@ -69,6 +71,8 @@ class _NotFiniteError(ValueError):
 
 
 def main() -> None:
+    """Answer requests until the input ends, or the worker outgrows `sys.argv[1]` bytes."""
+    recycle_bytes = int(sys.argv[1])
     if sys.platform == "linux":
         # A lower limit already set bounds the worker more tightly.
         with contextlib.suppress(ValueError):
@@ -80,14 +84,24 @@ def main() -> None:
         schema_json = requests.read(schema_size).decode()
         body = requests.read(body_size)
         _answer(answers)  # read
-        if kind == CHECK_SCHEMA:
-            refusal = schema_refusal(schema_json)
-        elif schema_refusal(schema_json) is None:
-            refusal = body_refusal(schema_json, body)
-        else:
-            _answer(answers, UNCOMPILABLE_SCHEMA)
-            continue
-        _answer(answers, NO_REFUSAL if refusal is None else REFUSAL, refusal or "")
+        outcome, text = _outcome(kind, schema_json, body)
+        # Exiting returns the memory of the validators it keeps to the system, which
+        # clearing their cache would not; the pool starts a fresh worker in its place.
+        exiting = _memory_bytes() > recycle_bytes
+        _answer(answers, outcome, text, exiting=exiting)
+        if exiting:
+            return
+
+
+def _outcome(kind: int, schema_json: str, body: bytes) -> tuple[int, str]:
+    """A request's outcome, and the text of its refusal."""
+    schema_problem = schema_refusal(schema_json)
+    if kind == CHECK_SCHEMA:
+        return (NO_REFUSAL, "") if schema_problem is None else (REFUSAL, schema_problem)
+    if schema_problem is not None:
+        return UNCOMPILABLE_SCHEMA, ""
+    refusal = body_refusal(schema_json, body)
+    return (NO_REFUSAL, "") if refusal is None else (REFUSAL, refusal)
 
 
 def schema_refusal(schema_json: str) -> str | None:
@@ -147,10 +161,25 @@ def _compile(schema_json: str) -> jsonschema_rs.Draft202012Validator:
     )
 
 
-def _answer(answers: BinaryIO, outcome: int = NO_REFUSAL, text: str = "") -> None:
+def _answer(
+    answers: BinaryIO,
+    outcome: int = NO_REFUSAL,
+    text: str = "",
+    *,
+    exiting: bool = False,
+) -> None:
     data = text.encode()
-    answers.write(ANSWER_HEADER.pack(outcome, len(data)) + data)
+    answers.write(ANSWER_HEADER.pack(outcome, exiting, len(data)) + data)
     answers.flush()
+
+
+def _memory_bytes() -> int:
+    """The worker's size: on Linux its address space, which MEMORY_LIMIT_BYTES bounds;
+    elsewhere its peak resident size."""
+    if sys.platform == "linux":
+        pages = int(Path("/proc/self/statm").read_text().split()[0])
+        return pages * resource.getpagesize()
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss  # bytes on macOS
 
 
 def _not_finite(name: str) -> float:

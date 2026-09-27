@@ -22,6 +22,7 @@ from app.core.errors import InvalidInputError, UnavailableError
 from app.core.json_types import JsonObject
 from app.core.request_validation import (
     REQUEST_BODY_MAX_BYTES,
+    WORKER_RECYCLE_BYTES,
     ProcessRequestValidationPool,
     check_request_schema_compiles,
     validate_request_body,
@@ -69,7 +70,7 @@ requests, answers = sys.stdin.buffer, sys.stdout.buffer
 
 
 def answer(outcome, text):
-    answers.write(struct.pack({ANSWER_HEADER.format!r}, outcome, len(text)) + text)
+    answers.write(struct.pack({ANSWER_HEADER.format!r}, outcome, False, len(text)) + text)
     answers.flush()
 
 
@@ -86,7 +87,7 @@ elif sys.argv[1] == "exit_after_reading":
 else:
     answer(0, b"")  # read
     if sys.argv[1] == "answer_too_long":
-        answers.write(struct.pack({ANSWER_HEADER.format!r}, 1, 64 * 1024 + 1))
+        answers.write(struct.pack({ANSWER_HEADER.format!r}, 1, False, 64 * 1024 + 1))
         answers.flush()
     else:
         answer(1, b"\\xff")
@@ -98,9 +99,10 @@ class OpenPool(Protocol):
     def __call__(
         self,
         *,
-        workers: int = 2,
-        timeout_seconds: float = DEADLINE_SECONDS,
-        compile_timeout_seconds: float = COMPILE_DEADLINE_SECONDS,
+        workers: int = ...,
+        timeout_seconds: float = ...,
+        compile_timeout_seconds: float = ...,
+        recycle_bytes: int = ...,
     ) -> ProcessRequestValidationPool: ...
 
 
@@ -120,11 +122,13 @@ async def open_pool() -> AsyncIterator[OpenPool]:
         workers: int = 2,
         timeout_seconds: float = DEADLINE_SECONDS,
         compile_timeout_seconds: float = COMPILE_DEADLINE_SECONDS,
+        recycle_bytes: int = WORKER_RECYCLE_BYTES,
     ) -> ProcessRequestValidationPool:
         pool = ProcessRequestValidationPool(
             workers=workers,
             timeout_seconds=timeout_seconds,
             compile_timeout_seconds=compile_timeout_seconds,
+            recycle_bytes=recycle_bytes,
         )
         pools.append(pool)
         return pool
@@ -416,6 +420,22 @@ async def test_a_body_that_ends_its_worker_is_refused_and_the_worker_replaced(
     assert vars(record)["exitcode"] < 0  # ended by a signal: SIGSEGV or SIGBUS
     await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
     assert pool.pids != (crashing,)
+
+
+async def test_a_worker_past_its_memory_threshold_is_recycled_without_failing_a_call(
+    open_pool: OpenPool,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Every worker passes a 1-byte threshold with its first answer.
+    pool = open_pool(workers=1, recycle_bytes=1)
+    await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
+    (recycled,) = pool.pids
+
+    await validate_request_body(pool=pool, schema={"type": "object"}, body=b"{}")
+    await check_request_schema_compiles(pool=pool, schema={"type": "object"})
+
+    assert await _all_reaped((recycled,))
+    assert [record for record in caplog.records if record.name == LOGGER] == []
 
 
 async def test_a_worker_killed_while_idle_is_replaced_without_failing_the_next_call(

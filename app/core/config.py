@@ -120,7 +120,9 @@ class Settings(BaseSettings):
     provider_secret_grace_seconds: int = Field(default=86_400, gt=0)
     # Request bodies are validated in this many worker processes, each validation within
     # this deadline (app/core/request_validation.py). A caller also waits at most the
-    # deadline for a free worker, and each worker takes about 25 to 200 MiB.
+    # deadline for a free worker. A worker starts at about 25 MiB and is replaced once it
+    # passes 384 MiB; on Linux it can never pass 512 MiB, so an API process holds up to
+    # this many times 512 MiB in workers.
     request_validation_timeout_ms: int = Field(default=250, gt=0, le=10_000)
     request_validation_workers: int = Field(default=2, gt=0, le=32)
     # A request schema is compiled in a worker when it is saved, within this deadline:

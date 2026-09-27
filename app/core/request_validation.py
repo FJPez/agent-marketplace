@@ -50,6 +50,10 @@ from app.core.request_validation_worker import (
 logger = get_logger(__name__)
 
 REQUEST_BODY_MAX_BYTES = 1024 * 1024
+# A worker whose size passes this after an answer exits, and the next call starts a fresh
+# one: below the worker's 512 MiB address-space limit on Linux, with room for one more
+# request (`app.core.request_validation_worker.MEMORY_LIMIT_BYTES`).
+WORKER_RECYCLE_BYTES = 384 * 1024 * 1024
 # How long a new worker may take to start, and a killed one to exit.
 WORKER_START_TIMEOUT_SECONDS = 10.0
 WORKER_EXIT_TIMEOUT_SECONDS = 1.0
@@ -82,10 +86,11 @@ class _MalformedAnswerError(Exception):
 
 class _Answer(NamedTuple):
     outcome: int
+    exiting: bool
     text: str
 
 
-_EMPTY = _Answer(NO_REFUSAL, "")
+_EMPTY = _Answer(NO_REFUSAL, False, "")
 
 
 @dataclass(frozen=True, eq=False)
@@ -128,9 +133,11 @@ class ProcessRequestValidationPool:
         workers: int,
         timeout_seconds: float,
         compile_timeout_seconds: float,
+        recycle_bytes: int = WORKER_RECYCLE_BYTES,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._compile_timeout_seconds = compile_timeout_seconds
+        self._recycle_bytes = recycle_bytes
         # The free slots, then None once the pool closes, which each caller passes on.
         self._free: asyncio.Queue[_Slot | None] = asyncio.Queue()
         for _ in range(workers):
@@ -199,10 +206,14 @@ class ProcessRequestValidationPool:
             self._free.put_nowait(None)
             raise UnavailableError(_CLOSING)
         try:
-            return await self._call_in(slot, request, deadline_seconds)
+            answer = await self._call_in(slot, request, deadline_seconds)
         except BaseException:
             _discard(slot)
             raise
+        else:
+            if answer.exiting:
+                _discard(slot)
+            return answer
         finally:
             if not self._closed:
                 self._free.put_nowait(slot)
@@ -227,6 +238,7 @@ class ProcessRequestValidationPool:
         try:
             process = await asyncio.create_subprocess_exec(
                 *_WORKER_COMMAND,
+                str(self._recycle_bytes),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 cwd=_PROJECT_ROOT,
@@ -341,10 +353,10 @@ def _discard(slot: _Slot) -> None:
 
 
 async def _read_answer(answers: asyncio.StreamReader) -> _Answer:
-    outcome, size = ANSWER_HEADER.unpack(await answers.readexactly(ANSWER_HEADER.size))
+    outcome, exiting, size = ANSWER_HEADER.unpack(await answers.readexactly(ANSWER_HEADER.size))
     if size > ANSWER_MAX_BYTES:
         raise _MalformedAnswerError
     try:
-        return _Answer(outcome, (await answers.readexactly(size)).decode())
+        return _Answer(outcome, exiting, (await answers.readexactly(size)).decode())
     except UnicodeDecodeError:
         raise _MalformedAnswerError from None

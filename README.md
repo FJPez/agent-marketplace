@@ -227,7 +227,10 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   means workers cannot start, or the API is shutting down. A body must be at most
   1 MiB of JSON with finite numbers (not `NaN`, `Infinity` or `1e400`), nested at most
   128 levels, and a refused body names its first error and where it is, each cut to
-  200 characters. Each worker keeps its 256 most recently used compiled schemas.
+  200 characters. Each worker keeps its 256 most recently used compiled schemas and
+  starts at about 25 MiB; once it passes 384 MiB it exits after answering, and the next
+  call starts a fresh one. On Linux a worker can never pass 512 MiB, so each API
+  process needs room for `APP_REQUEST_VALIDATION_WORKERS` times 512 MiB.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base
