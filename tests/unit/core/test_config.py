@@ -273,3 +273,31 @@ def test_settings_ignore_retired_payment_variables(
     settings = Settings()
 
     assert settings.env is AppEnv.PROD
+
+
+@pytest.mark.parametrize(
+    "env_overrides",
+    [
+        pytest.param({"APP_DB_STATEMENT_TIMEOUT_MS": "0"}, id="statement-timeout-zero"),
+        pytest.param({"APP_DB_STATEMENT_TIMEOUT_MS": "-1"}, id="statement-timeout-negative"),
+        pytest.param({"APP_DB_LOCK_TIMEOUT_MS": "0"}, id="lock-timeout-zero"),
+        pytest.param({"APP_DB_LOCK_TIMEOUT_MS": "-1"}, id="lock-timeout-negative"),
+        pytest.param(
+            {"APP_DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "0"},
+            id="idle-in-transaction-timeout-zero",
+        ),
+        pytest.param(
+            {"APP_DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "-1"},
+            id="idle-in-transaction-timeout-negative",
+        ),
+        pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
+    ],
+)
+def test_settings_reject_non_positive_timeout_and_touch_interval_settings(
+    env_overrides: dict[str, str],
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env=env_overrides)
+
+    with pytest.raises(ValidationError):
+        Settings()
