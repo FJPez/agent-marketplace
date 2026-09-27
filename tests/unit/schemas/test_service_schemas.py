@@ -33,7 +33,7 @@ ENDPOINT_REQUESTS = [
     (EndpointUpdateRequest, {}),
 ]
 VALID_UPSTREAM = {
-    "base_url": "http://127.0.0.1:9000",
+    "base_url": "https://provider.example.com",
     "path": "/translate",
     "http_method": "POST",
 }

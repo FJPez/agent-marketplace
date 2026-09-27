@@ -15,6 +15,7 @@ from tests.fixtures.domain import (
 from tests.fixtures.settings import build_service_settings
 from tests.helpers.dns import (
     TEST_UPSTREAM_ADDRESS,
+    TEST_UPSTREAM_BASE_URL,
     TEST_UPSTREAM_HOST,
     FakeResolver,
     TransactionWatchingResolver,
@@ -1004,7 +1005,7 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
-                base_url=HttpUrl("https://provider.example.com"),
+                base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                 path="  /translate  ",
                 http_method="POST",
             ),
@@ -1014,7 +1015,7 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
         persisted = await session.get(ProviderUpstream, endpoint_id)
 
     assert persisted is not None
-    assert persisted.base_url == "https://provider.example.com/"
+    assert persisted.base_url == TEST_UPSTREAM_BASE_URL
     assert persisted.path == "/translate"
     assert persisted.http_method == "POST"
 
@@ -1039,7 +1040,7 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
-                base_url=HttpUrl("https://provider.example.com"),
+                base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                 path="/translate",
                 http_method="POST",
             ),
@@ -1057,7 +1058,7 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
-                base_url=HttpUrl("https://provider.example.com/v2"),
+                base_url=HttpUrl(f"https://{TEST_UPSTREAM_HOST}/v2"),
                 path="/summarize",
                 http_method="PUT",
             ),
@@ -1073,7 +1074,7 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
 
     assert upstream_count == 1
     assert persisted is not None
-    assert persisted.base_url == "https://provider.example.com/v2"
+    assert persisted.base_url == f"https://{TEST_UPSTREAM_HOST}/v2"
     assert persisted.path == "/summarize"
     assert persisted.http_method == "PUT"
     assert persisted.updated_at > first_updated_at
@@ -1094,7 +1095,7 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
     await create_upstream_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        base_url="https://provider.example.com/",
+        base_url=TEST_UPSTREAM_BASE_URL,
         path="/translate",
         http_method="POST",
     )
@@ -1111,7 +1112,7 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
-                base_url=HttpUrl("https://provider.example.com"),
+                base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                 path=" /translate ",
                 http_method="POST",
             ),
@@ -1140,7 +1141,7 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
     await create_upstream_record(
         db_session_factory,
         endpoint_id=endpoint_id,
-        base_url="https://provider.example.com/",
+        base_url=TEST_UPSTREAM_BASE_URL,
         path="/translate",
         http_method="POST",
     )
@@ -1152,7 +1153,7 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
-                base_url=HttpUrl("https://provider.example.com"),
+                base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                 path="/translate",
                 http_method="POST",
             ),
@@ -1181,7 +1182,7 @@ async def test_upsert_upstream_rejects_active_service(
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
-                    base_url=HttpUrl("https://provider.example.com"),
+                    base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                     path="/translate",
                     http_method="POST",
                 ),
@@ -1202,7 +1203,7 @@ async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
                 account_id=account_id,
                 endpoint_id=999_999,
                 request=EndpointUpstreamRequest(
-                    base_url=HttpUrl("https://provider.example.com"),
+                    base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                     path="/translate",
                     http_method="POST",
                 ),
@@ -1231,7 +1232,7 @@ async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
-                    base_url=HttpUrl("https://provider.example.com"),
+                    base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
                     path="/translate",
                     http_method="POST",
                 ),

@@ -15,7 +15,7 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
-from tests.helpers.dns import TEST_UPSTREAM_HOST, FakeResolver
+from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, TEST_UPSTREAM_HOST, FakeResolver
 
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
@@ -701,7 +701,7 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.example.com",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "/translate",
             "http_method": "POST",
         },
@@ -781,7 +781,7 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.example.com",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "translate",
             "http_method": "POST",
         },
@@ -811,7 +811,7 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.example.com",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "/translate",
             "http_method": "GET",
         },
@@ -889,7 +889,7 @@ async def test_suspended_service_mutations_return_conflict(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://provider.example.com",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "/translate",
             "http_method": "POST",
         },
