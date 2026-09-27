@@ -26,6 +26,12 @@ VALID_ENDPOINT_CREATE = {
     "response_schema": {"type": "object"},
     "timeout_seconds": 30,
 }
+# The endpoint request models, each with a payload that is valid without the field
+# under test.
+ENDPOINT_REQUESTS = [
+    (EndpointCreateRequest, VALID_ENDPOINT_CREATE),
+    (EndpointUpdateRequest, {}),
+]
 VALID_UPSTREAM = {
     "base_url": "http://127.0.0.1:9000",
     "path": "/translate",
@@ -230,30 +236,27 @@ def test_endpoint_create_request_defaults_invocation_fields() -> None:
     assert request.response_content_type == "application/json"
 
 
-@pytest.mark.parametrize(
-    ("model", "payload"),
-    [
-        (EndpointCreateRequest, VALID_ENDPOINT_CREATE),
-        (EndpointUpdateRequest, {}),
-    ],
-)
-@pytest.mark.parametrize(
-    ("timeout_seconds", "accepted"),
-    [(1, True), (30, True), (0, False), (31, False)],
-)
-def test_endpoint_requests_cap_timeout_seconds_at_30(
+@pytest.mark.parametrize(("model", "payload"), ENDPOINT_REQUESTS)
+@pytest.mark.parametrize("timeout_seconds", [1, 30])
+def test_endpoint_requests_accept_timeout_seconds_up_to_30(
     model: type[BaseModel],
     payload: dict[str, object],
     timeout_seconds: int,
-    accepted: bool,
 ) -> None:
-    body = {**payload, "timeout_seconds": timeout_seconds}
+    request = model.model_validate({**payload, "timeout_seconds": timeout_seconds})
 
-    if accepted:
-        assert model.model_validate(body).model_dump()["timeout_seconds"] == timeout_seconds
-    else:
-        with pytest.raises(ValidationError, match="timeout_seconds"):
-            model.model_validate(body)
+    assert request.model_dump()["timeout_seconds"] == timeout_seconds
+
+
+@pytest.mark.parametrize(("model", "payload"), ENDPOINT_REQUESTS)
+@pytest.mark.parametrize("timeout_seconds", [0, 31])
+def test_endpoint_requests_reject_timeout_seconds_outside_1_to_30(
+    model: type[BaseModel],
+    payload: dict[str, object],
+    timeout_seconds: int,
+) -> None:
+    with pytest.raises(ValidationError, match="timeout_seconds"):
+        model.model_validate({**payload, "timeout_seconds": timeout_seconds})
 
 
 def test_endpoint_create_request_normalizes_response_content_type() -> None:

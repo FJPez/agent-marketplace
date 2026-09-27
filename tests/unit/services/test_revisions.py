@@ -63,22 +63,11 @@ def _service() -> Service:
     return service
 
 
-def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
-    impact = classify_endpoint_update(
-        {"request_schema": {"type": "object"}},
-    )
-
-    assert impact is UpdateImpact.MATERIAL
-
-
-def test_classify_endpoint_update_marks_price_as_material() -> None:
-    impact = classify_endpoint_update({"price": 25_000})
-
-    assert impact is UpdateImpact.MATERIAL
-
-
-@pytest.mark.parametrize("field", ["response_content_type", "supports_idempotency"])
-def test_classify_endpoint_update_marks_invocation_fields_as_material(field: str) -> None:
+@pytest.mark.parametrize(
+    "field",
+    ["request_schema", "price", "response_content_type", "supports_idempotency"],
+)
+def test_classify_endpoint_update_marks_contract_fields_as_material(field: str) -> None:
     assert classify_endpoint_update({field}) is UpdateImpact.MATERIAL
 
 

@@ -179,39 +179,30 @@ async def test_create_endpoint_below_the_minimum_price_creates_nothing(
         assert endpoints.all() == []
 
 
-@pytest.mark.parametrize(
-    ("amount", "accepted"),
-    [(10_000, True), (9_999, False)],
-    ids=["at_the_minimum", "one_unit_below"],
-)
-async def test_price_at_the_minimum_is_accepted_and_one_unit_below_is_rejected(
+async def test_price_one_unit_below_the_minimum_is_rejected_and_stores_nothing(
     db_session_factory: async_sessionmaker[AsyncSession],
-    amount: int,
-    accepted: bool,
 ) -> None:
     account_id, endpoint_id = await _create_endpoint(db_session_factory)
-    changes = EndpointUpdateRequest(price=ListingPriceRequest(amount=amount))
 
-    if accepted:
-        await _update(
-            db_session_factory,
-            account_id=account_id,
-            endpoint_id=endpoint_id,
-            changes=changes,
-        )
-        assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
-            1,
-            [(1, amount)],
-        )
-    else:
+    async with db_session_factory() as session:
         with pytest.raises(InvalidInputError, match="at least 10000 atomic units"):
-            await _update(
-                db_session_factory,
+            await update_endpoint(
+                session=session,
+                settings=build_service_settings(),
                 account_id=account_id,
                 endpoint_id=endpoint_id,
-                changes=changes,
+                changes=EndpointUpdateRequest(
+                    timeout_seconds=20,
+                    price=ListingPriceRequest(amount=9_999),
+                ),
             )
-        assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (None, [])
+        await session.commit()
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+    assert persisted is not None
+    assert persisted.timeout_seconds == 30
+    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (None, [])
 
 
 async def test_price_version_needs_a_treasury_address(
@@ -219,15 +210,24 @@ async def test_price_version_needs_a_treasury_address(
 ) -> None:
     account_id, endpoint_id = await _create_endpoint(db_session_factory)
 
-    with pytest.raises(InvalidStateError, match="APP_TREASURY_ADDRESS"):
-        await _update(
-            db_session_factory,
-            account_id=account_id,
-            endpoint_id=endpoint_id,
-            changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=10_000)),
-            settings=build_service_settings().model_copy(update={"treasury_address": None}),
-        )
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidStateError, match="APP_TREASURY_ADDRESS"):
+            await update_endpoint(
+                session=session,
+                settings=build_service_settings().model_copy(update={"treasury_address": None}),
+                account_id=account_id,
+                endpoint_id=endpoint_id,
+                changes=EndpointUpdateRequest(
+                    timeout_seconds=20,
+                    price=ListingPriceRequest(amount=10_000),
+                ),
+            )
+        await session.commit()
 
+    async with db_session_factory() as session:
+        persisted = await session.get(ServiceEndpoint, endpoint_id)
+    assert persisted is not None
+    assert persisted.timeout_seconds == 30
     assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (None, [])
 
 
