@@ -14,7 +14,7 @@ from app.core.enums import (
     ServiceHealthStatus,
     ServiceLifecycle,
 )
-from app.core.json_types import JsonObject as CoreJsonObject
+from app.core.json_types import JsonObject
 from app.db.models import (
     ListingPrice,
     ModerationAction,
@@ -33,8 +33,6 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-type JsonObject = dict[str, object]
 
 
 class ProviderAccountFactory(Protocol):
@@ -109,7 +107,7 @@ class EndpointFactory(Protocol):
         summary: str | None | object = ...,
         description: str | None | object = ...,
         access_mode: AccessMode = ...,
-        request_schema: CoreJsonObject | None = ...,
+        request_schema: JsonObject | None = ...,
         response_schema: JsonObject | None = ...,
         timeout_seconds: int = ...,
         is_enabled: bool = ...,
@@ -203,7 +201,7 @@ async def create_service_record(
     with_revision: bool = False,
     revision_number: int = 1,
     change_token: str = "c" * 64,
-    snapshot: dict[str, object] | None = None,
+    snapshot: JsonObject | None = None,
     tags: list[str] | None = None,
 ) -> int:
     resolved_description = f"{slug} description" if description is _UNSET else description
@@ -245,7 +243,7 @@ async def create_revision_record(
     service_id: int,
     revision_number: int = 1,
     change_token: str = "c" * 64,
-    snapshot: dict[str, object] | None = None,
+    snapshot: JsonObject | None = None,
     set_current: bool = True,
 ) -> int:
     async with db_session_factory.begin() as session:
@@ -274,8 +272,8 @@ async def create_endpoint_record(
     summary: str | None | object = _UNSET,
     description: str | None | object = _UNSET,
     access_mode: AccessMode = AccessMode.FREE,
-    request_schema: CoreJsonObject | None = None,
-    response_schema: dict[str, object] | None = None,
+    request_schema: JsonObject | None = None,
+    response_schema: JsonObject | None = None,
     timeout_seconds: int = 30,
     is_enabled: bool = True,
 ) -> int:
@@ -570,7 +568,7 @@ def endpoint_factory(
         summary: str | None | object = _UNSET,
         description: str | None | object = _UNSET,
         access_mode: AccessMode = AccessMode.FREE,
-        request_schema: CoreJsonObject | None = None,
+        request_schema: JsonObject | None = None,
         response_schema: JsonObject | None = None,
         timeout_seconds: int = 30,
         is_enabled: bool = True,

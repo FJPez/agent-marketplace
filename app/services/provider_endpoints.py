@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import Protocol
 from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
@@ -319,7 +320,22 @@ def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
     return ListingPrice(amount=amount, **_current_payment_terms(settings))
 
 
-def is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
+class PriceTerms(Protocol):
+    """The payment-terms fields `is_on_current_terms` compares.
+
+    Satisfied by both the ORM `ListingPrice` and the catalogue loader's frozen
+    `listings.ListingPriceTerms`: phase 1 calls this with a listing it loaded, not one
+    it fetched itself.
+    """
+
+    asset: str
+    network: str
+    pay_to: str
+    max_timeout_seconds: int
+    fee_bps: int
+
+
+def is_on_current_terms(price: PriceTerms, *, settings: Settings) -> bool:
     """Whether `price` carries the payment terms a version created now would.
 
     The amount is not compared. Without a treasury no version can be created, so

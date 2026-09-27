@@ -14,6 +14,7 @@ from app.core.enums import AccessMode, ServiceLifecycle
 from app.db.models import (
     Account,
     ListingPrice,
+    ProviderSigningSecret,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -21,10 +22,10 @@ from app.db.models import (
     ServiceTag,
 )
 from app.db.session import create_engine, create_session_factory
-from app.services import provider_endpoints
+from app.services import provider_endpoints, provider_signing_secrets
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 DEMO_PROVIDER_NAME = "Demo Provider"
 DEMO_SERVICE_SLUG = "demo-agent-service"
@@ -48,6 +49,7 @@ class SeedResult:
     paid_endpoint_id: int
     provider_wallet_address: str
     consumer_wallet_address: str | None
+    provider_signing_secret: str
 
 
 def _get_required_private_key(env_name: str, *, purpose: str) -> str:
@@ -245,6 +247,38 @@ async def _ensure_paid_price(
     return price
 
 
+async def _ensure_signing_secret(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    settings: Settings,
+    account_id: int,
+) -> str:
+    """Give the demo provider a signing secret if it lacks one; return its current secret.
+
+    Phase 1 signs every forwarded request with a provider's secret, so a demo listing
+    seeded without one would only fail after a consumer paid. Uses its own short
+    session rather than the caller's transaction, matching how
+    `provider_signing_secrets` commits its own work. Raises InvalidStateError, naming
+    APP_PROVIDER_SECRET_ENCRYPTION_KEYS, when that setting is not configured.
+    """
+    async with session_factory() as session:
+        existing = await session.get(ProviderSigningSecret, account_id)
+        if existing is None:
+            _, secret = await provider_signing_secrets.create_signing_secret(
+                session=session,
+                settings=settings,
+                account_id=account_id,
+            )
+            return secret
+
+        signing_secrets = await provider_signing_secrets.load_signing_secrets(
+            session=session,
+            settings=settings,
+            account_id=account_id,
+        )
+        return signing_secrets[0]
+
+
 def _build_snapshot(
     service: Service,
     *,
@@ -372,14 +406,27 @@ async def seed_demo_data() -> SeedResult:
                 paid_endpoint_id=paid_endpoint.id,
                 paid_price=paid_price,
             )
-            return SeedResult(
-                provider_account_id=provider.id,
-                service_id=service.id,
-                free_endpoint_id=free_endpoint.id,
-                paid_endpoint_id=paid_endpoint.id,
-                provider_wallet_address=provider_wallet_address,
-                consumer_wallet_address=consumer_wallet_address,
-            )
+            provider_account_id = provider.id
+            service_id = service.id
+            free_endpoint_id = free_endpoint.id
+            paid_endpoint_id = paid_endpoint.id
+
+        # Its own short transaction, after the one above commits: phase 1 must sign
+        # every forward, so the demo listings need this before they can load.
+        provider_signing_secret = await _ensure_signing_secret(
+            session_factory,
+            settings=settings,
+            account_id=provider_account_id,
+        )
+        return SeedResult(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            free_endpoint_id=free_endpoint_id,
+            paid_endpoint_id=paid_endpoint_id,
+            provider_wallet_address=provider_wallet_address,
+            consumer_wallet_address=consumer_wallet_address,
+            provider_signing_secret=provider_signing_secret,
+        )
     finally:
         await engine.dispose()
 
@@ -398,6 +445,7 @@ async def main() -> None:
                 f"demo_free_upstream_path={get_settings().demo_free_upstream_path}",
                 f"demo_paid_upstream_path={get_settings().demo_paid_upstream_path}",
                 f"demo_provider_wallet={result.provider_wallet_address}",
+                f"demo_provider_signing_secret={result.provider_signing_secret}",
             ],
         )
         + "\n",

@@ -157,8 +157,12 @@ uv run alembic upgrade head
 ```
 
 To reload the demo data, set `APP_TREASURY_ADDRESS` (the paid demo endpoint's
-`pay_to`, in `.env` or the environment) and export `PROVIDER_PRIVATE_KEY` (the
-demo provider's wallet key), then run `make seed` again.
+`pay_to`, in `.env` or the environment), export `PROVIDER_PRIVATE_KEY` (the
+demo provider's wallet key), and set `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (see
+[Signing Secret Encryption Keys](#signing-secret-encryption-keys)); the demo
+provider needs a signing secret before its listings can be invoked, and the seed
+fails, naming that variable, without one. Then run `make seed` again; it prints
+the demo provider's signing secret once, for local manual testing only.
 
 ## Admin Bootstrap
 
