@@ -38,12 +38,16 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
     return async_sessionmaker(bind=engine, expire_on_commit=False)
 
 
-async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
+def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
     app_state = getattr(request.app.state, "app_state", None)
     session_factory = getattr(app_state, "db_session_factory", None)
     if session_factory is None:
         msg = "database session factory is not initialized"
         raise RuntimeError(msg)
+    return session_factory
 
+
+async def get_db_session(request: Request) -> AsyncIterator[AsyncSession]:
+    session_factory = get_session_factory(request)
     async with session_factory() as session:
         yield session

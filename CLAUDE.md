@@ -60,15 +60,48 @@ Layer responsibilities:
 ### Transactions
 
 - The session dependency owns session lifetime only. It never commits.
+- Authentication dependencies resolve the actor on their own short-lived
+  session and return a plain `ActorContext`, so the route's request session
+  starts with no transaction open. A dependency that reads the database for
+  request-wide context does the same.
 - Routes do not commit, flush, roll back, or close the session.
 - Read services do not commit.
 - The top-level mutation service owns the transaction and commits exactly once.
 - Private helpers may `flush()` but never commit.
 - Do not hold a database transaction open across external network I/O.
-- External workflows (x402 payments, provider invocation, payouts) may use
-  multiple short transactions with explicit durable states, idempotency, and
-  safe retries. This is not an ordinary CRUD pattern; do not force it
-  elsewhere.
+- External workflows (x402 payments, provider invocation, payouts) use the
+  short-transaction convention below. It is not an ordinary CRUD pattern; do
+  not force it elsewhere.
+
+### Short transactions in external workflows
+
+A workflow that calls something outside PostgreSQL (the facilitator, a
+provider, the chain) is a sequence of short transactions, each ending in a
+durable state that recovery can resume from:
+
+1. Commit the intent: move the row to a state that records the call is about
+   to happen (for example `settling` or `dispatched`), with everything needed
+   to retry or reconcile it, and commit.
+2. Make the external call with no transaction open.
+3. Commit the outcome in a new short transaction.
+
+Never hold a transaction or a row lock across network I/O; the connection
+settings in `app/db/session.py` (statement, lock and idle-in-transaction
+timeouts) are a backstop, not a design tool.
+
+Every state change in such a workflow is a fenced compare-and-set update:
+
+```sql
+UPDATE invocations
+SET state = :next_state, ...
+WHERE id = :id AND state = :expected_state AND fence = :fence
+```
+
+The fencing token `fence` is incremented by the conditional update that takes
+the row's lease, and the lease holder passes it to every later update. Check
+the updated row count: zero rows means the state moved on or another worker
+took the lease, so ownership is lost: stop, perform no further side effect
+(no external call, no ledger posting) and do not retry.
 
 ### Errors
 

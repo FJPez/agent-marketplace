@@ -82,6 +82,7 @@ def test_settings_use_default_values(
     assert settings.siwe_nonce_expiry == 300
     assert settings.wallet_change_cooldown == 604800
     assert settings.api_key_prefix == "amp_"
+    assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
 
 

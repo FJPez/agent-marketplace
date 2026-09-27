@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     siwe_nonce_expiry: int = 300
     wallet_change_cooldown: int = 604800
     api_key_prefix: str = "amp_"
+    api_key_touch_interval: int = 300
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_timeout: float = 30.0
