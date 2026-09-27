@@ -54,12 +54,15 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             redis_client = coredis.Redis.from_url(settings.redis_url, decode_responses=True)
             stack.callback(redis_client.connection_pool.disconnect)
 
+        # Reads the system's nameservers; each query gives up after 5 s, retries included.
+        system_resolver = dns.asyncresolver.Resolver()
+        system_resolver.lifetime = 5.0
+
         yield Resources(
             settings=settings,
             db_engine=db_engine,
             db_session_factory=create_session_factory(db_engine),
             redis_client=redis_client,
             rate_limits_backend=create_rate_limits_backend(settings),
-            # Reads the system's nameservers; each lookup is capped at 5 s in all.
-            dns_resolver=DnsPythonResolver(dns.asyncresolver.Resolver()),
+            dns_resolver=DnsPythonResolver(system_resolver),
         )

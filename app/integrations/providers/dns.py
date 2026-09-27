@@ -30,7 +30,14 @@ class DnsPythonResolver:
         self._resolver = resolver
 
     async def resolve_addresses(self, host: str) -> list[IpAddress]:
-        ipv4, ipv6 = await asyncio.gather(self._query(host, "A"), self._query(host, "AAAA"))
+        try:
+            # A failed query cancels the other instead of leaving it to run out its time.
+            async with asyncio.TaskGroup() as queries:
+                ipv4_query = queries.create_task(self._query(host, "A"))
+                ipv6_query = queries.create_task(self._query(host, "AAAA"))
+        except* DnsLookupError as failed:
+            raise DnsLookupError(f"DNS lookup for {host} failed") from failed
+        ipv4, ipv6 = ipv4_query.result(), ipv6_query.result()
         return [ip_address(record.to_text()) for record in (*ipv4, *ipv6)]
 
     async def _query(self, name: str, record_type: str) -> Sequence[Rdata]:
