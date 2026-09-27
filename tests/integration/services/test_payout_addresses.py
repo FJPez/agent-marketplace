@@ -1,10 +1,13 @@
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from eth_account import Account
+from eth_account.datastructures import SignedMessage
 from eth_account.messages import encode_defunct, encode_typed_data
 from eth_account.signers.local import LocalAccount
+from eth_keys.constants import SECPK1_N
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -21,10 +24,18 @@ from app.services import payout_addresses
 PAYMENT_NETWORK = "eip155:84532"
 
 
-def _sign(challenge: PayoutAddressChallenge, wallet: LocalAccount) -> str:
+def _signed(challenge: PayoutAddressChallenge, wallet: LocalAccount) -> SignedMessage:
     """Sign the challenge's typed data as a wallet does for eth_signTypedData_v4."""
     signable = encode_typed_data(full_message=payout_addresses.proof_typed_data(challenge))
-    return wallet.sign_message(signable).signature.to_0x_hex()
+    return wallet.sign_message(signable)
+
+
+def _sign(challenge: PayoutAddressChallenge, wallet: LocalAccount) -> str:
+    return _signed(challenge, wallet).signature.to_0x_hex()
+
+
+def _encode_signature(r: int, s: int, v: int) -> str:
+    return "0x" + r.to_bytes(32).hex() + s.to_bytes(32).hex() + v.to_bytes(1).hex()
 
 
 async def _request(
@@ -415,6 +426,49 @@ async def test_a_malformed_signature_is_rejected(
 
     with pytest.raises(InvalidInputError, match="signature is not valid"):
         await _prove(db_session_factory, account_id, signature)
+
+
+@pytest.mark.parametrize(
+    "reencode",
+    [
+        # The same signature with s mirrored and v flipped: it recovers the same signer.
+        pytest.param(lambda r, s, v: (r, SECPK1_N - s, 55 - v), id="high_s"),
+        # An EIP-155 style v, which implies a chain id the domain does not name.
+        pytest.param(lambda r, s, v: (r, s, v + 10), id="eip155_v"),
+    ],
+)
+async def test_another_encoding_of_the_right_signature_is_rejected(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    reencode: Callable[[int, int, int], tuple[int, int, int]],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    wallet = Account.create()
+    signed = _signed(await _request(db_session_factory, account_id, wallet), wallet)
+
+    with pytest.raises(InvalidInputError, match="signature is not valid"):
+        await _prove(
+            db_session_factory,
+            account_id,
+            _encode_signature(*reencode(signed.r, signed.s, signed.v)),
+        )
+
+    assert await _count_payout_addresses(db_session_factory) == 0
+
+
+async def test_a_v_of_0_or_1_is_recorded_as_27_or_28(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    wallet = Account.create()
+    signed = _signed(await _request(db_session_factory, account_id, wallet), wallet)
+
+    proven = await _prove(
+        db_session_factory,
+        account_id,
+        _encode_signature(signed.r, signed.s, signed.v - 27),
+    )
+
+    assert proven.signature == signed.signature.to_0x_hex()
 
 
 async def test_a_recorded_proof_cannot_be_updated(

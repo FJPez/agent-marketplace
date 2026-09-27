@@ -3,11 +3,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from eth_keys.constants import SECPK1_N
 from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.security import (
     TokenPayload,
+    canonical_signature,
     checksum_address,
     decode_token,
     encode_token,
@@ -20,6 +22,10 @@ from app.core.security import (
 # An address in its EIP-55 form, and the same address with one letter's case flipped.
 CHECKSUMMED_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 MISTYPED_ADDRESS = "0x036cbD53842c5426634e7929541eC2318f3dCF7e"
+# The r and s of a signature, in hex: s at most half the curve order (low s) or above it.
+SIGNATURE_R = "ab" * 32
+LOW_S = format(SECPK1_N // 2, "064x")
+HIGH_S = format(SECPK1_N // 2 + 1, "064x")
 
 
 def _settings() -> Settings:
@@ -69,6 +75,45 @@ def test_checksum_address_rejects_what_is_not_a_well_typed_address(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         checksum_address(address)
+
+
+@pytest.mark.parametrize(
+    ("signature", "canonical"),
+    [
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}1b", f"0x{SIGNATURE_R}{LOW_S}1b", id="v_27"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}1c", f"0x{SIGNATURE_R}{LOW_S}1c", id="v_28"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}00", f"0x{SIGNATURE_R}{LOW_S}1b", id="v_0"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}01", f"0x{SIGNATURE_R}{LOW_S}1c", id="v_1"),
+        pytest.param(
+            f"0x{SIGNATURE_R}{LOW_S}1B".upper().replace("0X", "0x"),
+            f"0x{SIGNATURE_R}{LOW_S}1b",
+            id="uppercase_hex",
+        ),
+    ],
+)
+def test_canonical_signature_returns_low_s_and_v_27_or_28_in_lowercase_hex(
+    signature: str,
+    canonical: str,
+) -> None:
+    assert canonical_signature(signature) == canonical
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [
+        pytest.param(f"0x{SIGNATURE_R}{HIGH_S}1b", id="high_s"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}25", id="eip155_v_37"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}02", id="v_2"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}", id="no_v"),
+        pytest.param(f"{SIGNATURE_R}{LOW_S}1b", id="missing_0x_prefix"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}1b\n", id="trailing_newline"),
+    ],
+)
+def test_canonical_signature_refuses_a_malformed_or_non_canonical_signature(
+    signature: str,
+) -> None:
+    with pytest.raises(ValueError, match="signature is not valid"):
+        canonical_signature(signature)
 
 
 def test_parse_siwe_message_rejects_an_address_with_a_mistyped_checksum() -> None:

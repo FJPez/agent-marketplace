@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from eth_keys.constants import SECPK1_N
 from eth_utils import is_checksum_address, is_checksum_formatted_address, to_checksum_address
 from jwt import InvalidTokenError
 
@@ -78,6 +79,27 @@ def checksum_address(value: str) -> str:
         msg = "address has an invalid EIP-55 checksum"
         raise ValueError(msg)
     return to_checksum_address(value)
+
+
+def canonical_signature(value: str) -> str:
+    """Return a 65-byte secp256k1 signature in its one canonical form.
+
+    The value must match `EVM_SIGNATURE_PATTERN` and have a low s, at most half the
+    curve order: its high-s twin, with v flipped, recovers the same signer. v must be
+    27 or 28, or 0 or 1 as some hardware wallets return it, which becomes 27 or 28; a
+    larger (EIP-155 style) v would imply a chain id. The result is lowercase hex, so
+    one signature has one stored form.
+    """
+    if not re.fullmatch(EVM_SIGNATURE_PATTERN, value):
+        msg = "signature is not valid"
+        raise ValueError(msg)
+    raw = bytes.fromhex(value.removeprefix("0x"))
+    s = int.from_bytes(raw[32:64])
+    v = raw[64] + 27 if raw[64] in (0, 1) else raw[64]
+    if s > SECPK1_N // 2 or v not in (27, 28):
+        msg = "signature is not valid"
+        raise ValueError(msg)
+    return "0x" + (raw[:64] + bytes([v])).hex()
 
 
 def create_jwt(

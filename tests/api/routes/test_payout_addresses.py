@@ -10,6 +10,8 @@ from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_acc
 
 CHALLENGE_PATH = "/v1/provider/payout-address/challenge"
 PAYOUT_ADDRESS_PATH = "/v1/provider/payout-address"
+# The shape of a canonical signature (a low s, v 27), though no key made it.
+SIGNATURE = "0x" + "ab" * 32 + "3c" * 32 + "1b"
 
 
 async def test_a_payout_address_is_proven_through_the_api_and_held(
@@ -54,7 +56,7 @@ async def test_a_payout_address_is_proven_through_the_api_and_held(
     ("method", "path", "json"),
     [
         ("POST", CHALLENGE_PATH, {"address": "0x" + "11" * 20, "network": "eip155:84532"}),
-        ("POST", PAYOUT_ADDRESS_PATH, {"signature": "0x" + "ab" * 65}),
+        ("POST", PAYOUT_ADDRESS_PATH, {"signature": SIGNATURE}),
         ("GET", PAYOUT_ADDRESS_PATH, None),
     ],
     ids=["challenge", "prove", "read"],
@@ -127,7 +129,7 @@ async def test_a_signature_by_another_key_is_an_invalid_input_problem(
     [
         (
             "POST",
-            {"signature": "0x" + "ab" * 65},
+            {"signature": SIGNATURE},
             409,
             "no payout address challenge is pending; request one first",
         ),

@@ -38,7 +38,7 @@ class PayoutAddressChallengeResponse(BaseModel):
 class PayoutAddressProofRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={"examples": [{"signature": "0x" + "ab" * 65}]},
+        json_schema_extra={"examples": [{"signature": "0x" + "ab" * 32 + "3c" * 32 + "1b"}]},
     )
 
     signature: Annotated[str, StringConstraints(pattern=EVM_SIGNATURE_PATTERN)]

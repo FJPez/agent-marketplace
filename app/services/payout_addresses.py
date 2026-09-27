@@ -9,7 +9,6 @@ network can pass for it. Every proof is kept, and the latest one on a network de
 where payouts go, once its hold has ended.
 """
 
-import re
 from datetime import UTC, datetime, timedelta
 
 from eth_account import Account
@@ -22,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
-from app.core.security import EVM_SIGNATURE_PATTERN, checksum_address, generate_nonce
+from app.core.security import canonical_signature, checksum_address, generate_nonce
 from app.db.models import PayoutAddress, PayoutAddressChallenge
 
 
@@ -111,8 +110,10 @@ async def prove_payout_address(
     It takes over at once from any earlier one, and payouts are held until it becomes
     effective. The challenge is consumed, so the same proof cannot be recorded twice.
     """
-    if not re.fullmatch(EVM_SIGNATURE_PATTERN, signature):
-        raise InvalidInputError("signature is not valid")
+    try:
+        canonical = canonical_signature(signature)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
     challenge = await session.scalar(
         select(PayoutAddressChallenge)
         .where(PayoutAddressChallenge.account_id == account_id)
@@ -123,14 +124,13 @@ async def prove_payout_address(
     now = datetime.now(UTC)
     if challenge.expires_at <= now:
         raise InvalidStateError("the payout address challenge has expired; request a new one")
-    # A well-formed signature can still carry an invalid v (ValueError) or an r or s
-    # that recovers no key (BadSignature).
+    # A canonical signature can still carry an r or s that recovers no key.
     try:
         signer = Account.recover_message(
             encode_typed_data(full_message=proof_typed_data(challenge)),
-            signature=signature,
+            signature=canonical,
         )
-    except (BadSignature, ValueError) as exc:
+    except BadSignature as exc:
         raise InvalidInputError("signature is not valid") from exc
     if signer != challenge.address:
         raise InvalidInputError(
@@ -142,7 +142,7 @@ async def prove_payout_address(
         network=challenge.network,
         address=challenge.address,
         nonce=challenge.nonce,
-        signature=signature,
+        signature=canonical,
         verified_at=now,
         effective_at=now + timedelta(seconds=settings.payout_address_hold_seconds),
     )
