@@ -17,6 +17,7 @@ from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
 from app.db.models import ProviderUpstream, Service, ServiceEndpoint, ServiceRevision
+from app.integrations.providers.dns import IpAddress
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointResponse,
@@ -1262,6 +1263,46 @@ async def test_upsert_upstream_rejects_a_host_resolving_to_a_private_address(
         persisted = await session.get(ProviderUpstream, endpoint_id)
 
     assert persisted is None
+
+
+async def test_upsert_upstream_resolves_the_host_with_no_transaction_open(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    service_id = await create_service_record(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="service",
+        lifecycle=ServiceLifecycle.DRAFT,
+    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
+    in_transaction_during_lookups: list[bool] = []
+
+    async with db_session_factory() as session:
+
+        class _WatchingResolver(FakeResolver):
+            async def resolve_addresses(self, host: str) -> list[IpAddress]:
+                in_transaction_during_lookups.append(session.in_transaction())
+                return await super().resolve_addresses(host)
+
+        await upsert_upstream(
+            session=session,
+            resolver=_WatchingResolver(dns_resolver.addresses),
+            account_id=account_id,
+            endpoint_id=endpoint_id,
+            request=EndpointUpstreamRequest(
+                base_url=HttpUrl(f"https://{TEST_UPSTREAM_HOST}"),
+                path="/translate",
+                http_method="POST",
+            ),
+        )
+
+    async with db_session_factory() as session:
+        persisted = await session.get(ProviderUpstream, endpoint_id)
+
+    assert in_transaction_during_lookups == [False]
+    assert persisted is not None
 
 
 async def test_upsert_upstream_validates_input_before_resolving_endpoint(
