@@ -204,7 +204,7 @@ async def replace_provider_service_tags(
             "description": (
                 "`conflict`: the service's upstreams changed while publishing; publish "
                 "again. `invalid_state`: the service is not a draft (it is already "
-                "active, suspended or delisted), or moderation suspended it."
+                "active), or moderation suspended it."
             ),
         },
         422: {"description": "The service configuration is not publishable."},

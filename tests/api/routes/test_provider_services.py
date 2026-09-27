@@ -992,54 +992,6 @@ async def test_provider_service_routes_hide_cross_owner_service_access(
 
 
 @pytest.mark.asyncio
-async def test_suspended_service_mutations_return_conflict(
-    async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="suspended-service",
-        lifecycle=ServiceLifecycle.SUSPENDED,
-    )
-    endpoint_id = await _seed_endpoint(
-        db_session_factory,
-        service_id=service_id,
-    )
-
-    service_response = await async_client.patch(
-        f"/v1/provider/services/{service_id}",
-        headers=_auth_headers(account_id),
-        json={"summary": "Updated"},
-    )
-    tag_response = await async_client.post(
-        f"/v1/provider/services/{service_id}/tags",
-        headers=_auth_headers(account_id),
-        json={"tags": ["updated"]},
-    )
-    endpoint_response = await async_client.patch(
-        f"/v1/provider/endpoints/{endpoint_id}",
-        headers=_auth_headers(account_id),
-        json={"summary": "Updated"},
-    )
-    upstream_response = await async_client.put(
-        f"/v1/provider/endpoints/{endpoint_id}/upstream",
-        headers=_auth_headers(account_id),
-        json={
-            "base_url": TEST_UPSTREAM_BASE_URL,
-            "path": "/translate",
-            "http_method": "POST",
-        },
-    )
-
-    assert service_response.status_code == 409
-    assert tag_response.status_code == 409
-    assert endpoint_response.status_code == 409
-    assert upstream_response.status_code == 409
-
-
-@pytest.mark.asyncio
 async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],

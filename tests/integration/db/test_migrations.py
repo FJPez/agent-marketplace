@@ -182,7 +182,7 @@ async def _insert_upstream(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
         )
 
 
-async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
+async def _seed_service(db_engine: AsyncEngine, *, slug: str, lifecycle: str = "draft") -> int:
     async with db_engine.begin() as connection:
         account_id = (
             await connection.execute(
@@ -205,12 +205,12 @@ async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
                         :slug,
                         'Migration Check Service',
                         'Migration check summary',
-                        'draft'
+                        :lifecycle
                     )
                     RETURNING id
                     """
                 ),
-                {"provider_account_id": account_id, "slug": slug},
+                {"provider_account_id": account_id, "slug": slug, "lifecycle": lifecycle},
             )
         ).scalar_one()
 
@@ -403,6 +403,16 @@ def test_head_migration_requires_a_previous_signing_secret_and_its_expiry_togeth
                 previous_expires=previous_expires,
             ),
         )
+
+
+@pytest.mark.parametrize("lifecycle", ["suspended", "delisted"])
+def test_head_migration_rejects_the_retired_lifecycle_values(
+    clean_database: None,
+    db_engine: AsyncEngine,
+    lifecycle: str,
+) -> None:
+    with pytest.raises(DBAPIError):
+        asyncio.run(_seed_service(db_engine, slug="retired-lifecycle", lifecycle=lifecycle))
 
 
 def test_head_migration_rejects_non_object_service_revision_snapshot(

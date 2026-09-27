@@ -293,17 +293,12 @@ async def _ensure_endpoint_update_allowed(
     service: Service,
     impact: UpdateImpact,
 ) -> None:
-    if service.lifecycle is ServiceLifecycle.DRAFT:
+    if service.lifecycle is ServiceLifecycle.DRAFT or impact is not UpdateImpact.MATERIAL:
         return
-    if service.lifecycle is ServiceLifecycle.ACTIVE:
-        if impact is not UpdateImpact.MATERIAL:
-            return
-        try:
-            await moderation.ensure_service_publishable(session=session, service_id=service.id)
-        except ServiceUnavailableError as exc:
-            raise InvalidStateError(f"service is {exc.state.value}") from exc
-        return
-    raise InvalidStateError("service is not mutable outside draft")
+    try:
+        await moderation.ensure_service_publishable(session=session, service_id=service.id)
+    except ServiceUnavailableError as exc:
+        raise InvalidStateError(f"service is {exc.state.value}") from exc
 
 
 def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
