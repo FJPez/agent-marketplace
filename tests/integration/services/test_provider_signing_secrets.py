@@ -330,6 +330,79 @@ async def test_a_rotation_retried_with_its_idempotency_key_returns_the_same_secr
     assert await _load(db_session_factory, account_id) == [second, first]
 
 
+async def _age_the_current_secret(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    account_id: int,
+    *,
+    by: timedelta,
+) -> None:
+    async with db_session_factory.begin() as session:
+        await session.execute(
+            update(ProviderSigningSecret)
+            .where(ProviderSigningSecret.account_id == account_id)
+            .values(issued_at=ProviderSigningSecret.issued_at - by),
+        )
+
+
+async def test_a_rotation_retried_just_inside_the_replay_window_returns_the_same_secret(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    await _create(db_session_factory, account_id)
+    second = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+    await _age_the_current_secret(
+        db_session_factory,
+        account_id,
+        by=timedelta(minutes=provider_signing_secrets.ROTATION_REPLAY_MINUTES - 1),
+    )
+    aged = await _stored(db_session_factory, account_id)
+
+    retried = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+
+    assert retried == second
+    assert (await _stored(db_session_factory, account_id)).issued_at == aged.issued_at
+
+
+async def test_a_rotation_retried_after_the_replay_window_is_a_conflict_and_does_not_rotate(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    first = await _create(db_session_factory, account_id)
+    second = await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+    await _age_the_current_secret(
+        db_session_factory,
+        account_id,
+        by=timedelta(minutes=provider_signing_secrets.ROTATION_REPLAY_MINUTES + 1),
+    )
+    aged = await _stored(db_session_factory, account_id)
+
+    with pytest.raises(
+        ConflictError,
+        match=(
+            "the rotation made with this Idempotency-Key is more than 15 minutes old, so "
+            "its secret is no longer returned; check GET /v1/provider/signing-secret and "
+            "rotate with a new Idempotency-Key if a new secret is still needed"
+        ),
+    ):
+        await _rotate(db_session_factory, account_id, idempotency_key="rotation-1")
+
+    after = await _stored(db_session_factory, account_id)
+    assert (
+        after.ciphertext,
+        after.issued_at,
+        after.previous_ciphertext,
+        after.previous_expires_at,
+        after.rotation_idempotency_key_hash,
+    ) == (
+        aged.ciphertext,
+        aged.issued_at,
+        aged.previous_ciphertext,
+        aged.previous_expires_at,
+        aged.rotation_idempotency_key_hash,
+    )
+    assert await _load(db_session_factory, account_id) == [second, first]
+
+
 async def test_a_rotation_with_another_idempotency_key_rotates(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

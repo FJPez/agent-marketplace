@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column("previous_ciphertext", sa.Text(), nullable=True),
         sa.Column("previous_expires_at", sa.DateTime(timezone=True), nullable=True),
         # The SHA-256 of the Idempotency-Key of the rotation that issued the current
-        # secret, so a retried rotation returns that secret instead of rotating again.
+        # secret, so a prompt retry returns that secret instead of rotating again.
         sa.Column("rotation_idempotency_key_hash", sa.String(length=64), nullable=True),
         sa.CheckConstraint(
             "(previous_ciphertext IS NULL) = (previous_expires_at IS NULL)",

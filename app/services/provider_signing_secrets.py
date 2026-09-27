@@ -22,6 +22,10 @@ from app.db.models import ProviderSigningSecret
 
 logger = get_logger(__name__)
 
+# A lost rotate response is retried within minutes; replaying longer would let a leaked
+# Idempotency-Key read the deployed secret.
+ROTATION_REPLAY_MINUTES = 15
+
 
 async def create_signing_secret(
     *,
@@ -55,7 +59,8 @@ async def rotate_signing_secret(
 
     A previous secret still in its grace window is dropped: at most two secrets sign.
     A retry sent with the `idempotency_key` of the rotation that issued the current
-    secret returns that secret instead, so a lost response does not rotate twice.
+    secret returns that secret instead, so a lost response does not rotate twice; after
+    `ROTATION_REPLAY_MINUTES` the retry is refused and rotates nothing either.
     """
     cipher = _cipher(settings)
     stored = await session.scalar(
@@ -66,15 +71,23 @@ async def rotate_signing_secret(
     if stored is None:
         raise NotFoundError("the account has no signing secret; create one first")
 
+    now = datetime.now(UTC)
     key_hash = None if idempotency_key is None else sha256(idempotency_key.encode()).hexdigest()
     if key_hash is not None and key_hash == stored.rotation_idempotency_key_hash:
+        if now - stored.issued_at > timedelta(minutes=ROTATION_REPLAY_MINUTES):
+            # Rotating here would end the grace of the secret the provider deployed.
+            raise ConflictError(
+                "the rotation made with this Idempotency-Key is more than "
+                f"{ROTATION_REPLAY_MINUTES} minutes old, so its secret is no longer "
+                "returned; check GET /v1/provider/signing-secret and rotate with a new "
+                "Idempotency-Key if a new secret is still needed",
+            )
         secret = _decrypt(cipher, stored.ciphertext)
         # Nothing changed; the commit only releases the row lock.
         await session.commit()
         return stored, secret
 
     secret, ciphertext = _issue(cipher)
-    now = datetime.now(UTC)
     stored.previous_ciphertext = stored.ciphertext
     stored.previous_expires_at = now + timedelta(seconds=settings.provider_secret_grace_seconds)
     stored.ciphertext = ciphertext

@@ -205,10 +205,13 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   decrypts; see [Signing Secret Encryption Keys](#signing-secret-encryption-keys).
   A rotated-out secret keeps signing beside its replacement for
   `APP_PROVIDER_SECRET_GRACE_SECONDS` (default 86400, one day).
-- If a rotate response is lost, retry with the same `Idempotency-Key`: while the
-  secret that rotation issued is still current, the retry returns it instead of
-  rotating again, which would end the grace of the secret the provider has deployed.
-  Use a fresh random key, such as a UUID, for each rotation.
+- If a rotate response is lost, retry with the same `Idempotency-Key` within 15
+  minutes: the retry returns the secret that rotation issued instead of rotating
+  again, which would end the grace of the secret the provider has deployed. After 15
+  minutes the same key is refused with 409 and rotates nothing, so the key cannot
+  read the deployed secret later; check `GET /v1/provider/signing-secret` and rotate
+  with a new key if a new secret is still needed. Use a fresh random key, such as a
+  UUID, for each rotation.
 
 ## Signing Secret Encryption Keys
 

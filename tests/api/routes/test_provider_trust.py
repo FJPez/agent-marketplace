@@ -1,8 +1,13 @@
+from datetime import timedelta
+
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import create_provider_account_record
 from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_account_id
+
+from app.db.models import ProviderSigningSecret
 
 SIGNING_SECRET_PATH = "/v1/provider/signing-secret"
 ROTATE_PATH = "/v1/provider/signing-secret/rotate"
@@ -88,6 +93,32 @@ async def test_a_rotation_retried_with_its_idempotency_key_returns_the_same_secr
     assert retried.status_code == 200
     assert retried.headers["cache-control"] == "no-store"
     assert retried.json() == rotated.json()
+
+
+async def test_a_rotation_retried_after_the_replay_window_is_a_conflict_problem(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_provider_account_record(db_session_factory)
+    headers = auth_headers_for_account_id(account_id)
+    await async_client.post(SIGNING_SECRET_PATH, headers=headers)
+    keyed = {**headers, "Idempotency-Key": "8a1f7c52-rotation"}
+    await async_client.post(ROTATE_PATH, headers=keyed)
+    async with db_session_factory.begin() as session:
+        await session.execute(
+            update(ProviderSigningSecret)
+            .where(ProviderSigningSecret.account_id == account_id)
+            .values(issued_at=ProviderSigningSecret.issued_at - timedelta(minutes=16)),
+        )
+    before = await async_client.get(SIGNING_SECRET_PATH, headers=headers)
+
+    retried = await async_client.post(ROTATE_PATH, headers=keyed)
+
+    assert retried.status_code == 409
+    assert retried.json()["type"] == "/problems/conflict"
+    assert "GET /v1/provider/signing-secret" in retried.json()["detail"]
+    assert "secret" not in set(retried.json())
+    assert (await async_client.get(SIGNING_SECRET_PATH, headers=headers)).json() == before.json()
 
 
 @pytest.mark.parametrize("idempotency_key", ["", "k" * 256], ids=["empty", "too_long"])

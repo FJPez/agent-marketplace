@@ -38,6 +38,6 @@ class ProviderSigningSecret(Base):
     previous_ciphertext: Mapped[str | None] = mapped_column(Text)
     previous_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The SHA-256 of the Idempotency-Key sent with the rotation that issued the current
-    # secret: a retry with that key returns the current secret instead of rotating
-    # again. Null after the create and after a rotation sent without a key.
+    # secret: a retry with that key soon after returns the current secret instead of
+    # rotating again. Null after the create and after a rotation sent without a key.
     rotation_idempotency_key_hash: Mapped[str | None] = mapped_column(String(64))

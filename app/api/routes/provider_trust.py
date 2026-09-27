@@ -17,9 +17,9 @@ router = APIRouter(prefix="/provider", tags=["provider-trust"])
 
 _SIGNING_SECRET_ABOUT = (
     "The marketplace signs every request it sends to the provider's upstreams with the "
-    "provider's signing secret, so the provider can verify it came from the marketplace. "
-    "The secret is shown once, in this response; store it at once."
+    "provider's signing secret, so the provider can verify it came from the marketplace."
 )
+_REPLAY_MINUTES = provider_signing_secrets.ROTATION_REPLAY_MINUTES
 
 _RotationIdempotencyKey = Annotated[
     str | None,
@@ -28,8 +28,10 @@ _RotationIdempotencyKey = Annotated[
         min_length=1,
         max_length=255,
         description=(
-            "A fresh random value, such as a UUID, for each rotation. Retrying with the "
-            "same key returns the secret that rotation issued instead of rotating again."
+            "A fresh random value, such as a UUID, for each rotation. A retry with the "
+            f"same key within {_REPLAY_MINUTES} minutes returns the secret that rotation "
+            "issued instead of rotating again; after that it is refused with 409 and "
+            "rotates nothing."
         ),
     ),
 ]
@@ -57,7 +59,9 @@ def _issued(
     response_model=IssuedSigningSecretResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create the provider's signing secret",
-    description=_SIGNING_SECRET_ABOUT,
+    description=(
+        f"{_SIGNING_SECRET_ABOUT} The secret is shown once, in this response; store it at once."
+    ),
     responses={
         201: {"description": "Signing secret created; the response carries it once."},
         403: {"description": "A non-JWT bearer token was supplied."},
@@ -83,17 +87,31 @@ async def create_signing_secret(
     response_model=IssuedSigningSecretResponse,
     summary="Rotate the provider's signing secret",
     description=(
-        f"{_SIGNING_SECRET_ABOUT} The replaced secret keeps signing beside the new one "
+        f"{_SIGNING_SECRET_ABOUT} The new secret is shown once, in this response, and "
+        f"again to a retry with the same `Idempotency-Key` within {_REPLAY_MINUTES} "
+        "minutes; store it at once. The replaced secret keeps signing beside the new one "
         "until `previous_expires_at`, so deploy the new secret before then; rotating "
-        "again ends that grace period at once. If a rotate response is lost, retry with "
-        "the same `Idempotency-Key`: while the secret that rotation issued is still "
-        "current, the retry returns it instead of rotating again."
+        "again ends that grace period at once. So if a rotate response is lost, retry "
+        f"with the same `Idempotency-Key` within {_REPLAY_MINUTES} minutes rather than "
+        "rotating again. A later retry with that key is refused with 409 and rotates "
+        "nothing: check `GET /v1/provider/signing-secret`, and rotate with a new key if "
+        "a new secret is still needed."
     ),
     responses={
-        200: {"description": "Signing secret rotated; the response carries the new one once."},
+        200: {
+            "description": (
+                "Signing secret rotated, or a retry with the same Idempotency-Key within "
+                f"{_REPLAY_MINUTES} minutes answered; the response carries the secret."
+            ),
+        },
         403: {"description": "A non-JWT bearer token was supplied."},
         404: {"description": "The account has no signing secret yet."},
-        409: {"description": "No signing secret can be issued."},
+        409: {
+            "description": (
+                "No signing secret can be issued, or the rotation made with this "
+                f"Idempotency-Key is more than {_REPLAY_MINUTES} minutes old."
+            ),
+        },
     },
 )
 async def rotate_signing_secret(
