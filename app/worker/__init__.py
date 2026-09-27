@@ -78,4 +78,9 @@ async def run_worker(settings: Settings, loops: Sequence[Loop]) -> None:
 def main() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
-    asyncio.run(run_worker(settings, LOOPS))
+    try:
+        asyncio.run(run_worker(settings, LOOPS))
+    except Exception:
+        # Logged as a redacted JSON line, where the interpreter would print a plain traceback.
+        logger.exception("worker crashed")
+        raise SystemExit(1) from None

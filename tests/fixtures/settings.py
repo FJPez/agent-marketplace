@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
+# coredis rejects this URL as soon as a client is built from it (the port is out of range).
+MALFORMED_REDIS_URL = "redis://localhost:99999/0"
 
 
 class SettingsEnvFactory(Protocol):

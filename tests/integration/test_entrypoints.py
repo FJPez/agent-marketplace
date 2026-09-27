@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from tests.fixtures.settings import MALFORMED_REDIS_URL
 from tests.integration.failing_app import PAYMENT_SECRET
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -118,6 +119,29 @@ def test_worker_process_stops_cleanly_on_a_signal(signum: signal.Signals) -> Non
         "worker stopping",
         "worker stopped",
     ]
+
+
+def test_worker_process_logs_a_crash_as_a_json_line() -> None:
+    # Logging is configured by then: opening the resources fails on the Redis URL.
+    result = subprocess.run(
+        [sys.executable, "-m", "app.worker"],
+        cwd=PROJECT_ROOT,
+        env=os.environ | {"APP_LOG_LEVEL": "INFO", "APP_REDIS_URL": MALFORMED_REDIS_URL},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    (crash,) = _json_lines(result.stdout)
+    assert (crash["logger"], crash["level"], crash["message"]) == (
+        "app.worker",
+        "ERROR",
+        "worker crashed",
+    )
+    assert "ValueError: Port out of range" in str(crash["exception"])
+    assert result.stderr == ""
 
 
 def test_worker_imports_neither_the_api_nor_fastapi() -> None:
