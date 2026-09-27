@@ -352,8 +352,8 @@ async def put_provider_endpoint_upstream(
         EndpointUpstreamRequest,
         Body(
             openapi_examples={
-                "mock-upstream": {
-                    "summary": "Point the endpoint at the local mock upstream",
+                "https-upstream": {
+                    "summary": "Point the endpoint at its public https upstream",
                     "value": {
                         "base_url": "https://provider.example.com",
                         "path": "/free-ping",

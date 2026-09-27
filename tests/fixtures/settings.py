@@ -38,8 +38,8 @@ UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 def build_service_settings() -> Settings:
     """Settings for calling services directly.
 
-    In the test env, whatever APP_ENV says; the treasury is passed explicitly rather
-    than left to the session-wide APP_TREASURY_ADDRESS.
+    The env is always test, whatever APP_ENV says, and the treasury is passed explicitly
+    rather than left to the session-wide APP_TREASURY_ADDRESS.
     """
     return Settings(
         env=AppEnv.TEST,
