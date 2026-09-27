@@ -202,6 +202,13 @@ async def test_a_url_normalised_by_http_url_is_returned_unchanged(url: str) -> N
         "2001:3::1",
         "2001:4:112::1",
         "2001:30::1",
+        # The returned 6bone test network, and the deprecated 6to4 relay anycast block
+        # (RFC 7526) directly and in IPv6 forms; Python counts both as global.
+        "3ffe::1",
+        "3ffe:ffff::1",
+        "192.88.99.1",
+        "::ffff:192.88.99.1",
+        "64:ff9b::c058:6301",
     ],
 )
 async def test_a_host_with_any_non_public_address_is_rejected(address: str) -> None:

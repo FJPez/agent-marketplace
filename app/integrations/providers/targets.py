@@ -8,7 +8,7 @@ and a DNS answer that changes after validation cannot redirect the request.
 
 import re
 from dataclasses import dataclass
-from ipaddress import IPv4Address, IPv6Address, IPv6Network
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
 from urllib.parse import urlsplit
 
 from app.core.logging import get_logger
@@ -22,14 +22,19 @@ _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 _DNS_NAME = re.compile(rf"(?:{_LABEL}\.)+(?=[a-z]){_LABEL}")
 _DNS_NAME_MAX_LENGTH = 253
 _NOT_A_DNS_NAME = "upstream host must be a DNS name such as api.example.com, not an IP address"
+# The deprecated 6to4 relay anycast block (RFC 7526): no upstream is served from it,
+# but Python's `is_global` still counts it as global.
+_SIX_TO_FOUR_RELAY_ANYCAST = IPv4Network("192.88.99.0/24")
 # NAT64's well-known prefix carries an IPv4 address in its low 32 bits.
 _NAT64 = IPv6Network("64:ff9b::/96")
 # Any other IPv6 address must be global unicast outside the special-purpose blocks
 # allocated inside it: an allowlist, because Python's `is_global` is True for every
-# reserved or unallocated address missing from the special-purpose registry.
+# reserved or unallocated address missing from the special-purpose registry. 3ffe::/16
+# is the 6bone test network, returned in 2006 and unrouted since.
 _GLOBAL_UNICAST = IPv6Network("2000::/3")
 _SPECIAL_IN_GLOBAL_UNICAST = tuple(
-    IPv6Network(block) for block in ("2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20")
+    IPv6Network(block)
+    for block in ("2001::/23", "2001:db8::/32", "2002::/16", "3ffe::/16", "3fff::/20")
 )
 
 
@@ -125,7 +130,11 @@ def _unmapped(address: IpAddress) -> IpAddress:
 def _is_public(address: IpAddress) -> bool:
     if isinstance(address, IPv4Address):
         # Multicast addresses count as global, but no upstream is one.
-        return address.is_global and not address.is_multicast
+        return (
+            address.is_global
+            and not address.is_multicast
+            and address not in _SIX_TO_FOUR_RELAY_ANYCAST
+        )
     if address in _NAT64:
         return _is_public(IPv4Address(address.packed[-4:]))
     if address not in _GLOBAL_UNICAST or any(
