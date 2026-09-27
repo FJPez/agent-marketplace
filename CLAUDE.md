@@ -100,6 +100,19 @@ Layer responsibilities:
 - Queries must eagerly load everything a response needs. Pydantic conversion
   must not trigger async lazy-loading after the service returns.
 
+### Constraints and indexes
+
+- Name every new constraint and index explicitly: `name=` on
+  `UniqueConstraint`, `ForeignKey` and `CheckConstraint`, the first argument of
+  `Index`. Do not use `unique=True` or `index=True` for new columns. The
+  metadata naming convention `uq_%(table_name)s_%(column_0_name)s` uses only
+  the first column, so two unique keys on one table that start with the same
+  column would get the same name. (The convention still prefixes a check
+  constraint's name with `ck_<table>_`.)
+- When a table has more than one unique key, a service that turns a unique
+  violation into a domain error checks which key was violated with
+  `unique_violation_constraint(exc)` from `app/db/errors.py`.
+
 ## Primary goals
 
 - Keep branch scope narrow and easy to review.
