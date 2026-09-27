@@ -44,7 +44,10 @@ class HostProof(StrEnum):
 
 # What the provider does about each failed proof, in the order the summary lists them.
 _REMEDIES = {
-    HostProof.NOT_PUBLIC: "point the host only at public addresses.",
+    # Also a failed address lookup, which the address check does not tell apart.
+    HostProof.NOT_PUBLIC: (
+        "make the host resolve, and only to public addresses; if its DNS lookup failed, retry."
+    ),
     HostProof.RECORD_MISSING: (
         f"publish a TXT record at {RECORD_LABEL}.<host> with the value from "
         "POST /v1/provider/domain-verification. DNS changes can take minutes to be "

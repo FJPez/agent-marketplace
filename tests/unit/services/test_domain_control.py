@@ -25,7 +25,10 @@ RECORD_MISSING_REMEDY = (
     "POST /v1/provider/domain-verification. DNS changes can take minutes to be visible, "
     "longer after a failed check because resolvers cache the miss (negative caching)."
 )
-NOT_PUBLIC_REMEDY = "not_public: point the host only at public addresses."
+NOT_PUBLIC_REMEDY = (
+    "not_public: make the host resolve, and only to public addresses; if its DNS lookup "
+    "failed, retry."
+)
 LOOKUP_FAILED_REMEDY = "lookup_failed: the DNS lookup failed; retry."
 
 
@@ -124,6 +127,11 @@ async def test_a_host_without_a_public_address_and_the_providers_record_fails(
             FakeResolver({TEST_UPSTREAM_HOST: ["10.0.0.1"]}),
             NOT_PUBLIC_REMEDY,
             id="not_public",
+        ),
+        pytest.param(
+            FakeResolver(failing_names={TEST_UPSTREAM_HOST}),
+            NOT_PUBLIC_REMEDY,
+            id="address_lookup_failed",
         ),
         pytest.param(
             FakeResolver(
