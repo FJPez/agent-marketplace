@@ -84,6 +84,9 @@ async def resolver() -> AsyncIterator[DnsPythonResolver]:
                 ("TXT", '"agent-marketplace-" "verification=token"'),
                 ("TXT", '"v=spf1 -all"'),
             ],
+            # "caf" and the byte 0xE9 (233), Latin-1 for "e" with an acute accent: not
+            # UTF-8.
+            "_agent-marketplace.latin1.provider.example.": [("TXT", '"caf\\233"')],
         },
         failing=frozenset({"broken.provider.example.", "half-broken.provider.example. A"}),
         silent=frozenset({"slow.provider.example.", "half-broken.provider.example. AAAA"}),
@@ -139,6 +142,14 @@ async def test_resolve_txt_joins_the_strings_of_each_record(
     values = await resolver.resolve_txt("_agent-marketplace.dual.provider.example")
 
     assert sorted(values) == ["agent-marketplace-verification=token", "v=spf1 -all"]
+
+
+async def test_resolve_txt_replaces_bytes_that_are_not_utf_8(
+    resolver: DnsPythonResolver,
+) -> None:
+    values = await resolver.resolve_txt("_agent-marketplace.latin1.provider.example")
+
+    assert values == ["caf\ufffd"]
 
 
 async def test_resolve_txt_of_a_missing_name_is_no_records(resolver: DnsPythonResolver) -> None:

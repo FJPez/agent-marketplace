@@ -50,6 +50,8 @@ class DnsPythonResolver:
             # A TXT record is one or more strings of at most 255 bytes, read as one value.
             b"".join(record.strings).decode("utf-8", errors="replace")
             for record in await self._query(name, "TXT")
+            # A TXT answer holds only TXT rdata; the check narrows `Rdata` for the type
+            # checker, which cannot see `.strings` on it.
             if isinstance(record, TXTBase)
         ]
 
