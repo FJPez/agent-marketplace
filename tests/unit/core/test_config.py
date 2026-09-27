@@ -3,8 +3,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
-from tests.fixtures.settings import TEST_JWT_SECRET_KEY, TEST_TREASURY_ADDRESS
+from tests.fixtures.settings import (
+    TEST_JWT_SECRET_KEY,
+    TEST_PROVIDER_SECRET_ENCRYPTION_KEY,
+    TEST_TREASURY_ADDRESS,
+)
 
 from app.core.config import AppEnv, Settings, get_settings
 
@@ -38,6 +43,7 @@ def _valid_deployment_env(
         "APP_SIWE_DOMAIN": "marketplace.example.com",
         "APP_REDIS_URL": "redis://cache.internal:6379/0",
         "APP_TREASURY_ADDRESS": TEST_TREASURY_ADDRESS,
+        "APP_PROVIDER_SECRET_ENCRYPTION_KEYS": TEST_PROVIDER_SECRET_ENCRYPTION_KEY,
     }
     env.update(overrides or {})
     return env
@@ -71,7 +77,9 @@ def test_settings_normalize_plain_postgres_database_urls(
 def test_settings_use_default_values(
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
-    settings_env_factory(env={"APP_TREASURY_ADDRESS": None})
+    settings_env_factory(
+        env={"APP_TREASURY_ADDRESS": None, "APP_PROVIDER_SECRET_ENCRYPTION_KEYS": None},
+    )
 
     settings = Settings()
 
@@ -95,6 +103,8 @@ def test_settings_use_default_values(
     assert settings.min_price_amount == 10_000
     assert settings.platform_fee_bps == 1_000
     assert settings.payment_max_timeout_seconds == 120
+    assert settings.provider_secret_encryption_keys == ()
+    assert settings.provider_secret_grace_seconds == 86_400
 
 
 @pytest.mark.parametrize(("log_level", "expected"), [("info", "INFO"), ("Warning", "WARNING")])
@@ -254,6 +264,11 @@ def test_settings_use_app_env_file_instead_of_default_dotenv(
             "treasury_address must be set",
             id="missing-treasury-address",
         ),
+        pytest.param(
+            {"APP_PROVIDER_SECRET_ENCRYPTION_KEYS": None},
+            "provider_secret_encryption_keys must be set",
+            id="missing-provider-secret-encryption-keys",
+        ),
     ],
 )
 def test_settings_validate_deployment_environment_requirements(
@@ -331,6 +346,7 @@ def test_settings_ignore_retired_payment_variables(
             {"APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS": "0"},
             id="worker-shutdown-timeout-zero",
         ),
+        pytest.param({"APP_PROVIDER_SECRET_GRACE_SECONDS": "0"}, id="secret-grace-zero"),
     ],
 )
 def test_settings_reject_non_positive_timeout_and_touch_interval_settings(
@@ -438,3 +454,44 @@ def test_settings_accept_payment_terms_at_their_upper_bounds(
 
     assert settings.payment_network == network
     assert settings.payment_max_timeout_seconds == 3600
+
+
+def test_settings_read_comma_separated_provider_secret_encryption_keys_in_order(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    new_key = Fernet.generate_key().decode()
+    settings_env_factory(
+        env={
+            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS": (
+                f" {new_key} , {TEST_PROVIDER_SECRET_ENCRYPTION_KEY} "
+            ),
+        },
+    )
+
+    settings = Settings()
+
+    assert [key.get_secret_value() for key in settings.provider_secret_encryption_keys] == [
+        new_key,
+        TEST_PROVIDER_SECRET_ENCRYPTION_KEY,
+    ]
+    assert new_key not in repr(settings)
+
+
+@pytest.mark.parametrize("malformed_key", ["c2hvcnQ=", "abc"], ids=["wrong_length", "bad_padding"])
+def test_settings_reject_a_malformed_provider_secret_encryption_key_without_echoing_it(
+    malformed_key: str,
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(
+        env={
+            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS": (
+                f"{TEST_PROVIDER_SECRET_ENCRYPTION_KEY},{malformed_key}"
+            ),
+        },
+    )
+
+    with pytest.raises(ValidationError, match="must be Fernet keys") as error:
+        Settings()
+
+    assert malformed_key not in str(error.value)
+    assert TEST_PROVIDER_SECRET_ENCRYPTION_KEY not in str(error.value)

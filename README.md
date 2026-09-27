@@ -169,7 +169,8 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `X-Request-ID` is kept only if it is 1 to 128 letters, digits, `.`, `_`, `:`
   or `-`; otherwise the API generates one.
 - Staging and production require a non-local `APP_DATABASE_URL`,
-  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN` and `APP_TREASURY_ADDRESS`.
+  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN`, `APP_TREASURY_ADDRESS` and
+  `APP_PROVIDER_SECRET_ENCRYPTION_KEYS`.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base
@@ -180,3 +181,11 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   least `APP_MIN_PRICE_AMOUNT` (default 10000, 0.01 USDC). Changing a setting
   affects only price versions created afterwards; a provider moves a listing onto
   the current terms by resending its price, which creates a new version.
+- Provider signing secrets are stored encrypted with the Fernet keys in
+  `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (comma-separated; no default; without one no
+  signing secret can be issued). The first key encrypts and every listed key
+  decrypts. To replace a key, list the new one first and keep the old one until no
+  stored secret uses it: a secret stays encrypted with the key it was issued under
+  until its provider rotates it and `APP_PROVIDER_SECRET_GRACE_SECONDS` (default
+  86400, one day, the time a rotated-out secret keeps signing beside its
+  replacement) has passed.

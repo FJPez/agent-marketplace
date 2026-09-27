@@ -14,6 +14,7 @@ DOMAIN_TABLES = {
     "api_keys",
     "listing_prices",
     "moderation_actions",
+    "provider_signing_secrets",
     "provider_upstreams",
     "service_endpoints",
     "service_health_checks",
@@ -246,6 +247,27 @@ async def _insert_current_listing_price(db_engine: AsyncEngine, *, endpoint_id: 
         )
 
 
+async def _insert_signing_secret(
+    db_engine: AsyncEngine,
+    *,
+    service_id: int,
+    previous_ciphertext: str | None = None,
+) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO provider_signing_secrets (
+                    account_id, ciphertext, issued_at, previous_ciphertext
+                )
+                SELECT provider_account_id, 'ciphertext', now(), :previous_ciphertext
+                FROM services WHERE id = :service_id
+                """
+            ),
+            {"service_id": service_id, "previous_ciphertext": previous_ciphertext},
+        )
+
+
 async def _insert_health_check(db_engine: AsyncEngine, *, service_id: int) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
@@ -358,6 +380,21 @@ def test_head_migration_rejects_non_object_provider_upstream_config(
         )
 
 
+def test_head_migration_requires_a_previous_signing_secret_to_expire(
+    clean_database: None,
+    db_engine: AsyncEngine,
+) -> None:
+    service_id = asyncio.run(_seed_service(db_engine, slug="previous-secret-check"))
+
+    with pytest.raises(
+        IntegrityError,
+        match="ck_provider_signing_secrets_previous_secret_complete",
+    ):
+        asyncio.run(
+            _insert_signing_secret(db_engine, service_id=service_id, previous_ciphertext="old"),
+        )
+
+
 def test_head_migration_rejects_non_object_service_revision_snapshot(
     clean_database: None,
     db_engine: AsyncEngine,
@@ -418,6 +455,7 @@ def test_migrations_downgrade_cleanly_with_catalogue_rows(
         _insert_endpoint(engine, service_id=service_id, key="priced", access_mode="paid")
     )
     asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
+    asyncio.run(_insert_signing_secret(engine, service_id=service_id))
 
     try:
         command.downgrade(config, "base")
