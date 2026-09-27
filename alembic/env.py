@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from alembic import context
 from sqlalchemy import pool
@@ -10,26 +10,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 import app.db.models  # noqa: F401
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.types import AtomicAmount
+from app.db.types import render_alembic_item
 
 if TYPE_CHECKING:
-    from alembic.autogenerate.api import AutogenContext
     from sqlalchemy.engine import Connection
 
 config = context.config
-
-
-def render_item(type_: str, obj: object, autogen_context: AutogenContext) -> str | Literal[False]:
-    """Render an AtomicAmount column as plain sa.Numeric.
-
-    Autogenerate otherwise renders it as `app.db.types.AtomicAmount(...)` with
-    no import for `app`, so the generated migration fails at import time and
-    ties migrations to application code.
-    """
-    if type_ == "type" and isinstance(obj, AtomicAmount):
-        return "sa.Numeric(precision=78, scale=0)"
-    return False
-
 
 # Programmatic callers that manage logging themselves opt out: re-running fileConfig
 # would restore the INFO-level alembic logger the test session turns down.
@@ -50,7 +36,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_item=render_item,
+        render_item=render_alembic_item,
     )
 
     with context.begin_transaction():
@@ -59,7 +45,9 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     context.configure(
-        connection=connection, target_metadata=target_metadata, render_item=render_item
+        connection=connection,
+        target_metadata=target_metadata,
+        render_item=render_alembic_item,
     )
 
     with context.begin_transaction():

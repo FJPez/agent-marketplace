@@ -1,6 +1,7 @@
 """Column types shared by the ORM models."""
 
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy import Numeric
 from sqlalchemy.engine import Dialect
@@ -34,3 +35,10 @@ class AtomicAmount(TypeDecorator[int]):
             msg = f"atomic amount must be integral, got {value}"
             raise ValueError(msg)
         return int(value)
+
+
+def render_alembic_item(type_: str, obj: object, autogen_context: object) -> str | Literal[False]:
+    """Keep generated migrations free of app imports by rendering AtomicAmount as sa.Numeric."""
+    if type_ == "type" and isinstance(obj, AtomicAmount):
+        return "sa.Numeric(precision=78, scale=0)"
+    return False
