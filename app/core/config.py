@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     db_max_overflow: int = 10
     db_pool_timeout: float = 30.0
     db_pool_recycle: int = 1800
+    db_statement_timeout_ms: int = 30000
+    db_lock_timeout_ms: int = 5000
+    db_idle_in_transaction_session_timeout_ms: int = 60000
+    db_application_name: str = "agent-marketplace-api"
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
     demo_upstream_base_url: str = "https://provider.example.com"
