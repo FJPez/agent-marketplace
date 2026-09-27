@@ -43,8 +43,25 @@ def test_checksum_address_returns_the_eip55_form(address: str) -> None:
     [
         (MISTYPED_ADDRESS, "address has an invalid EIP-55 checksum"),
         ("0x1234", "invalid EVM address"),
+        (CHECKSUMMED_ADDRESS[2:], "invalid EVM address"),
+        ("0X" + CHECKSUMMED_ADDRESS[2:], "invalid EVM address"),
+        (" " + CHECKSUMMED_ADDRESS, "invalid EVM address"),
+        (CHECKSUMMED_ADDRESS + " ", "invalid EVM address"),
+        (CHECKSUMMED_ADDRESS[:-1], "invalid EVM address"),
+        (CHECKSUMMED_ADDRESS + "e", "invalid EVM address"),
+        (CHECKSUMMED_ADDRESS[:-1] + "g", "invalid EVM address"),
     ],
-    ids=["mistyped_checksum", "not_an_address"],
+    ids=[
+        "mistyped_checksum",
+        "not_an_address",
+        "missing_0x_prefix",
+        "uppercase_0x_prefix",
+        "leading_space",
+        "trailing_space",
+        "too_short",
+        "too_long",
+        "non_hex_character",
+    ],
 )
 def test_checksum_address_rejects_what_is_not_a_well_typed_address(
     address: str,
