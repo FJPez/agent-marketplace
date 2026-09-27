@@ -71,11 +71,25 @@ Tag = Annotated[
     AfterValidator(normalize_tag),
 ]
 SchemaObject = JsonObject
+
+
+def _check_request_schema_if_sent(schema: JsonObject | None) -> JsonObject | None:
+    # An explicit null is refused by the update model's own null check.
+    return None if schema is None else check_request_schema(schema)
+
+
 # The nesting is checked before the value is validated as a JSON object, the rest after.
 RequestSchema = Annotated[
     JsonObject,
     BeforeValidator(check_request_schema_depth),
     AfterValidator(check_request_schema),
+]
+# An update's request_schema may be omitted. Its checks wrap the whole optional type, so
+# an invalid schema is one error at `request_schema`, not one per member of the union.
+OptionalRequestSchema = Annotated[
+    JsonObject | SkipJsonSchema[None],
+    BeforeValidator(check_request_schema_depth),
+    AfterValidator(_check_request_schema_if_sent),
 ]
 ResponseContentType = Annotated[str, AfterValidator(normalize_media_type)]
 TimeoutSeconds = Annotated[StrictInt, Field(gt=0, le=ENDPOINT_TIMEOUT_MAX_SECONDS)]
@@ -240,7 +254,7 @@ class EndpointUpdateRequest(BaseModel):
     summary: Summary | None = None
     description: Description | None = None
     access_mode: AccessMode | SkipJsonSchema[None] = None
-    request_schema: RequestSchema | SkipJsonSchema[None] = None
+    request_schema: OptionalRequestSchema = None
     response_schema: SchemaObject | SkipJsonSchema[None] = None
     response_content_type: ResponseContentType | SkipJsonSchema[None] = None
     timeout_seconds: TimeoutSeconds | SkipJsonSchema[None] = None

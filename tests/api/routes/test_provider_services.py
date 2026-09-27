@@ -224,6 +224,38 @@ async def test_create_endpoint_with_a_remote_ref_request_schema_is_an_invalid_in
 
 
 @pytest.mark.asyncio
+async def test_patch_endpoint_with_an_invalid_request_schema_is_one_invalid_input_error(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="schema-service",
+    )
+    endpoint_id = await _seed_endpoint(db_session_factory, service_id=service_id)
+
+    response = await async_client.patch(
+        f"/v1/provider/endpoints/{endpoint_id}",
+        headers=_auth_headers(account_id),
+        json={"request_schema": {"properties": {"text": {"pattern": "((a{50}){50}){50}x"}}}},
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["type"] == "/problems/invalid_input"
+    assert [(error["loc"], error["msg"]) for error in body["errors"]] == [
+        (
+            ["body", "request_schema"],
+            'Value error, request_schema pattern "((a{50}){50}){50}x" is not supported: '
+            "patterns must avoid lookaround and backreferences and compile within 10240 bytes "
+            "at /properties/text/pattern",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_provider_service_routes_require_bearer_token(
     async_client: AsyncClient,
 ) -> None:
