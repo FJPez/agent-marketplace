@@ -101,14 +101,10 @@ async def resolve_public_addresses(host: str, *, resolver: DnsResolver) -> tuple
         # The provider only learns the host did not resolve; operators see why.
         logger.warning("upstream host lookup failed", extra={"host": host}, exc_info=exc)
         raise _not_public(host) from exc
-    if not addresses or not all(_is_public(address) for address in addresses):
+    pinned = tuple(dict.fromkeys(_unmapped(address) for address in addresses))
+    if not pinned or not all(_is_public(address) for address in pinned):
         raise _not_public(host)
-    return tuple(
-        dict.fromkeys(
-            (address.ipv4_mapped or address) if isinstance(address, IPv6Address) else address
-            for address in addresses
-        ),
-    )
+    return pinned
 
 
 def _not_public(host: str) -> UnsafeUpstreamTargetError:
@@ -119,19 +115,24 @@ def _not_public(host: str) -> UnsafeUpstreamTargetError:
     )
 
 
+def _unmapped(address: IpAddress) -> IpAddress:
+    """An IPv4-mapped IPv6 address as the IPv4 address it maps; any other unchanged."""
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
 def _is_public(address: IpAddress) -> bool:
     if isinstance(address, IPv4Address):
         # Multicast addresses count as global, but no upstream is one.
         return address.is_global and not address.is_multicast
-    if address.ipv4_mapped is not None:
-        return _is_public(address.ipv4_mapped)
     if address in _NAT64:
-        return _is_public(IPv4Address(int(address) & 0xFFFF_FFFF))
+        return _is_public(IPv4Address(address.packed[-4:]))
     if address not in _GLOBAL_UNICAST or any(
         address in block for block in _SPECIAL_IN_GLOBAL_UNICAST
     ):
         return False
     # An ISATAP interface id (RFC 5214) carries an IPv4 address in its low 32 bits.
     if (int(address) >> 32) & 0xFCFF_FFFF == 0x0000_5EFE:
-        return _is_public(IPv4Address(int(address) & 0xFFFF_FFFF))
+        return _is_public(IPv4Address(address.packed[-4:]))
     return True
