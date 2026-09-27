@@ -46,12 +46,9 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
         db_engine = create_engine(settings)
         stack.push_async_callback(db_engine.dispose)
 
-        redis_client = (
-            coredis.Redis.from_url(settings.redis_url, decode_responses=True)
-            if settings.redis_url
-            else None
-        )
-        if redis_client is not None:
+        redis_client = None
+        if settings.redis_url:
+            redis_client = coredis.Redis.from_url(settings.redis_url, decode_responses=True)
             stack.callback(redis_client.connection_pool.disconnect)
 
         yield Resources(

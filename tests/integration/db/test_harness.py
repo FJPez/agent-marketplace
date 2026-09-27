@@ -5,7 +5,6 @@ import subprocess
 import sys
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
-from pathlib import Path
 
 import pytest
 from sqlalchemy import text
@@ -13,14 +12,12 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 from sqlalchemy.pool import NullPool
+from tests.fixtures.settings import PROJECT_ROOT, UNREACHABLE_DATABASE_URL
 from tests.integration.db.support import (
     admin_connection,
     drop_stale_test_databases,
     get_database_name,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-UNREACHABLE_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@127.0.0.1:1/agent_marketplace"
 
 CreateDatabase = Callable[[str], Awaitable[str]]
 

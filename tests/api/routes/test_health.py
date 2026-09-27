@@ -1,12 +1,10 @@
 import pytest
 from fastapi.testclient import TestClient
+from tests.fixtures.settings import UNREACHABLE_DATABASE_URL, UNREACHABLE_REDIS_URL
 
 import app.main as main_module
 from app.core.config import Settings
 from app.main import create_app
-
-UNREACHABLE_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@127.0.0.1:1/agent_marketplace"
-UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 
 
 def test_root_route_returns_service_entrypoint(client: TestClient) -> None:

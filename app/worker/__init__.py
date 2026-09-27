@@ -32,7 +32,7 @@ class Loop:
     interval_seconds: float
 
 
-# The recovery and reconciliation loops are registered here from phase 5 on.
+# Register worker loops here; the recovery loops arrive with the paid invocation lifecycle.
 LOOPS: tuple[Loop, ...] = ()
 
 

@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator, Generator
-from pathlib import Path
 
 # These must be set before any import of app.main, which creates the
 # FastAPI application (and validates Settings) at module level.
@@ -45,8 +44,6 @@ pytest_plugins = (
     "tests.fixtures.settings",
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 
 @pytest.fixture(autouse=True)
 def restore_logging_configuration() -> Generator[None, None, None]:
@@ -67,6 +64,11 @@ def restore_logging_configuration() -> Generator[None, None, None]:
 
 
 def _build_alembic_config(database_url: str) -> Config:
+    # Imported here, not at the top: pytest imports the `pytest_plugins` modules after
+    # this module's body has run, and warns that a plugin module imported before then
+    # cannot have its asserts rewritten.
+    from tests.fixtures.settings import PROJECT_ROOT
+
     config = Config(PROJECT_ROOT / "alembic.ini")
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)

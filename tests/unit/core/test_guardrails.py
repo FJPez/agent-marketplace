@@ -24,21 +24,18 @@ API_RATE_LIMIT = "1/minute"
 
 class _FakeRateLimitsBackend:
     def __init__(self, *, allow: bool, seconds_until_reset: int = 30) -> None:
-        self.allow = allow
+        self._allow = allow
         self._seconds_until_reset = seconds_until_reset
         self.hits: list[tuple[str, str, str]] = []
         self.reset_lookups: list[tuple[str, str, str]] = []
 
     async def hit(self, limit_value: str, *, key: str, scope: str) -> bool:
         self.hits.append((limit_value, key, scope))
-        return self.allow
+        return self._allow
 
     async def seconds_until_reset(self, limit_value: str, *, key: str, scope: str) -> int:
         self.reset_lookups.append((limit_value, key, scope))
         return self._seconds_until_reset
-
-    async def reset(self) -> None:
-        self.hits.clear()
 
 
 @pytest.fixture

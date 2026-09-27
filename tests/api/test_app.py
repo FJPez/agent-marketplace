@@ -21,7 +21,7 @@ def test_create_app_opens_resources_for_its_lifespan() -> None:
         assert resources.settings.env is AppEnv.DEV
         assert resources.settings.title == "Agent Marketplace Backend"
         assert resources.settings.debug is False
-        assert resources.db_session_factory.kw["bind"] is resources.db_engine
+        assert resources.db_session_factory().bind is resources.db_engine
         assert resources.redis_client is None
         assert isinstance(resources.rate_limits_backend, MemoryRateLimitsBackend)
 

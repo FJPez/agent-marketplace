@@ -7,14 +7,12 @@ import signal
 import socket
 import subprocess
 import sys
-from pathlib import Path
 
 import httpx
 import pytest
-from tests.fixtures.settings import MALFORMED_REDIS_URL
+from tests.fixtures.settings import MALFORMED_REDIS_URL, PROJECT_ROOT
 from tests.integration.failing_app import PAYMENT_SECRET
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REQUEST_ID = "entrypoint-test"
 
 
