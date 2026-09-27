@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from app.core.config import Settings
 
 _EVM_ADDRESS_SHAPE = re.compile(r"0x[0-9a-fA-F]{40}")
+# A 65-byte secp256k1 signature (r, s, v) in hex, as eth_signTypedData_v4 returns it.
+EVM_SIGNATURE_PATTERN = r"^0x[0-9a-fA-F]{130}$"
 
 
 class AuthTokenType(StrEnum):

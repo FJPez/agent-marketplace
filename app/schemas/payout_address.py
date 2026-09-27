@@ -4,6 +4,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
 from app.core.json_types import JsonObject
+from app.core.security import EVM_SIGNATURE_PATTERN
 from app.db.models import PayoutAddress
 from app.schemas.common import Timestamp, WalletAddress
 
@@ -40,8 +41,7 @@ class PayoutAddressProofRequest(BaseModel):
         json_schema_extra={"examples": [{"signature": "0x" + "ab" * 65}]},
     )
 
-    # 65 bytes, hex: r, s and v.
-    signature: Annotated[str, StringConstraints(pattern=r"^0x[0-9a-fA-F]{130}$")]
+    signature: Annotated[str, StringConstraints(pattern=EVM_SIGNATURE_PATTERN)]
 
 
 class PayoutAddressResponse(BaseModel):

@@ -22,11 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.core.json_types import JsonObject
-from app.core.security import checksum_address, generate_nonce
+from app.core.security import EVM_SIGNATURE_PATTERN, checksum_address, generate_nonce
 from app.db.models import PayoutAddress, PayoutAddressChallenge
-
-# A 65-byte signature (r, s, v) in hex, as eth_signTypedData_v4 returns it.
-_SIGNATURE_SHAPE = re.compile(r"0x[0-9a-fA-F]{130}")
 
 
 async def request_payout_address_challenge(
@@ -114,7 +111,7 @@ async def prove_payout_address(
     It takes over at once from any earlier one, and payouts are held until it becomes
     effective. The challenge is consumed, so the same proof cannot be recorded twice.
     """
-    if not _SIGNATURE_SHAPE.fullmatch(signature):
+    if not re.fullmatch(EVM_SIGNATURE_PATTERN, signature):
         raise InvalidInputError("signature is not valid")
     challenge = await session.scalar(
         select(PayoutAddressChallenge)
