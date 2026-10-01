@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
@@ -19,13 +20,19 @@ if TYPE_CHECKING:
 
 
 class _FakeRateLimitsBackend:
-    def __init__(self, *, allow: bool) -> None:
+    def __init__(self, *, allow: bool, seconds_until_reset: int = 30) -> None:
         self.allow = allow
+        self._seconds_until_reset = seconds_until_reset
         self.hits: list[tuple[str, str, str]] = []
+        self.reset_lookups: list[tuple[str, str, str]] = []
 
     async def hit(self, limit_value: str, *, key: str, scope: str) -> bool:
         self.hits.append((limit_value, key, scope))
         return self.allow
+
+    async def seconds_until_reset(self, limit_value: str, *, key: str, scope: str) -> int:
+        self.reset_lookups.append((limit_value, key, scope))
+        return self._seconds_until_reset
 
     async def reset(self) -> None:
         self.hits.clear()
@@ -66,14 +73,21 @@ def _build_authenticated_request(*, authorization: bytes) -> Request:
 
 
 async def test_protect_rejects_v1_requests_over_the_global_limit() -> None:
-    backend = _FakeRateLimitsBackend(allow=False)
+    backend = _FakeRateLimitsBackend(allow=False, seconds_until_reset=42)
     guardrails = ApiGuardrails(api_rate_limit="1/minute", rate_limits_backend=backend)
 
     response = await guardrails.protect(_build_request(), _respond_ok)
 
     assert response.status_code == 429
-    assert response.body == b'{"detail":"rate limit exceeded"}'
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers["retry-after"] == "42"
+    assert json.loads(bytes(response.body)) == {
+        "type": "/problems/rate_limited",
+        "status": 429,
+        "detail": "rate limit exceeded",
+    }
     assert backend.hits == [("1/minute", "client:127.0.0.1", "global")]
+    assert backend.reset_lookups == backend.hits
 
 
 async def test_protect_passes_v1_requests_under_the_global_limit() -> None:

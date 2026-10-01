@@ -127,4 +127,9 @@ def test_health_ready_returns_service_unavailable_without_db_session_factory() -
         response = client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "database unavailable"}
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": "/problems/unavailable",
+        "status": 503,
+        "detail": "database unavailable",
+    }

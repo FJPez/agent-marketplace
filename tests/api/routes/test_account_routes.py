@@ -101,7 +101,12 @@ async def test_patch_account_me_rejects_explicit_null_display_name(
     )
 
     assert response.status_code == 422
-    assert response.json()["detail"] == "display_name cannot be null"
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": "/problems/invalid_input",
+        "status": 422,
+        "detail": "display_name cannot be null",
+    }
 
 
 @pytest.mark.asyncio
@@ -180,7 +185,11 @@ async def test_wallet_change_routes_require_jwt_and_complete_rotation(
     )
 
     assert stale_token_response.status_code == 401
-    assert stale_token_response.json() == {"detail": "access token is no longer valid"}
+    assert stale_token_response.json() == {
+        "type": "/problems/unauthenticated",
+        "status": 401,
+        "detail": "access token is no longer valid",
+    }
 
 
 @pytest.mark.asyncio
@@ -197,10 +206,10 @@ async def test_wallet_change_initiate_rejects_invalid_wallet_address(
 
     assert response.status_code == 422
     body = response.json()
-    assert isinstance(body["detail"], list)
+    assert isinstance(body["errors"], list)
     matching_errors = [
         error
-        for error in body["detail"]
+        for error in body["errors"]
         if error["loc"][-1] == "wallet_address" and "invalid wallet address" in error["msg"]
     ]
     assert matching_errors

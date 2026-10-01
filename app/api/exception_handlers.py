@@ -1,48 +1,59 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import math
 
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.exception_handlers import http_exception_handler
+from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 
-from app.core.errors import (
-    ConflictError,
-    InvalidInputError,
-    InvalidStateError,
-    NotFoundError,
-    PermissionDeniedError,
-    UnauthenticatedError,
-    UpstreamError,
-    UpstreamTimeoutError,
-)
-from app.services.health_service import ReadinessCheckError
+# Starlette's base class, so the handler also covers FastAPI's subclass and the router's 404/405.
+from starlette.exceptions import HTTPException
 
-Handler = Callable[[Request, Exception], Awaitable[Response]]
-
-# Starlette resolves handlers by walking the raised exception's MRO, so the
-# app.core.errors base classes act as fallbacks for any unregistered subclass.
-STATUS_CODES: dict[type[Exception], int] = {
-    UnauthenticatedError: status.HTTP_401_UNAUTHORIZED,
-    PermissionDeniedError: status.HTTP_403_FORBIDDEN,
-    NotFoundError: status.HTTP_404_NOT_FOUND,
-    ConflictError: status.HTTP_409_CONFLICT,
-    InvalidStateError: status.HTTP_409_CONFLICT,
-    InvalidInputError: status.HTTP_422_UNPROCESSABLE_CONTENT,
-    UpstreamError: status.HTTP_502_BAD_GATEWAY,
-    ReadinessCheckError: status.HTTP_503_SERVICE_UNAVAILABLE,
-    UpstreamTimeoutError: status.HTTP_504_GATEWAY_TIMEOUT,
-}
+from app.core.errors import ApplicationError
+from app.core.problems import ProblemResponse
 
 
-def _build_handler(status_code: int) -> Handler:
-    async def handle_exception(request: Request, exc: Exception) -> Response:
-        http_exc = HTTPException(status_code=status_code, detail=str(exc))
-        return await http_exception_handler(request, http_exc)
+async def handle_application_error(request: Request, exc: ApplicationError) -> Response:
+    return ProblemResponse(
+        status_code=exc.status_code,
+        problem_type=exc.problem_type,
+        detail=str(exc),
+        headers=exc.headers,
+        extensions=exc.extensions,
+    )
 
-    return handle_exception
+
+async def handle_http_exception(request: Request, exc: HTTPException) -> Response:
+    return ProblemResponse(
+        status_code=exc.status_code,
+        detail=exc.detail,
+        headers=exc.headers,
+    )
+
+
+async def handle_request_validation_error(
+    request: Request,
+    exc: RequestValidationError,
+) -> Response:
+    # A malformed body can leave raw bytes or NaN in an error's `input`.
+    errors = jsonable_encoder(
+        exc.errors(),
+        custom_encoder={
+            bytes: lambda value: value.decode("utf-8", "replace"),
+            float: lambda value: value if math.isfinite(value) else str(value),
+        },
+    )
+    return ProblemResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        problem_type="invalid_input",
+        detail="request validation failed; see errors",
+        extensions={"errors": errors},
+    )
 
 
 def install_exception_handlers(app: FastAPI) -> None:
-    for exc_type, status_code in STATUS_CODES.items():
-        app.add_exception_handler(exc_type, _build_handler(status_code))
+    # `add_exception_handler` only type-checks handlers that take a bare `Exception`.
+    app.exception_handler(ApplicationError)(handle_application_error)
+    app.exception_handler(HTTPException)(handle_http_exception)
+    app.exception_handler(RequestValidationError)(handle_request_validation_error)

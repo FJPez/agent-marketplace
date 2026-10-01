@@ -1,6 +1,5 @@
 import pytest
-from fastapi import Request, status
-from fastapi.responses import JSONResponse, Response
+from fastapi import status
 from fastapi.testclient import TestClient
 from tests.unit.api.conftest import AppFactory
 
@@ -11,67 +10,64 @@ from app.core.errors import (
     NotFoundError,
     PermissionDeniedError,
     UnauthenticatedError,
+    UnavailableError,
+    UpstreamError,
+    UpstreamTimeoutError,
 )
-
-
-class ChildNotFoundError(NotFoundError):
-    pass
 
 
 @pytest.mark.parametrize(
-    ("exc", "expected_status", "expected_detail"),
+    ("exc", "expected_status", "expected_type"),
     [
-        (NotFoundError("thing missing"), status.HTTP_404_NOT_FOUND, "thing missing"),
-        (
-            UnauthenticatedError("credentials required"),
-            status.HTTP_401_UNAUTHORIZED,
-            "credentials required",
-        ),
-        (ConflictError("conflicting change"), status.HTTP_409_CONFLICT, "conflicting change"),
-        (InvalidInputError("bad input"), status.HTTP_422_UNPROCESSABLE_CONTENT, "bad input"),
-        (PermissionDeniedError("not allowed"), status.HTTP_403_FORBIDDEN, "not allowed"),
-        (InvalidStateError("wrong state"), status.HTTP_409_CONFLICT, "wrong state"),
+        (NotFoundError("boom"), 404, "/problems/not_found"),
+        (UnauthenticatedError("boom"), 401, "/problems/unauthenticated"),
+        (ConflictError("boom"), 409, "/problems/conflict"),
+        (InvalidInputError("boom"), 422, "/problems/invalid_input"),
+        (PermissionDeniedError("boom"), 403, "/problems/permission_denied"),
+        (InvalidStateError("boom"), 409, "/problems/invalid_state"),
+        (UpstreamError("boom"), 502, "/problems/upstream_error"),
+        (UpstreamTimeoutError("boom"), 504, "/problems/upstream_timeout"),
+        (UnavailableError("boom"), 503, "/problems/unavailable"),
     ],
 )
-def test_base_taxonomy_exceptions_translate_to_http(
+def test_application_errors_render_their_status_and_type(
     handler_app_factory: AppFactory,
     exc: Exception,
     expected_status: int,
-    expected_detail: str,
+    expected_type: str,
 ) -> None:
     client = TestClient(handler_app_factory(exc))
 
     response = client.get("/boom")
 
     assert response.status_code == expected_status
-    assert response.json() == {"detail": expected_detail}
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": expected_type,
+        "status": expected_status,
+        "detail": "boom",
+    }
 
 
-def test_unregistered_subclass_falls_back_to_base_handler(
+def test_application_error_carries_problem_type_headers_and_extensions(
     handler_app_factory: AppFactory,
 ) -> None:
-    client = TestClient(handler_app_factory(ChildNotFoundError("child missing")))
+    exc = ConflictError(
+        "purchase is still in progress",
+        problem_type="in_progress",
+        headers={"Retry-After": "2"},
+        extensions={"invocation_id": 7},
+    )
+    client = TestClient(handler_app_factory(exc))
 
     response = client.get("/boom")
 
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json() == {"detail": "child missing"}
-
-
-def test_specific_registration_beats_base_fallback(
-    handler_app_factory: AppFactory,
-) -> None:
-    async def redacted_handler(request: Request, exc: Exception) -> Response:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": "redacted"},
-        )
-
-    app = handler_app_factory(ChildNotFoundError("child missing"))
-    app.add_exception_handler(ChildNotFoundError, redacted_handler)
-    client = TestClient(app)
-
-    response = client.get("/boom")
-
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json() == {"detail": "redacted"}
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers["retry-after"] == "2"
+    assert response.json() == {
+        "type": "/problems/in_progress",
+        "status": 409,
+        "detail": "purchase is still in progress",
+        "invocation_id": 7,
+    }

@@ -71,4 +71,5 @@ async def test_redis_global_rate_limit_is_shared_across_app_instances(
 
     assert first.status_code == 200
     assert second.status_code == 429
-    assert second.json() == {"detail": "rate limit exceeded"}
+    assert 55 <= int(second.headers["retry-after"]) <= 60
+    assert second.json()["type"] == "/problems/rate_limited"
