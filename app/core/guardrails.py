@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, Response, status
 
 from app.core.config import get_settings
 from app.core.errors import UnauthenticatedError
-from app.core.problems import problem_response
+from app.core.problems import ProblemResponse
 from app.core.rate_limits_backend import (
     RateLimitsBackend,
     build_client_rate_limit_key,
@@ -40,7 +40,7 @@ class ApiGuardrails:
             key=key,
             scope=_GLOBAL_SCOPE,
         )
-        return problem_response(
+        return ProblemResponse(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             problem_type="rate_limited",
             detail="rate limit exceeded",

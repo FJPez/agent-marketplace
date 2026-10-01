@@ -83,7 +83,6 @@ async def test_protect_rejects_v1_requests_over_the_global_limit() -> None:
     assert response.headers["retry-after"] == "42"
     assert json.loads(bytes(response.body)) == {
         "type": "/problems/rate_limited",
-        "title": "Rate limited",
         "status": 429,
         "detail": "rate limit exceeded",
     }

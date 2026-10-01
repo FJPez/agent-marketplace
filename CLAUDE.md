@@ -85,7 +85,7 @@ Layer responsibilities:
   problem.
 - Application exception handlers sit inside the middleware stack, so an
   application error raised in middleware becomes a 500. Middleware must build
-  and return `problem_response(...)` directly instead of raising.
+  and return `ProblemResponse(...)` directly instead of raising.
 - Use route-local `HTTPException` only for errors genuinely local to one HTTP
   operation.
 - Do not wrap every route in `try`/`except` and do not log the same exception
