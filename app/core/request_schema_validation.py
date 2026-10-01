@@ -2,9 +2,7 @@ from collections.abc import Mapping
 
 from jsonschema import ValidationError, validate
 
-
-class PayloadSchemaMismatchError(ValueError):
-    pass
+from app.core.errors import InvalidInputError
 
 
 def validate_request_payload(
@@ -15,4 +13,4 @@ def validate_request_payload(
     try:
         validate(instance=payload, schema=request_schema)
     except ValidationError as exc:
-        raise PayloadSchemaMismatchError("request payload does not match endpoint schema") from exc
+        raise InvalidInputError("request payload does not match endpoint schema") from exc

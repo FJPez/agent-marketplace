@@ -6,14 +6,15 @@ from coredis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.errors import UnavailableError
 from app.schemas.common import HealthResponse
 
 if TYPE_CHECKING:
     from app.core.resources import Resources
 
 
-class ReadinessCheckError(RuntimeError):
-    pass
+class ReadinessCheckError(UnavailableError):
+    default_problem_type = "not_ready"
 
 
 def get_health_response() -> HealthResponse:
