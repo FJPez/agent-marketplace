@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, Response, status
 
 from app.core.errors import UnauthenticatedError
 from app.core.lifespan import get_resources
-from app.core.problems import problem_response
+from app.core.problems import ProblemResponse
 from app.core.rate_limits_backend import build_client_rate_limit_key
 from app.core.resources import Resources
 from app.services.auth import resolve_actor
@@ -27,7 +27,7 @@ async def protect(request: Request, call_next: RequestHandler) -> Response:
     if await backend.hit(api_rate_limit, key=key, scope=_GLOBAL_SCOPE):
         return await call_next(request)
     retry_after = await backend.seconds_until_reset(api_rate_limit, key=key, scope=_GLOBAL_SCOPE)
-    return problem_response(
+    return ProblemResponse(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         problem_type="rate_limited",
         detail="rate limit exceeded",
