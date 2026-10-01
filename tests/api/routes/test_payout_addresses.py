@@ -137,7 +137,6 @@ async def test_a_signature_by_another_key_is_an_invalid_input_problem(
     assert response.status_code == 422
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": f"signature was not made by {wallet.address} over the pending challenge",
     }
@@ -222,7 +221,6 @@ async def test_an_expired_challenge_is_an_invalid_state_problem(
     assert response.status_code == 409
     assert response.json() == {
         "type": "/problems/invalid_state",
-        "title": "Invalid state",
         "status": 409,
         "detail": "the payout address challenge has expired; request a new one",
     }
