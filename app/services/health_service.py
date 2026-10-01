@@ -13,10 +13,6 @@ if TYPE_CHECKING:
     from app.core.lifespan import AppState
 
 
-class ReadinessCheckError(UnavailableError):
-    default_problem_type = "not_ready"
-
-
 def get_health_response() -> HealthResponse:
     return HealthResponse(status="ok")
 
@@ -24,21 +20,21 @@ def get_health_response() -> HealthResponse:
 async def get_readiness_response(app_state: AppState) -> HealthResponse:
     session_factory = app_state.db_session_factory
     if session_factory is None:
-        raise ReadinessCheckError("database unavailable")
+        raise UnavailableError("database unavailable")
 
     try:
         async with session_factory() as session:
             await session.execute(text("SELECT 1"))
     except SQLAlchemyError as exc:
-        raise ReadinessCheckError("database unavailable") from exc
+        raise UnavailableError("database unavailable") from exc
 
     if app_state.settings.redis_url is not None:
         redis_client = app_state.redis_client
         if redis_client is None:
-            raise ReadinessCheckError("redis unavailable")
+            raise UnavailableError("redis unavailable")
         try:
             await redis_client.ping()
         except RedisError as exc:
-            raise ReadinessCheckError("redis unavailable") from exc
+            raise UnavailableError("redis unavailable") from exc
 
     return HealthResponse(status="ok")
