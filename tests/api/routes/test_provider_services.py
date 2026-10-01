@@ -1462,7 +1462,6 @@ async def test_patch_endpoint_price_below_the_minimum_is_an_invalid_input_proble
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "price amount must be at least 10000 atomic units of the payment asset",
     }
