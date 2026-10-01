@@ -1,5 +1,3 @@
-from http import HTTPStatus
-
 import pytest
 from fastapi import FastAPI, HTTPException, status
 from fastapi.testclient import TestClient
@@ -66,7 +64,6 @@ def test_http_exceptions_render_about_blank_problems(
     assert expected_headers.items() <= response.headers.items()
     assert response.json() == {
         "type": "about:blank",
-        "title": HTTPStatus(expected_status).phrase,
         "status": expected_status,
         "detail": expected_detail,
     }
@@ -79,7 +76,6 @@ def test_request_validation_error_lists_errors_as_extension() -> None:
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "request validation failed; see errors",
         "errors": [

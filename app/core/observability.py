@@ -11,7 +11,7 @@ from app.core.logging import (
     reset_request_id,
     resolve_request_id,
 )
-from app.core.problems import problem_response
+from app.core.problems import ProblemResponse
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 logger = get_logger(__name__)
@@ -67,7 +67,7 @@ def install_observability(app: FastAPI) -> None:
             ),
         )
         # The exception text may hold internals, so it is logged above and never returned.
-        return problem_response(
+        return ProblemResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             problem_type="internal_error",
             detail="an unexpected error occurred",

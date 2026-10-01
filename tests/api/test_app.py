@@ -130,7 +130,6 @@ def test_health_ready_returns_service_unavailable_without_db_session_factory() -
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/not_ready",
-        "title": "Not ready",
         "status": 503,
         "detail": "database unavailable",
     }
