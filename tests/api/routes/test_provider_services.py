@@ -1306,7 +1306,6 @@ async def test_publish_service_without_domain_proof_is_an_invalid_input_problem(
     assert response.status_code == 422
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": (
             f"upstream hosts failed the domain-control check: {TEST_UPSTREAM_HOST} "
