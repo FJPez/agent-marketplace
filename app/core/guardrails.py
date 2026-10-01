@@ -8,16 +8,17 @@ from fastapi import FastAPI, Request, Response, status
 from app.core.config import get_settings
 from app.core.errors import UnauthenticatedError
 from app.core.problems import ProblemResponse
-from app.core.rate_limits_backend import (
-    RateLimitsBackend,
-    build_client_rate_limit_key,
-    get_rate_limits_backend,
-)
+from app.core.rate_limits_backend import RateLimitsBackend, get_rate_limits_backend
 from app.services.auth import resolve_actor
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 _V1_PATH_PREFIX = "/v1/"
 _GLOBAL_SCOPE = "global"
+
+
+def build_client_rate_limit_key(request: Request) -> str:
+    client_host = request.client.host if request.client is not None else "unknown"
+    return f"client:{client_host}"
 
 
 @dataclass(slots=True)

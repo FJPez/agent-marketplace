@@ -5,17 +5,11 @@ import time
 from functools import lru_cache
 from typing import Protocol
 
-from fastapi import Request
 from limits import RateLimitItem, parse
 from limits.aio.storage import MemoryStorage, RedisStorage, Storage
 from limits.aio.strategies import FixedWindowRateLimiter
 
 from app.core.config import Settings, get_settings
-
-
-def build_client_rate_limit_key(request: Request) -> str:
-    client_host = request.client.host if request.client is not None else "unknown"
-    return f"client:{client_host}"
 
 
 @lru_cache
