@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import FastAPI
 
 from app.api.exception_handlers import install_exception_handlers
@@ -6,14 +8,22 @@ from app.core.config import get_settings
 from app.core.guardrails import ApiGuardrails, install_guardrails
 from app.core.lifespan import create_lifespan, create_redis_client
 from app.core.observability import install_observability
+from app.core.problems import document_problem_responses
 from app.core.rate_limits_backend import create_rate_limits_backend
+
+
+class MarketplaceApi(FastAPI):
+    def openapi(self) -> dict[str, Any]:
+        if self.openapi_schema is None:
+            document_problem_responses(super().openapi())
+        return super().openapi()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
     redis_client = create_redis_client(settings)
     rate_limits_backend = create_rate_limits_backend(settings)
-    app = FastAPI(
+    app = MarketplaceApi(
         title=settings.title,
         debug=settings.debug,
         lifespan=create_lifespan(
