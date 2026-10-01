@@ -230,7 +230,6 @@ async def test_restore_clear_service_returns_409(
     assert response.status_code == 409
     assert response.json() == {
         "type": "/problems/invalid_state",
-        "title": "Invalid state",
         "status": 409,
         "detail": f"cannot restore service {service_id} from clear",
     }

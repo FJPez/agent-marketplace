@@ -11,11 +11,11 @@ from fastapi.responses import Response
 from starlette.exceptions import HTTPException
 
 from app.core.errors import ApplicationError
-from app.core.problems import problem_response
+from app.core.problems import ProblemResponse
 
 
 async def handle_application_error(request: Request, exc: ApplicationError) -> Response:
-    return problem_response(
+    return ProblemResponse(
         status_code=exc.status_code,
         problem_type=exc.problem_type,
         detail=str(exc),
@@ -25,7 +25,7 @@ async def handle_application_error(request: Request, exc: ApplicationError) -> R
 
 
 async def handle_http_exception(request: Request, exc: HTTPException) -> Response:
-    return problem_response(
+    return ProblemResponse(
         status_code=exc.status_code,
         detail=exc.detail,
         headers=exc.headers,
@@ -44,7 +44,7 @@ async def handle_request_validation_error(
             float: lambda value: value if math.isfinite(value) else str(value),
         },
     )
-    return problem_response(
+    return ProblemResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         problem_type="invalid_input",
         detail="request validation failed; see errors",
