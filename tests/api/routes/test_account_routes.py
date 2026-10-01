@@ -104,7 +104,6 @@ async def test_patch_account_me_rejects_explicit_null_display_name(
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "display_name cannot be null",
     }
@@ -188,7 +187,6 @@ async def test_wallet_change_routes_require_jwt_and_complete_rotation(
     assert stale_token_response.status_code == 401
     assert stale_token_response.json() == {
         "type": "/problems/unauthenticated",
-        "title": "Unauthenticated",
         "status": 401,
         "detail": "access token is no longer valid",
     }

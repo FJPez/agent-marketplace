@@ -49,7 +49,6 @@ async def test_creating_a_second_signing_secret_is_a_conflict_problem(
     assert response.status_code == 409
     assert response.json() == {
         "type": "/problems/conflict",
-        "title": "Conflict",
         "status": 409,
         "detail": "the account already has a signing secret; rotate it instead",
     }
