@@ -129,10 +129,12 @@ effect (no external call, no ledger posting) and do not retry.
 - Global FastAPI exception handlers translate application exceptions into HTTP
   responses. Services never import FastAPI HTTP types.
 - Every error response is `application/problem+json` (RFC 9457), rendered by
-  `app/core/problems.py`. `app/api/exception_handlers.py` maps each exception
-  class to a status and a default problem type; pass `problem_type=`,
-  `headers=` (for example `Retry-After`) or `extensions=` when raising to
-  describe a more specific problem.
+  `app/core/problems.py`. Each exception class declares its `status_code` and
+  `default_problem_type`; pass `problem_type=`, `headers=` (for example
+  `Retry-After`) or `extensions=` when raising to describe a more specific
+  problem.
+- The OpenAPI document describes every error response as the `Problem` model,
+  so a route's `responses=` only declares the status and its description.
 - Application exception handlers sit inside the middleware stack, so an
   application error raised in middleware becomes a 500. Middleware must build
   and return `problem_response(...)` directly instead of raising.
