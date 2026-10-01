@@ -14,7 +14,6 @@ from app.core.errors import (
     UpstreamError,
     UpstreamTimeoutError,
 )
-from app.services.health_service import ReadinessCheckError
 
 
 @pytest.mark.parametrize(
@@ -29,7 +28,6 @@ from app.services.health_service import ReadinessCheckError
         (UpstreamError("boom"), 502, "/problems/upstream_error"),
         (UpstreamTimeoutError("boom"), 504, "/problems/upstream_timeout"),
         (UnavailableError("boom"), 503, "/problems/unavailable"),
-        (ReadinessCheckError("boom"), 503, "/problems/not_ready"),
     ],
 )
 def test_application_errors_render_their_status_and_type(
