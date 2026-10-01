@@ -73,11 +73,7 @@ class _FixedWindowRateLimitsBackend:
         scope: str,
     ) -> int:
         window = await self._limiter.get_window_stats(_parse_limit(limit_value), scope, key)
-        # Rounded up and never below 1, so a window that expires between the rejected hit
-        # and this lookup still tells the client to wait instead of retrying at once.
-        # Memory reports the reset time exactly; Redis derives it from `TTL`, which has
-        # one-second precision, so the value returned here can be up to 0.5s early for
-        # the Redis backend. Not compensated for.
+        # Never below 1, so a window that expires during this lookup still asks for a wait.
         return max(1, math.ceil(window.reset_time - time.time()))
 
     async def reset(self) -> None:
