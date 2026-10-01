@@ -83,8 +83,6 @@ Layer responsibilities:
   `default_problem_type`; pass `problem_type=`, `headers=` (for example
   `Retry-After`) or `extensions=` when raising to describe a more specific
   problem.
-- The OpenAPI document describes every error response as the `Problem` model,
-  so a route's `responses=` only declares the status and its description.
 - Application exception handlers sit inside the middleware stack, so an
   application error raised in middleware becomes a 500. Middleware must build
   and return `problem_response(...)` directly instead of raising.
