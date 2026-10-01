@@ -68,7 +68,6 @@ def test_health_ready_route_returns_service_unavailable_when_a_dependency_is_unr
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/not_ready",
-        "title": "Not ready",
         "status": 503,
         "detail": detail,
     }

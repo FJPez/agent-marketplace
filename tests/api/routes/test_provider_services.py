@@ -194,7 +194,6 @@ async def test_provider_service_routes_require_bearer_token(
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/unauthenticated",
-        "title": "Unauthenticated",
         "status": 401,
         "detail": "Authorization header is required",
     }
@@ -755,7 +754,6 @@ async def test_put_endpoint_upstream_rejects_a_host_resolving_to_a_metadata_addr
     assert response.status_code == 422
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": f"upstream host {TEST_UPSTREAM_HOST} must resolve, and only to public addresses",
     }
@@ -880,7 +878,6 @@ async def test_provider_service_routes_hide_cross_owner_service_access(
     assert response.status_code == 404
     assert response.json() == {
         "type": "/problems/not_found",
-        "title": "Not found",
         "status": 404,
         "detail": "service not found",
     }
@@ -974,7 +971,6 @@ async def test_suspended_service_blocks_contract_affecting_endpoint_updates(
     assert timeout_response.status_code == 409
     assert timeout_response.json() == {
         "type": "/problems/invalid_state",
-        "title": "Invalid state",
         "status": 409,
         "detail": "service is suspended",
     }
@@ -1163,7 +1159,6 @@ async def test_patch_active_provider_endpoint_rejects_paid_transition_without_pr
     assert response.status_code == 422
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "active paid endpoints must define a price",
     }
@@ -1198,7 +1193,6 @@ async def test_publish_service_rejects_service_without_endpoints(
     assert response.status_code == 422
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "service must define at least one endpoint before publish",
     }
@@ -1233,7 +1227,6 @@ async def test_publish_service_rejects_paid_endpoint_without_pricing(
     assert response.status_code == 422
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "paid endpoint 'translate' must define a price before publish",
     }
@@ -1436,7 +1429,6 @@ async def test_publish_service_rejects_already_active_service(
     assert response.status_code == 409
     assert response.json() == {
         "type": "/problems/invalid_state",
-        "title": "Invalid state",
         "status": 409,
         "detail": "service is not publishable outside draft",
     }
@@ -1474,7 +1466,6 @@ async def test_publish_service_rejects_suspended_service(
     assert response.status_code == 409
     assert response.json() == {
         "type": "/problems/invalid_state",
-        "title": "Invalid state",
         "status": 409,
         "detail": "service is suspended",
     }
@@ -1546,7 +1537,6 @@ async def test_patch_endpoint_price_below_the_minimum_is_an_invalid_input_proble
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/invalid_input",
-        "title": "Invalid input",
         "status": 422,
         "detail": "price amount must be at least 10000 atomic units of the payment asset",
     }

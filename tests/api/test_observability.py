@@ -141,7 +141,6 @@ def test_failing_request_logs_exception_context(
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json() == {
         "type": "/problems/internal_error",
-        "title": "Internal error",
         "status": 500,
         "detail": "an unexpected error occurred",
     }
