@@ -3,21 +3,13 @@ from __future__ import annotations
 import math
 import time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
 from limits import RateLimitItem, parse
 from limits.aio.storage import MemoryStorage, RedisStorage, Storage
 from limits.aio.strategies import FixedWindowRateLimiter
 
 from app.core.config import Settings
-
-if TYPE_CHECKING:
-    from fastapi import Request
-
-
-def build_client_rate_limit_key(request: Request) -> str:
-    client_host = request.client.host if request.client is not None else "unknown"
-    return f"client:{client_host}"
 
 
 @lru_cache
@@ -41,17 +33,12 @@ class RateLimitsBackend(Protocol):
         key: str,
         scope: str,
     ) -> int:
-        """Whole seconds, at least 1, until the window for `key` resets (`Retry-After`).
-
-        Memory rounds the remaining time up. Redis derives it from `TTL`, which has
-        one-second precision (rounded to the nearest second), so the value it reports
-        can be up to 0.5s early; this is not compensated for.
-        """
+        """Whole seconds, at least 1, until the window for `key` resets (`Retry-After`)."""
 
     async def reset(self) -> None: ...
 
 
-class _FixedWindowRateLimitsBackend:
+class FixedWindowRateLimitsBackend:
     def __init__(self, storage: Storage) -> None:
         self._storage = storage
         self._limiter = FixedWindowRateLimiter(storage)
@@ -80,12 +67,12 @@ class _FixedWindowRateLimitsBackend:
         await self._storage.reset()
 
 
-class MemoryRateLimitsBackend(_FixedWindowRateLimitsBackend):
+class MemoryRateLimitsBackend(FixedWindowRateLimitsBackend):
     def __init__(self) -> None:
         super().__init__(MemoryStorage())
 
 
-class RedisRateLimitsBackend(_FixedWindowRateLimitsBackend):
+class RedisRateLimitsBackend(FixedWindowRateLimitsBackend):
     def __init__(self, redis_url: str, *, key_prefix: str = "agent-marketplace") -> None:
         super().__init__(
             RedisStorage(

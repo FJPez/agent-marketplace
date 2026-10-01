@@ -3,35 +3,9 @@ import importlib.util
 
 import pytest
 from pydantic import SecretStr
-from starlette.requests import Request
 
 from app.core.config import Settings
-from app.core.rate_limits_backend import MemoryRateLimitsBackend, build_client_rate_limit_key
-
-
-def _build_request(
-    *,
-    path: str = "/v1/services",
-    authorization: str | None = None,
-    client_host: str = "127.0.0.1",
-) -> Request:
-    headers: list[tuple[bytes, bytes]] = []
-    if authorization is not None:
-        headers.append((b"authorization", authorization.encode()))
-    scope = {
-        "type": "http",
-        "method": "GET",
-        "path": path,
-        "headers": headers,
-        "client": (client_host, 12345),
-    }
-    return Request(scope)
-
-
-def test_build_client_rate_limit_key_uses_client_host() -> None:
-    request = _build_request(client_host="10.0.0.1")
-
-    assert build_client_rate_limit_key(request) == "client:10.0.0.1"
+from app.core.rate_limits_backend import MemoryRateLimitsBackend
 
 
 @pytest.mark.asyncio
@@ -42,8 +16,7 @@ async def test_rate_limits_backend_reset_clears_recorded_hits() -> None:
     assert backend_type is not None
 
     backend = backend_type()
-    request = _build_request()
-    key = build_client_rate_limit_key(request)
+    key = "client:127.0.0.1"
 
     first_allowed = await backend.hit("1/minute", key=key, scope="global")
     second_allowed = await backend.hit("1/minute", key=key, scope="global")
