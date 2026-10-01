@@ -25,50 +25,6 @@ class PricingModelType(StrEnum):
     FIXED_PER_CALL = "fixed_per_call"
 
 
-class InvocationStatus(StrEnum):
-    IN_PROGRESS = "in_progress"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
-class InvocationFailureReason(StrEnum):
-    UPSTREAM_TIMEOUT = "upstream_timeout"
-    UPSTREAM_TRANSPORT = "upstream_transport"
-    UPSTREAM_RESPONSE = "upstream_response"
-
-
-class PaymentAttemptStatus(StrEnum):
-    CHALLENGED = "challenged"
-    VERIFIED = "verified"
-    VERIFY_FAILED = "verify_failed"
-    SETTLING = "settling"
-    SETTLEMENT_UNKNOWN = "settlement_unknown"
-    SETTLE_FAILED = "settle_failed"
-    SETTLED = "settled"
-    CONSUMED = "consumed"
-    COMPENSATION_REQUIRED = "compensation_required"
-
-
-class LedgerEntryType(StrEnum):
-    CHARGE = "charge"
-    PLATFORM_FEE = "platform_fee"
-    PROVIDER_EARNING = "provider_earning"
-    REFUND = "refund"
-
-
-class PayoutStatus(StrEnum):
-    READY = "ready"
-    PENDING = "pending"
-    SENT = "sent"
-    FAILED = "failed"
-
-
-class PayoutFailureCode(StrEnum):
-    EXECUTOR_ERROR = "executor_error"
-    INVALID_AMOUNT = "invalid_amount"
-    WALLET_NOT_CONFIGURED = "wallet_not_configured"
-
-
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"

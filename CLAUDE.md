@@ -31,18 +31,16 @@ Layer responsibilities:
   changes, and transaction boundaries.
 - `app/db/models` contains SQLAlchemy ORM models only.
 - `app/schemas` contains Pydantic request and response models only. Schemas
-  must not import from services or repositories.
+  must not import from services.
 - `app/core` contains configuration, logging, shared enums, and the shared
   application exception taxonomy.
 - `app/integrations` owns external protocol and provider behavior.
 
-### Repository layer removal (in progress)
+### No repository layer
 
-`app/repositories` is legacy and is being removed in verified vertical slices.
-Until removal is complete:
+`app/repositories` has been removed. Database operations live in the
+`app/services` module that owns the use case.
 
-- Do not add new code that uses or extends `app/repositories`.
-- New database operations go directly in the relevant `app/services` module.
 - Do not recreate the abstraction under another name: no `crud`, `dao`,
   `data_access`, ORM manager classes, generic service base classes, or one-line
   query wrappers around SQLAlchemy.

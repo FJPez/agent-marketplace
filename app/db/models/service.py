@@ -47,7 +47,7 @@ class Service(Base):
     )
     current_revision_id: Mapped[int | None] = mapped_column(
         BigInteger,
-        ForeignKey("service_revisions.id", ondelete="SET NULL"),
+        ForeignKey("service_revisions.id", ondelete="SET NULL", use_alter=True),
         nullable=True,
     )
     current_change_token: Mapped[str | None] = mapped_column(String(64), nullable=True)

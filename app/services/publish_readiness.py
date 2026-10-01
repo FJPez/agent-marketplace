@@ -2,8 +2,19 @@
 
 from app.core.enums import AccessMode
 from app.core.errors import InvalidInputError
+from app.core.json_types import JsonObject
 from app.db.models.service import Service
-from app.integrations.provider_gateway.signing import get_hmac_auth_config
+
+
+def _has_hmac_auth_config(config: JsonObject) -> bool:
+    auth = config.get("auth")
+    if not isinstance(auth, dict):
+        return False
+    return (
+        auth.get("type") == "hmac_sha256"
+        and isinstance(auth.get("key_id"), str)
+        and isinstance(auth.get("secret"), str)
+    )
 
 
 def validate_service_for_publish(service: Service) -> None:
@@ -23,7 +34,7 @@ def validate_service_for_publish(service: Service) -> None:
             raise InvalidInputError(
                 f"enabled endpoint '{endpoint.key}' must define upstream before publish",
             )
-        if get_hmac_auth_config(endpoint.upstream.config) is None:
+        if not _has_hmac_auth_config(endpoint.upstream.config):
             raise InvalidInputError(
                 f"enabled endpoint '{endpoint.key}' must define hmac auth config before publish",
             )

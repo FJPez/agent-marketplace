@@ -5,17 +5,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import coredis
-from httpx import AsyncClient, Limits, Timeout
 
-from app.core.invoke_submission_backend import (
-    InvokeSubmissionBackend,
-    create_invoke_submission_backend,
-)
 from app.core.rate_limits_backend import RateLimitsBackend, create_rate_limits_backend
 from app.db.session import create_engine, create_session_factory
-from app.integrations.payouts import BaseSepoliaUsdcPayoutExecutor
-from app.integrations.x402.facilitator_client import FacilitatorClient
-from app.integrations.x402.resource_server import X402ResourceServerAdapter
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -34,14 +26,8 @@ class AppState:
     stack: AsyncExitStack
     db_engine: AsyncEngine | None = None
     db_session_factory: async_sessionmaker[AsyncSession] | None = None
-    http_client: object | None = None
     redis_client: Redis[str] | None = None
     rate_limits_backend: RateLimitsBackend | None = None
-    invoke_submission_backend: InvokeSubmissionBackend | None = None
-    facilitator_client: object | None = None
-    x402_resource_server: object | None = None
-    payout_executor: object | None = None
-    telemetry: object | None = None
 
 
 def get_app_state(app: FastAPI) -> AppState:
@@ -56,45 +42,8 @@ async def _init_app_state(state: AppState) -> None:
     state.db_engine = create_engine(state.settings)
     state.db_session_factory = create_session_factory(state.db_engine)
     state.stack.push_async_callback(state.db_engine.dispose)
-    state.http_client = AsyncClient(
-        timeout=Timeout(
-            connect=state.settings.http_connect_timeout,
-            read=state.settings.http_read_timeout,
-            write=state.settings.http_write_timeout,
-            pool=state.settings.http_pool_timeout,
-        ),
-        limits=Limits(
-            max_connections=state.settings.http_max_connections,
-            max_keepalive_connections=state.settings.http_max_keepalive_connections,
-        ),
-    )
-    state.stack.push_async_callback(state.http_client.aclose)
     if state.redis_client is not None:
         state.stack.callback(state.redis_client.connection_pool.disconnect)
-    # The settlement lease is derived from the facilitator call timeout, so the facilitator
-    # gets its own client rather than the provider gateway's read and write timeouts.
-    facilitator_http_client = AsyncClient(
-        timeout=Timeout(state.settings.x402_facilitator_timeout_seconds),
-    )
-    state.stack.push_async_callback(facilitator_http_client.aclose)
-    state.facilitator_client = FacilitatorClient(
-        url=state.settings.x402_facilitator_url,
-        http_client=facilitator_http_client,
-        cdp_api_key_id=state.settings.x402_cdp_api_key_id,
-        cdp_api_key_secret=state.settings.x402_cdp_api_key_secret,
-    )
-    state.x402_resource_server = X402ResourceServerAdapter()
-    if state.settings.payouts_enabled:
-        assert state.settings.payouts_rpc_url is not None
-        payment_token = state.settings.payment_token
-        assert payment_token is not None
-        assert state.settings.treasury_private_key is not None
-        state.payout_executor = BaseSepoliaUsdcPayoutExecutor(
-            rpc_url=state.settings.payouts_rpc_url,
-            chain_id=state.settings.payouts_chain_id,
-            token_address=payment_token.address,
-            private_key=state.settings.treasury_private_key.get_secret_value(),
-        )
 
 
 def create_redis_client(settings: Settings) -> Redis[str] | None:
@@ -108,17 +57,11 @@ def create_lifespan(
     *,
     redis_client: Redis[str] | None = None,
     rate_limits_backend: RateLimitsBackend | None = None,
-    invoke_submission_backend: InvokeSubmissionBackend | None = None,
 ) -> Lifespan[FastAPI]:
     if redis_client is None:
         redis_client = create_redis_client(settings)
     if rate_limits_backend is None:
         rate_limits_backend = create_rate_limits_backend(settings)
-    if invoke_submission_backend is None:
-        invoke_submission_backend = create_invoke_submission_backend(
-            settings,
-            redis_client=redis_client,
-        )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -129,7 +72,6 @@ def create_lifespan(
                     stack=stack,
                     redis_client=redis_client,
                     rate_limits_backend=rate_limits_backend,
-                    invoke_submission_backend=invoke_submission_backend,
                 )
                 app.state.app_state = state
                 await _init_app_state(state)
