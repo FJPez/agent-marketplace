@@ -409,7 +409,7 @@ async def test_a_refused_body_crosses_the_pipe_with_its_location(open_pool: Open
             body=b'{"a/b": [1, "x"]}',
         )
 
-    assert refused.value.problem_type is None
+    assert refused.value.problem_type == "invalid_input"
 
 
 async def test_an_oversized_body_is_refused_before_any_worker_starts(open_pool: OpenPool) -> None:
