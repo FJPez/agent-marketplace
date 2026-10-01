@@ -7,13 +7,17 @@ from fastapi import FastAPI, Request, Response, status
 from app.core.errors import UnauthenticatedError
 from app.core.lifespan import get_resources
 from app.core.problems import ProblemResponse
-from app.core.rate_limits_backend import build_client_rate_limit_key
 from app.core.resources import Resources
 from app.services.auth import resolve_actor
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 _V1_PATH_PREFIX = "/v1/"
 _GLOBAL_SCOPE = "global"
+
+
+def build_client_rate_limit_key(request: Request) -> str:
+    client_host = request.client.host if request.client is not None else "unknown"
+    return f"client:{client_host}"
 
 
 async def protect(request: Request, call_next: RequestHandler) -> Response:
