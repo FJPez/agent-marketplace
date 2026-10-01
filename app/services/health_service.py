@@ -13,10 +13,6 @@ if TYPE_CHECKING:
     from app.core.resources import Resources
 
 
-class ReadinessCheckError(UnavailableError):
-    default_problem_type = "not_ready"
-
-
 def get_health_response() -> HealthResponse:
     return HealthResponse(status="ok")
 
@@ -27,12 +23,12 @@ async def get_readiness_response(resources: Resources) -> HealthResponse:
             await session.execute(text("SELECT 1"))
     # asyncpg raises a refused or timed-out connection as a plain OSError, not wrapped.
     except (SQLAlchemyError, OSError) as exc:
-        raise ReadinessCheckError("database unavailable") from exc
+        raise UnavailableError("database unavailable") from exc
 
     if resources.redis_client is not None:
         try:
             await resources.redis_client.ping()
         except RedisError as exc:
-            raise ReadinessCheckError("redis unavailable") from exc
+            raise UnavailableError("redis unavailable") from exc
 
     return HealthResponse(status="ok")
