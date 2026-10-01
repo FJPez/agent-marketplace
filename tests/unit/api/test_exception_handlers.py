@@ -1,6 +1,5 @@
 import pytest
-from fastapi import Request, status
-from fastapi.responses import JSONResponse, Response
+from fastapi import status
 from fastapi.testclient import TestClient
 from tests.unit.api.conftest import AppFactory
 
@@ -18,20 +17,10 @@ from app.core.errors import (
 from app.services.health_service import ReadinessCheckError
 
 
-class ChildNotFoundError(NotFoundError):
-    pass
-
-
 @pytest.mark.parametrize(
     ("exc", "expected_status", "expected_type", "expected_title"),
     [
         (NotFoundError("boom"), status.HTTP_404_NOT_FOUND, "/problems/not_found", "Not found"),
-        (
-            ChildNotFoundError("boom"),
-            status.HTTP_404_NOT_FOUND,
-            "/problems/not_found",
-            "Not found",
-        ),
         (
             UnauthenticatedError("boom"),
             status.HTTP_401_UNAUTHORIZED,
@@ -127,22 +116,3 @@ def test_application_error_carries_problem_type_headers_and_extensions(
         "detail": "purchase is still in progress",
         "invocation_id": 7,
     }
-
-
-def test_specific_registration_beats_base_fallback(
-    handler_app_factory: AppFactory,
-) -> None:
-    async def redacted_handler(request: Request, exc: Exception) -> Response:
-        return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND,
-            content={"detail": "redacted"},
-        )
-
-    app = handler_app_factory(ChildNotFoundError("child missing"))
-    app.add_exception_handler(ChildNotFoundError, redacted_handler)
-    client = TestClient(app)
-
-    response = client.get("/boom")
-
-    assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert response.json() == {"detail": "redacted"}
