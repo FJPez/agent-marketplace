@@ -1,10 +1,10 @@
 """Classification of database driver errors for services translating them."""
 
+from asyncpg import UniqueViolationError
 from sqlalchemy.exc import IntegrityError
-
-UNIQUE_VIOLATION_SQLSTATE = "23505"
 
 
 def is_unique_violation(exc: IntegrityError) -> bool:
-    sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
-    return sqlstate == UNIQUE_VIOLATION_SQLSTATE
+    # SQLAlchemy's asyncpg adapter chains the driver's own exception.
+    driver_error = exc.orig.__cause__ if exc.orig else None
+    return isinstance(driver_error, UniqueViolationError)

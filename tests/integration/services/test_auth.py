@@ -8,6 +8,7 @@ from eth_account.signers.local import LocalAccount
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
+from tests.integration.services.conftest import LastUsedAtReader, LastUsedAtWriter
 
 from app.core.config import Settings
 from app.core.errors import PermissionDeniedError, UnauthenticatedError
@@ -464,6 +465,7 @@ async def _create_api_key(
 
 async def test_resolve_actor_api_key_path_returns_actor_and_touches_last_used(
     db_session_factory: async_sessionmaker[AsyncSession],
+    stored_last_used_at: LastUsedAtReader,
 ) -> None:
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
@@ -478,17 +480,12 @@ async def test_resolve_actor_api_key_path_returns_actor_and_touches_last_used(
 
     assert actor.account_id == account_id
     assert actor.auth_method == "api_key"
-
-    async with db_session_factory() as session:
-        api_key = await session.scalar(
-            select(ApiKey).where(ApiKey.account_id == account_id),
-        )
-    assert api_key is not None
-    assert api_key.last_used_at is not None
+    assert await stored_last_used_at(account_id) is not None
 
 
 async def test_resolve_actor_api_key_path_no_touch_leaves_last_used_none(
     db_session_factory: async_sessionmaker[AsyncSession],
+    stored_last_used_at: LastUsedAtReader,
 ) -> None:
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
@@ -502,16 +499,71 @@ async def test_resolve_actor_api_key_path_no_touch_leaves_last_used_none(
             touch_api_key=False,
         )
 
+    assert await stored_last_used_at(account_id) is None
+
+
+@pytest.mark.parametrize(
+    ("last_used_age", "touched"),
+    [
+        pytest.param(timedelta(seconds=60), False, id="within_interval"),
+        pytest.param(timedelta(seconds=3600), True, id="after_interval"),
+    ],
+)
+async def test_resolve_actor_touches_an_api_key_at_most_once_per_interval(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    stored_last_used_at: LastUsedAtReader,
+    set_last_used_at: LastUsedAtWriter,
+    last_used_age: timedelta,
+    touched: bool,
+) -> None:
+    settings = _auth_settings().model_copy(update={"api_key_touch_interval": 3600})
+    account_id = await create_account(db_session_factory, display_name="Alpha")
+    raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
+    last_used_at = datetime.now(UTC) - last_used_age
+    await set_last_used_at(account_id, last_used_at)
+
     async with db_session_factory() as session:
-        api_key = await session.scalar(
-            select(ApiKey).where(ApiKey.account_id == account_id),
+        await resolve_actor(
+            session=session,
+            settings=settings,
+            authorization=f"Bearer {raw_key}",
         )
-    assert api_key is not None
-    assert api_key.last_used_at is None
+
+    stored = await stored_last_used_at(account_id)
+    if touched:
+        assert stored is not None
+        assert stored > last_used_at
+    else:
+        assert stored == last_used_at
+
+
+async def test_resolve_actor_does_not_overwrite_a_concurrent_touch(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    stored_last_used_at: LastUsedAtReader,
+    set_last_used_at: LastUsedAtWriter,
+) -> None:
+    settings = _auth_settings()
+    account_id = await create_account(db_session_factory, display_name="Alpha")
+    raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
+    touched_at = datetime.now(UTC)
+
+    async with db_session_factory() as session:
+        # The session keeps this copy while it is referenced, so it stays stale after the touch.
+        key_as_read = await session.scalar(select(ApiKey).where(ApiKey.account_id == account_id))
+        assert key_as_read is not None
+        await set_last_used_at(account_id, touched_at)
+        await resolve_actor(
+            session=session,
+            settings=settings,
+            authorization=f"Bearer {raw_key}",
+        )
+
+    assert await stored_last_used_at(account_id) == touched_at
 
 
 async def test_resolve_actor_api_key_path_requires_account_wallet(
     db_session_factory: async_sessionmaker[AsyncSession],
+    stored_last_used_at: LastUsedAtReader,
 ) -> None:
     settings = _auth_settings()
     async with db_session_factory.begin() as session:
@@ -532,6 +584,8 @@ async def test_resolve_actor_api_key_path_requires_account_wallet(
                 settings=settings,
                 authorization=f"Bearer {raw_key}",
             )
+
+    assert await stored_last_used_at(account_id) is None
 
 
 async def test_resolve_actor_api_key_path_revoked_key_raises_unauthenticated(
@@ -592,6 +646,7 @@ async def test_resolve_actor_non_bearer_authorization_raises_unauthenticated(
 
 async def test_resolve_jwt_actor_with_api_key_raises_permission_denied(
     db_session_factory: async_sessionmaker[AsyncSession],
+    stored_last_used_at: LastUsedAtReader,
 ) -> None:
     settings = _auth_settings()
     account_id = await create_account(db_session_factory, display_name="Alpha")
@@ -604,3 +659,5 @@ async def test_resolve_jwt_actor_with_api_key_raises_permission_denied(
                 settings=settings,
                 authorization=f"Bearer {raw_key}",
             )
+
+    assert await stored_last_used_at(account_id) is None
