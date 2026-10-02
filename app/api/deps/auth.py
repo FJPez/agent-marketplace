@@ -1,8 +1,4 @@
-"""Authentication dependencies.
-
-Each resolves the actor on its own short-lived session and returns a plain
-ActorContext, so the route's request session starts with no transaction open.
-"""
+"""Authentication dependencies; each resolves the actor on its own short-lived session."""
 
 from typing import Annotated
 

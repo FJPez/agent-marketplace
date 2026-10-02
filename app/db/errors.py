@@ -1,22 +1,22 @@
 """Classification of database driver errors for services translating them."""
 
+from asyncpg import UniqueViolationError
 from sqlalchemy.exc import IntegrityError
-
-UNIQUE_VIOLATION_SQLSTATE = "23505"
 
 
 def is_unique_violation(exc: IntegrityError) -> bool:
-    sqlstate = getattr(exc.orig, "pgcode", None) or getattr(exc.orig, "sqlstate", None)
-    return sqlstate == UNIQUE_VIOLATION_SQLSTATE
+    return isinstance(_driver_error(exc), UniqueViolationError)
 
 
 def unique_violation_constraint(exc: IntegrityError) -> str | None:
-    """Name the unique constraint or unique index `exc` violated; None for other errors.
-
-    Lets a service tell apart the unique keys of a table that has more than one.
-    """
-    if not is_unique_violation(exc):
+    """Name the unique constraint or unique index `exc` violated; None for other errors."""
+    driver_error = _driver_error(exc)
+    if not isinstance(driver_error, UniqueViolationError):
         return None
-    # SQLAlchemy's asyncpg adapter chains the driver's exception, which carries the name.
-    driver_error = getattr(exc.orig, "__cause__", None)
-    return getattr(driver_error, "constraint_name", None)
+    # asyncpg sets the fields of a server error dynamically, so they are read through as_dict.
+    return driver_error.as_dict().get("constraint_name")
+
+
+def _driver_error(exc: IntegrityError) -> BaseException | None:
+    # SQLAlchemy's asyncpg adapter chains the driver's own exception.
+    return exc.orig.__cause__ if exc.orig else None

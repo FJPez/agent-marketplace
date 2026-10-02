@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from decimal import Decimal
 
 import pytest
@@ -7,9 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from app.db.types import AtomicAmount
 
-# The tests store amounts in a temporary table that disappears with the test's
-# connection, so the type is checked over its whole range (listing_prices only
-# admits positive amounts).
+# Temporary, so the type is tested over its whole range (listing prices are only positive).
 amounts = Table(
     "atomic_amounts",
     MetaData(),
@@ -19,9 +18,11 @@ amounts = Table(
 )
 
 
-async def _store(connection: AsyncConnection, value: object) -> None:
-    await connection.run_sync(amounts.metadata.create_all)
-    await connection.execute(insert(amounts).values(amount=value))
+@pytest.fixture
+async def amounts_connection(db_engine: AsyncEngine) -> AsyncIterator[AsyncConnection]:
+    async with db_engine.connect() as connection:
+        await connection.run_sync(amounts.metadata.create_all)
+        yield connection
 
 
 @pytest.mark.parametrize(
@@ -29,10 +30,12 @@ async def _store(connection: AsyncConnection, value: object) -> None:
     [0, 2**53 + 1, 2**256 - 1, 10**78 - 1, -(10**78 - 1)],
     ids=["zero", "beyond_float_precision", "max_uint256", "max_column", "min_column"],
 )
-async def test_atomic_amount_round_trips_exact_ints(db_engine: AsyncEngine, value: int) -> None:
-    async with db_engine.connect() as connection:
-        await _store(connection, value)
-        stored = await connection.scalar(select(amounts.c.amount))
+async def test_atomic_amount_round_trips_exact_ints(
+    amounts_connection: AsyncConnection,
+    value: int,
+) -> None:
+    await amounts_connection.execute(insert(amounts).values(amount=value))
+    stored = await amounts_connection.scalar(select(amounts.c.amount))
 
     assert type(stored) is int
     assert stored == value
@@ -40,20 +43,18 @@ async def test_atomic_amount_round_trips_exact_ints(db_engine: AsyncEngine, valu
 
 @pytest.mark.parametrize("value", [True, 1.0, Decimal(1)], ids=["bool", "float", "decimal"])
 async def test_atomic_amount_rejects_values_that_are_not_ints(
-    db_engine: AsyncEngine,
+    amounts_connection: AsyncConnection,
     value: object,
 ) -> None:
-    async with db_engine.connect() as connection:
-        with pytest.raises(StatementError, match="atomic amount must be an int"):
-            await _store(connection, value)
+    with pytest.raises(StatementError, match="atomic amount must be an int"):
+        await amounts_connection.execute(insert(amounts).values(amount=value))
 
 
 async def test_atomic_amount_column_rejects_values_wider_than_78_digits(
-    db_engine: AsyncEngine,
+    amounts_connection: AsyncConnection,
 ) -> None:
-    async with db_engine.connect() as connection:
-        with pytest.raises(DBAPIError, match="numeric field overflow"):
-            await _store(connection, 10**78)
+    with pytest.raises(DBAPIError, match="numeric field overflow"):
+        await amounts_connection.execute(insert(amounts).values(amount=10**78))
 
 
 async def test_atomic_amount_rejects_fractional_results(db_engine: AsyncEngine) -> None:
