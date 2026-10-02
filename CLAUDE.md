@@ -70,47 +70,12 @@ Layer responsibilities:
 - Private helpers may `flush()` but never commit.
 - Do not hold a database transaction or row lock open across external
   network I/O.
-- External workflows (x402 payments, provider invocation, payouts) use the
-  short-transaction convention below. It is not an ordinary CRUD pattern; do
-  not force it elsewhere.
-
-### Short transactions in external workflows
-
-A workflow that calls something outside PostgreSQL (the facilitator, a
-provider, the chain) is a sequence of short transactions, each ending in a
-durable state that recovery can resume from:
-
-1. Commit the intent: move the row to a state that records the call is about
-   to happen (for example `settling` or `dispatched`), with everything needed
-   to retry or reconcile it, and commit.
-2. Make the external call with no transaction open.
-3. Commit the outcome in a new short transaction.
-
-Any read after the intent commit (for example to fetch data the call needs)
-autobegins a new transaction, so commit or roll back after such reads, before
-the external call: `session.in_transaction()` must be `False` while it runs.
-For a known long-running statement, prefer a scoped `SET LOCAL
-statement_timeout` over raising the global default.
-
-The connection settings in `app/db/session.py` (statement, lock and
-idle-in-transaction timeouts) are a backstop for that rule, not a design
-tool.
-
-Every state change in such a workflow is a fenced compare-and-set update:
-
-```sql
-UPDATE invocations
-SET state = :next_state, ...
-WHERE id = :id AND state = :expected_state AND fence = :fence
-RETURNING id
-```
-
-The fencing token `fence` is incremented by the conditional update that takes
-the row's lease (that update returns `RETURNING fence` instead), and the
-lease holder passes it to every later update. Read the result with
-`scalar_one_or_none()`: no row returned means the state moved on or another
-worker took the lease, so ownership is lost: stop, perform no further side
-effect (no external call, no ledger posting) and do not retry.
+- External workflows (x402 payments, provider invocation, payouts) may use
+  multiple short transactions with explicit durable states, idempotency, and
+  safe retries. This is not an ordinary CRUD pattern; do not force it
+  elsewhere.
+- The statement, lock and idle-in-transaction timeouts set in
+  `app/db/session.py` are a backstop for these rules, not a design tool.
 
 ### Errors
 
@@ -151,9 +116,6 @@ effect (no external call, no ledger posting) and do not retry.
   the first column, so two unique keys on one table that start with the same
   column would get the same name. (The convention still prefixes a check
   constraint's name with `ck_<table>_`.)
-- When a table has more than one unique key, a service that turns a unique
-  violation into a domain error checks which key was violated with
-  `unique_violation_constraint(exc)` from `app/db/errors.py`.
 
 ## Primary goals
 
