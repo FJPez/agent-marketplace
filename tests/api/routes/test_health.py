@@ -1,7 +1,9 @@
+import pytest
 from fastapi.testclient import TestClient
+from tests.fixtures.settings import UNREACHABLE_DATABASE_URL, UNREACHABLE_REDIS_URL
 
+import app.main as main_module
 from app.core.config import Settings
-from app.core.lifespan import get_app_state
 from app.main import create_app
 
 
@@ -39,33 +41,27 @@ def test_health_ready_route_returns_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_health_ready_route_returns_service_unavailable_without_redis_when_configured() -> None:
-    app = create_app()
+@pytest.mark.parametrize(
+    ("overrides", "detail"),
+    [
+        pytest.param(
+            {"database_url": UNREACHABLE_DATABASE_URL},
+            "database unavailable",
+            id="database",
+        ),
+        pytest.param({"redis_url": UNREACHABLE_REDIS_URL}, "redis unavailable", id="redis"),
+    ],
+)
+def test_health_ready_route_returns_service_unavailable_when_a_dependency_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+    db_settings: Settings,
+    overrides: dict[str, str],
+    detail: str,
+) -> None:
+    settings = db_settings.model_copy(update=overrides)
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
 
-    class _HealthySession:
-        async def execute(self, statement: object) -> object:
-            return 1
-
-    class _HealthySessionContext:
-        async def __aenter__(self) -> _HealthySession:
-            return _HealthySession()
-
-        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-            _ = exc_type, exc, tb
-
-    class _HealthySessionFactory:
-        def __call__(self) -> _HealthySessionContext:
-            return _HealthySessionContext()
-
-    with TestClient(app) as client:
-        state = get_app_state(app)
-        state.settings = Settings(
-            jwt_secret_key="test-secret-key-with-32-bytes-123",
-            redis_url="redis://localhost:6379/0",
-        )
-        state.db_session_factory = _HealthySessionFactory()  # type: ignore[assignment]
-        state.redis_client = None
-
+    with TestClient(create_app()) as client:
         response = client.get("/health/ready")
 
     assert response.status_code == 503
@@ -73,5 +69,5 @@ def test_health_ready_route_returns_service_unavailable_without_redis_when_confi
     assert response.json() == {
         "type": "/problems/unavailable",
         "status": 503,
-        "detail": "redis unavailable",
+        "detail": detail,
     }

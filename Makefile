@@ -6,13 +6,16 @@ COMPOSE ?= docker compose
 DOCKER_HOST ?= 127.0.0.1
 DOCKER_PORT ?= 18000
 
-.PHONY: sync run test test-unit test-serial lint lint-fix format typecheck migrate migrate-check seed bootstrap-admin demo-api docker-build docker-run docker-stop docker-smoke
+.PHONY: sync run worker test test-unit test-serial lint lint-fix format typecheck migrate migrate-check seed bootstrap-admin demo-api docker-build docker-run docker-stop docker-smoke
 
 sync:
 	uv sync
 
 run:
 	uv run uvicorn app.main:app --reload --host $(HOST) --port $(PORT)
+
+worker:
+	uv run python -m app.worker
 
 test:
 	uv run pytest -n 2
@@ -55,7 +58,7 @@ docker-build:
 	docker build -t $(IMAGE) .
 
 docker-run:
-	$(COMPOSE) up --build -d --wait postgres redis app
+	$(COMPOSE) up --build -d --wait postgres redis app worker
 
 docker-stop:
 	$(COMPOSE) down

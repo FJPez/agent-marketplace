@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request
 
-from app.core.lifespan import get_app_state
+from app.core.lifespan import get_resources
 from app.schemas.common import HealthResponse, ServiceEntrypointResponse
 from app.services.health_service import get_health_response, get_readiness_response
 
@@ -66,4 +66,4 @@ def read_health_live() -> HealthResponse:
     },
 )
 async def read_health_ready(request: Request) -> HealthResponse:
-    return await get_readiness_response(get_app_state(request.app))
+    return await get_readiness_response(get_resources(request.app))

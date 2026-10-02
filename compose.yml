@@ -1,3 +1,9 @@
+x-app-environment: &app-environment
+  APP_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agent_marketplace
+  APP_REDIS_URL: redis://redis:6379/0
+  APP_JWT_SECRET_KEY: test-secret-key-with-32-bytes-123
+  APP_SIWE_DOMAIN: localhost
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -30,10 +36,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      APP_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agent_marketplace
-      APP_REDIS_URL: redis://redis:6379/0
-      APP_JWT_SECRET_KEY: test-secret-key-with-32-bytes-123
-      APP_SIWE_DOMAIN: localhost
+      <<: *app-environment
       PORT: 8000
     ports:
       - "18000:8000"
@@ -48,3 +51,16 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  worker:
+    build:
+      context: .
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *app-environment
+      APP_DB_APPLICATION_NAME: agent-marketplace-worker
+    # Longer than APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS (25), so a running iteration can
+    # finish before Docker sends SIGKILL.
+    stop_grace_period: 30s

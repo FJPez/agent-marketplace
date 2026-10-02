@@ -84,6 +84,28 @@ def test_settings_use_default_values(
     assert settings.api_key_prefix == "amp_"
     assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
+    assert settings.log_level == "INFO"
+    assert settings.worker_shutdown_timeout_seconds == 25.0
+
+
+@pytest.mark.parametrize(("log_level", "expected"), [("info", "INFO"), ("Warning", "WARNING")])
+def test_settings_accept_a_log_level_in_any_case(
+    settings_env_factory: SettingsEnvFactory,
+    log_level: str,
+    expected: str,
+) -> None:
+    settings_env_factory(env={"APP_LOG_LEVEL": log_level})
+
+    assert Settings().log_level == expected
+
+
+def test_settings_reject_an_unknown_log_level(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env={"APP_LOG_LEVEL": "verbose"})
+
+    with pytest.raises(ValidationError, match="log_level"):
+        Settings()
 
 
 def test_settings_require_jwt_secret_key(
@@ -285,6 +307,10 @@ def test_settings_ignore_retired_payment_variables(
             id="idle-in-transaction-timeout-zero",
         ),
         pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
+        pytest.param(
+            {"APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS": "0"},
+            id="worker-shutdown-timeout-zero",
+        ),
     ],
 )
 def test_settings_reject_timeouts_of_zero_and_a_negative_touch_interval(

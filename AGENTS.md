@@ -33,8 +33,16 @@ Layer responsibilities:
 - `app/schemas` contains Pydantic request and response models only. Schemas
   must not import from services.
 - `app/core` contains configuration, logging, shared enums, and the shared
-  application exception taxonomy.
+  application exception taxonomy. `app/core/resources.py` builds the
+  process-wide resources (engine, session factory, Redis client, rate-limit
+  backend) without FastAPI; the API lifespan and the worker both open them with
+  `open_resources(settings)`. Add a new shared client there, not to the lifespan.
 - `app/integrations` owns external protocol and provider behavior.
+- `app/worker` is the background worker process (`python -m app.worker`). A
+  worker loop is a `Loop` in `LOOPS` whose iteration calls a plain service
+  function that processes one bounded batch. Several worker processes may run
+  at once, so a loop claims its rows (`FOR UPDATE SKIP LOCKED` plus the lease
+  and fence) before acting on them.
 
 ### No repository layer
 

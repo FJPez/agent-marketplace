@@ -9,7 +9,7 @@ from limits import RateLimitItem, parse
 from limits.aio.storage import MemoryStorage, RedisStorage, Storage
 from limits.aio.strategies import FixedWindowRateLimiter
 
-from app.core.config import Settings, get_settings
+from app.core.config import Settings
 
 
 @lru_cache
@@ -90,7 +90,3 @@ def create_rate_limits_backend(settings: Settings) -> RateLimitsBackend:
             key_prefix=f"agent-marketplace:{settings.env.value}",
         )
     return MemoryRateLimitsBackend()
-
-
-def get_rate_limits_backend() -> RateLimitsBackend:
-    return create_rate_limits_backend(get_settings())

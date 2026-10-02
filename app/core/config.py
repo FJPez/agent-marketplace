@@ -1,8 +1,9 @@
 import os
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -56,6 +57,8 @@ class Settings(BaseSettings):
     db_application_name: str = "agent-marketplace-api"
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    worker_shutdown_timeout_seconds: float = Field(default=25.0, gt=0)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
@@ -81,6 +84,12 @@ class Settings(BaseSettings):
         )
         sources.append(file_secret_settings)
         return tuple(sources)
+
+    @field_validator("log_level", mode="before")
+    @classmethod
+    def normalize_log_level(cls, value: object) -> object:
+        # Accept `APP_LOG_LEVEL=info`: the Literal above lists only upper-case names.
+        return value.upper() if isinstance(value, str) else value
 
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":

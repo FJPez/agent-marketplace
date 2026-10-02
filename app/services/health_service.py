@@ -10,30 +10,24 @@ from app.core.errors import UnavailableError
 from app.schemas.common import HealthResponse
 
 if TYPE_CHECKING:
-    from app.core.lifespan import AppState
+    from app.core.resources import Resources
 
 
 def get_health_response() -> HealthResponse:
     return HealthResponse(status="ok")
 
 
-async def get_readiness_response(app_state: AppState) -> HealthResponse:
-    session_factory = app_state.db_session_factory
-    if session_factory is None:
-        raise UnavailableError("database unavailable")
-
+async def get_readiness_response(resources: Resources) -> HealthResponse:
     try:
-        async with session_factory() as session:
+        async with resources.db_session_factory() as session:
             await session.execute(text("SELECT 1"))
-    except SQLAlchemyError as exc:
+    # asyncpg raises a refused or timed-out connection as a plain OSError, not wrapped.
+    except (SQLAlchemyError, OSError) as exc:
         raise UnavailableError("database unavailable") from exc
 
-    if app_state.settings.redis_url is not None:
-        redis_client = app_state.redis_client
-        if redis_client is None:
-            raise UnavailableError("redis unavailable")
+    if resources.redis_client is not None:
         try:
-            await redis_client.ping()
+            await resources.redis_client.ping()
         except RedisError as exc:
             raise UnavailableError("redis unavailable") from exc
 
