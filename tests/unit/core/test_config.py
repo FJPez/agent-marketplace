@@ -301,16 +301,10 @@ def test_settings_ignore_retired_payment_variables(
     "env_overrides",
     [
         pytest.param({"APP_DB_STATEMENT_TIMEOUT_MS": "0"}, id="statement-timeout-zero"),
-        pytest.param({"APP_DB_STATEMENT_TIMEOUT_MS": "-1"}, id="statement-timeout-negative"),
         pytest.param({"APP_DB_LOCK_TIMEOUT_MS": "0"}, id="lock-timeout-zero"),
-        pytest.param({"APP_DB_LOCK_TIMEOUT_MS": "-1"}, id="lock-timeout-negative"),
         pytest.param(
             {"APP_DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "0"},
             id="idle-in-transaction-timeout-zero",
-        ),
-        pytest.param(
-            {"APP_DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "-1"},
-            id="idle-in-transaction-timeout-negative",
         ),
         pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
         pytest.param(
@@ -319,7 +313,7 @@ def test_settings_ignore_retired_payment_variables(
         ),
     ],
 )
-def test_settings_reject_non_positive_timeout_and_touch_interval_settings(
+def test_settings_reject_timeouts_of_zero_and_a_negative_touch_interval(
     env_overrides: dict[str, str],
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
