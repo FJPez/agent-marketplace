@@ -5,6 +5,7 @@ import pytest
 from eth_account import Account as EthAccount
 from eth_account.messages import encode_defunct
 from eth_account.signers.local import LocalAccount
+from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
@@ -20,7 +21,7 @@ pytestmark = [pytest.mark.asyncio]
 
 def _wallet_change_settings() -> Settings:
     return Settings(
-        jwt_secret_key="test-secret-key-with-32-bytes-123",
+        jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
         siwe_domain="testserver",
         siwe_nonce_expiry=300,
         wallet_change_cooldown=604800,
@@ -342,7 +343,7 @@ async def test_confirm_success_updates_account_and_issues_tokens(
 
     claims = decode_jwt(
         tokens.access_token,
-        secret_key=settings.jwt_secret_key,
+        secret_key=settings.jwt_secret_key.get_secret_value(),
         expected_token_type=AuthTokenType.ACCESS,
     )
     assert claims.wallet_address == new_signer.address

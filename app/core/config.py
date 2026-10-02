@@ -3,11 +3,13 @@ from functools import lru_cache
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
+from cryptography.fernet import Fernet
 from eth_utils import is_checksum_address, is_checksum_formatted_address
-from pydantic import AfterValidator, Field, field_validator, model_validator
+from pydantic import AfterValidator, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
+    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
@@ -66,13 +68,16 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="APP_",
         extra="ignore",
+        # Several settings are secrets (keys, the JWT secret): a startup error names the
+        # setting and the rule it broke, never the value.
+        hide_input_in_errors=True,
     )
 
     env: AppEnv = AppEnv.DEV
     title: str = "Agent Marketplace Backend"
     debug: bool = False
     database_url: str = _DEFAULT_DATABASE_URL
-    jwt_secret_key: str = ""
+    jwt_secret_key: SecretStr = SecretStr("")
     jwt_access_token_expiry: int = 900
     jwt_refresh_token_expiry: int = 604800
     siwe_domain: str = _DEFAULT_SIWE_DOMAIN
@@ -106,6 +111,13 @@ class Settings(BaseSettings):
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
     # The validity window of a payment (x402 maxTimeoutSeconds): at most one hour.
     payment_max_timeout_seconds: int = Field(default=120, gt=0, le=3600)
+    # Fernet keys that encrypt provider signing secrets at rest, comma-separated. The
+    # first encrypts and every key decrypts, so a new key goes first and a retired one
+    # stays listed while a stored secret may still be encrypted with it. Staging and
+    # prod refuse to start without one; elsewhere, without one no secret can be issued.
+    provider_secret_encryption_keys: Annotated[tuple[SecretStr, ...], NoDecode] = ()
+    # How long a rotated-out signing secret keeps signing beside its replacement.
+    provider_secret_grace_seconds: int = Field(default=86_400, gt=0)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
@@ -138,10 +150,32 @@ class Settings(BaseSettings):
         # Accept `APP_LOG_LEVEL=info`: the Literal above lists only upper-case names.
         return value.upper() if isinstance(value, str) else value
 
+    @field_validator("provider_secret_encryption_keys", mode="before")
+    @classmethod
+    def split_provider_secret_encryption_keys(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [key.strip() for key in value.split(",") if key.strip()]
+        return value
+
+    @field_validator("provider_secret_encryption_keys")
+    @classmethod
+    def check_provider_secret_encryption_keys(
+        cls,
+        keys: tuple[SecretStr, ...],
+    ) -> tuple[SecretStr, ...]:
+        for key in keys:
+            try:
+                Fernet(key.get_secret_value())
+            except ValueError:
+                # Raised afresh so no part of a key reaches the startup error.
+                msg = "provider_secret_encryption_keys must be Fernet keys"
+                raise ValueError(msg) from None
+        return keys
+
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":
         self.database_url = normalize_database_url(self.database_url)
-        if not self.jwt_secret_key:
+        if not self.jwt_secret_key.get_secret_value():
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
         if self.env in {AppEnv.PROD, AppEnv.STAGING}:
@@ -166,6 +200,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.treasury_address is None:
             msg = "treasury_address must be set when env is staging or prod"
+            raise ValueError(msg)
+        if not self.provider_secret_encryption_keys:
+            msg = "provider_secret_encryption_keys must be set when env is staging or prod"
             raise ValueError(msg)
 
 

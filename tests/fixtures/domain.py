@@ -6,7 +6,9 @@ import pytest
 from sqlalchemy import select
 from tests.fixtures.settings import TEST_PRICE_TERMS
 from tests.helpers.auth import create_account
+from tests.helpers.dns import TEST_DOMAIN_TOKEN, TEST_UPSTREAM_BASE_URL
 
+from app.core.config import get_settings
 from app.core.enums import (
     AccessMode,
     ServiceHealthStatus,
@@ -15,6 +17,7 @@ from app.core.enums import (
 from app.db.models import (
     ListingPrice,
     ModerationAction,
+    ProviderDomainToken,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -22,6 +25,7 @@ from app.db.models import (
     ServiceRevision,
     ServiceTag,
 )
+from app.services import provider_signing_secrets
 from app.services.service_health import PUBLISH_READINESS_CHECK_NAME
 
 if TYPE_CHECKING:
@@ -119,7 +123,6 @@ class UpstreamFactory(Protocol):
         base_url: str = ...,
         path: str = ...,
         http_method: str = ...,
-        config: JsonObject | None = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -135,13 +138,6 @@ class ModerationActionFactory(Protocol):
 
 
 _UNSET = object()
-_DEFAULT_UPSTREAM_CONFIG = {
-    "auth": {
-        "type": "hmac_sha256",
-        "key_id": "gateway-key",
-        "secret": "super-secret",
-    },
-}
 
 
 async def create_provider_account_record(
@@ -349,10 +345,9 @@ async def create_upstream_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     endpoint_id: int,
-    base_url: str = "http://127.0.0.1:9000",
+    base_url: str = TEST_UPSTREAM_BASE_URL,
     path: str = "/invoke",
     http_method: str = "POST",
-    config: dict[str, object] | None = None,
 ) -> int:
     async with db_session_factory.begin() as session:
         upstream = ProviderUpstream(
@@ -360,11 +355,39 @@ async def create_upstream_record(
             base_url=base_url,
             path=path,
             http_method=http_method,
-            config=config or dict(_DEFAULT_UPSTREAM_CONFIG),
         )
         session.add(upstream)
         await session.flush()
         return endpoint_id
+
+
+async def create_signing_secret_record(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+) -> None:
+    """Issue the account's signing secret, as a provider does before publishing."""
+    async with db_session_factory() as session:
+        await provider_signing_secrets.create_signing_secret(
+            session=session,
+            settings=get_settings(),
+            account_id=account_id,
+        )
+
+
+async def create_trusted_provider_records(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+) -> None:
+    """Give the account what publishing asks of a provider.
+
+    A signing secret, and the test domain token, whose TXT record the `dns_resolver`
+    fixture serves for the test upstream host.
+    """
+    await create_signing_secret_record(db_session_factory, account_id=account_id)
+    async with db_session_factory.begin() as session:
+        session.add(ProviderDomainToken(account_id=account_id, token=TEST_DOMAIN_TOKEN))
 
 
 async def create_moderation_action_record(
@@ -574,10 +597,9 @@ def upstream_factory(
     async def create_upstream(
         *,
         endpoint_id: int,
-        base_url: str = "http://127.0.0.1:9000",
+        base_url: str = TEST_UPSTREAM_BASE_URL,
         path: str = "/invoke",
         http_method: str = "POST",
-        config: JsonObject | None = None,
     ) -> int:
         return await create_upstream_record(
             db_session_factory,
@@ -585,7 +607,6 @@ def upstream_factory(
             base_url=base_url,
             path=path,
             http_method=http_method,
-            config=config,
         )
 
     return create_upstream

@@ -10,10 +10,12 @@ from tests.fixtures.domain import (
     create_listing_price_record,
     create_provider_account_record,
     create_service_record,
+    create_trusted_provider_records,
     create_upstream_record,
 )
 from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
+from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, TEST_UPSTREAM_HOST, FakeResolver
 
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
@@ -344,7 +346,6 @@ async def test_get_provider_service_hides_upstream_fields_in_endpoint_payload(
     assert "base_url" not in endpoint
     assert "path" not in endpoint
     assert "http_method" not in endpoint
-    assert "config" not in endpoint
 
 
 @pytest.mark.asyncio
@@ -699,10 +700,9 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "/translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -720,13 +720,13 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
     assert "base_url" not in endpoint
     assert "path" not in endpoint
     assert "http_method" not in endpoint
-    assert "config" not in endpoint
 
 
 @pytest.mark.asyncio
-async def test_put_endpoint_upstream_rejects_unsafe_private_target(
+async def test_put_endpoint_upstream_rejects_a_host_resolving_to_a_metadata_address(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
@@ -739,14 +739,15 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
         service_id=service_id,
     )
 
+    dns_resolver.addresses[TEST_UPSTREAM_HOST] = ["169.254.169.254"]
+
     response = await async_client.put(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "https://127.0.0.1:9000",
+            "base_url": f"https://{TEST_UPSTREAM_HOST}",
             "path": "/translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -754,7 +755,7 @@ async def test_put_endpoint_upstream_rejects_unsafe_private_target(
     assert response.json() == {
         "type": "/problems/invalid_input",
         "status": 422,
-        "detail": "upstream target is not allowed",
+        "detail": f"upstream host {TEST_UPSTREAM_HOST} must resolve, and only to public addresses",
     }
 
 
@@ -778,15 +779,47 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
     assert response.status_code == 422
     assert response.json()["errors"][0]["loc"] == ["body", "path"]
+
+
+@pytest.mark.asyncio
+async def test_put_endpoint_upstream_rejects_the_retired_config_field(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="translation-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+
+    # An old client still sends the per-endpoint config that held an HMAC secret.
+    response = await async_client.put(
+        f"/v1/provider/endpoints/{endpoint_id}/upstream",
+        headers=_auth_headers(account_id),
+        json={
+            "base_url": TEST_UPSTREAM_BASE_URL,
+            "path": "/translate",
+            "http_method": "POST",
+            "config": {"hmac_secret": "provider-chosen"},
+        },
+    )
+
+    assert response.status_code == 422
+    (error,) = response.json()["errors"]
+    assert (error["loc"], error["type"]) == (["body", "config"], "extra_forbidden")
 
 
 @pytest.mark.asyncio
@@ -809,10 +842,9 @@ async def test_put_endpoint_upstream_rejects_disallowed_http_method(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "/translate",
             "http_method": "GET",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -887,10 +919,9 @@ async def test_suspended_service_mutations_return_conflict(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": "http://127.0.0.1:9000",
+            "base_url": TEST_UPSTREAM_BASE_URL,
             "path": "/translate",
             "http_method": "POST",
-            "config": {"auth": {"type": "bearer"}},
         },
     )
 
@@ -1217,6 +1248,7 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
         service_id=service_id,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
 
     response = await async_client.post(
         f"/v1/provider/services/{service_id}/publish",
@@ -1247,6 +1279,46 @@ async def test_publish_service_returns_active_service_when_endpoints_are_ready(
 
 
 @pytest.mark.asyncio
+async def test_publish_service_without_domain_proof_is_an_invalid_input_problem(
+    async_client: AsyncClient,
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    account_id = await _create_provider_account(db_session_factory)
+    service_id = await _seed_service(
+        db_session_factory,
+        provider_account_id=account_id,
+        slug="unproven-service",
+    )
+    endpoint_id = await _seed_endpoint(
+        db_session_factory,
+        service_id=service_id,
+    )
+    await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
+    dns_resolver.txt_records.clear()
+
+    response = await async_client.post(
+        f"/v1/provider/services/{service_id}/publish",
+        headers=_auth_headers(account_id),
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "type": "/problems/invalid_input",
+        "status": 422,
+        "detail": (
+            f"upstream hosts failed the domain-control check: {TEST_UPSTREAM_HOST} "
+            "(record_missing). record_missing: publish a TXT record at "
+            "_agent-marketplace.<host> with the value from POST "
+            "/v1/provider/domain-verification. DNS changes can take minutes to be visible, "
+            "longer after a failed check because resolvers cache the miss (negative "
+            "caching)."
+        ),
+    }
+
+
+@pytest.mark.asyncio
 async def test_publish_service_replaces_stale_failed_publish_readiness_with_fresh_pass(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
@@ -1262,6 +1334,7 @@ async def test_publish_service_replaces_stale_failed_publish_readiness_with_fres
         service_id=service_id,
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
     await _seed_health_check(
         db_session_factory,
         service_id=service_id,
@@ -1313,6 +1386,7 @@ async def test_publish_succeeds_with_passing_health_check(
         key="healthy-ep",
     )
     await _seed_upstream(db_session_factory, endpoint_id=endpoint_id)
+    await create_trusted_provider_records(db_session_factory, account_id=account_id)
     await _seed_health_check(
         db_session_factory,
         service_id=service_id,

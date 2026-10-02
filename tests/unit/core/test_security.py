@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.security import (
@@ -19,7 +20,7 @@ from app.core.security import (
 
 def _settings() -> Settings:
     return Settings(
-        jwt_secret_key="test-secret-key-with-32-bytes-123",
+        jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
         siwe_domain="testserver",
     )
 

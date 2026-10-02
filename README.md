@@ -17,6 +17,8 @@ Core capabilities:
 
 - wallet-based authentication (SIWE) and API keys
 - provider service authoring and publish control
+- marketplace-issued provider signing secrets, rotatable with a grace period
+- DNS proof that a provider controls its upstream hosts, checked at every publish
 - public discovery, schemas, and pricing lookups
 - moderation for administrators
 
@@ -94,6 +96,11 @@ Railway runs two services from this repository, both built from the
   `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends SIGKILL
   right after SIGTERM; 30 seconds covers the worker's 25-second shutdown
   timeout.
+- **Signing secret keys.** Generate `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` with the
+  command in `.env.example` (see
+  [Signing Secret Encryption Keys](#signing-secret-encryption-keys)) and set it as a
+  shared variable used by both the API and the worker: in staging and production
+  neither starts without it.
 
 Railway's config as code (`railway.toml`) is deprecated, and Railway stops
 reading it on 2026-12-01. After that the API would deploy without its health
@@ -169,7 +176,19 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `X-Request-ID` is kept only if it is 1 to 128 letters, digits, `.`, `_`, `:`
   or `-`; otherwise the API generates one.
 - Staging and production require a non-local `APP_DATABASE_URL`,
-  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN` and `APP_TREASURY_ADDRESS`.
+  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN`, `APP_TREASURY_ADDRESS` and
+  `APP_PROVIDER_SECRET_ENCRYPTION_KEYS`.
+- A provider upstream must be an `https://` URL on port 443, without credentials,
+  query string or fragment, whose host is a DNS name that resolves only to public
+  addresses. This holds in every environment, so a local mock upstream cannot be
+  registered through the API. The API resolves hosts with the system's nameservers.
+  A service's upstreams can name at most 10 distinct hosts, which bounds the DNS
+  queries each publish sends.
+- Publishing checks live that every upstream host of the service carries the
+  provider's TXT record at `_agent-marketplace.<host>`, with the value
+  `POST /v1/provider/domain-verification` returns. A new or changed record can take
+  minutes to be visible, longer after a failed check because resolvers cache the
+  miss (negative caching), so publish again once it is.
 - Each new price version records the payment terms current when it is created:
   the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
   paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base
@@ -180,3 +199,39 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   least `APP_MIN_PRICE_AMOUNT` (default 10000, 0.01 USDC). Changing a setting
   affects only price versions created afterwards; a provider moves a listing onto
   the current terms by resending its price, which creates a new version.
+- Provider signing secrets are stored encrypted with the Fernet keys in
+  `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (comma-separated; no default; without one no
+  signing secret can be issued). The first key encrypts and every listed key
+  decrypts; see [Signing Secret Encryption Keys](#signing-secret-encryption-keys).
+  A rotated-out secret keeps signing beside its replacement for
+  `APP_PROVIDER_SECRET_GRACE_SECONDS` (default 86400, one day).
+- If a rotate response is lost, retry with the same `Idempotency-Key` within 15
+  minutes: the retry returns the secret that rotation issued instead of rotating
+  again, which would end the grace of the secret the provider has deployed. After 15
+  minutes the same key is refused with 409 and rotates nothing, so the key cannot
+  read the deployed secret later; check `GET /v1/provider/signing-secret` and rotate
+  with a new key if a new secret is still needed. Use a fresh random key, such as a
+  UUID, for each rotation.
+
+## Signing Secret Encryption Keys
+
+Generate a key with the command in `.env.example`:
+
+```bash
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+- **Back up every listed key** outside the deployment. A stored secret decrypts
+  only with the key it was encrypted under, so losing every listed key makes every
+  stored secret unrecoverable: each provider must then rotate its secret and deploy
+  the new one before the marketplace can sign its requests again.
+- **To replace a key**, list the new one first and keep the old one after it. The
+  new key encrypts every secret issued from then on, while each stored secret stays
+  encrypted under the key it was issued with until its provider rotates it. Nothing
+  re-encrypts stored secrets or reports which key each one uses yet, so keep every
+  old key listed until a re-encryption command exists (a follow-up).
+- **To remove a key** (after a compromise, say), take it out of the list. A provider
+  whose current secret was encrypted under it cannot have its requests signed until
+  it rotates. After it rotates, the new secret signs at once; the replaced secret
+  cannot be decrypted, so it is skipped, with a warning in the logs, instead of
+  signing during the grace period. Listing the old key again restores that grace.

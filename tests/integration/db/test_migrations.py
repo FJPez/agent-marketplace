@@ -14,6 +14,8 @@ DOMAIN_TABLES = {
     "api_keys",
     "listing_prices",
     "moderation_actions",
+    "provider_domain_tokens",
+    "provider_signing_secrets",
     "provider_upstreams",
     "service_endpoints",
     "service_health_checks",
@@ -169,23 +171,14 @@ async def _insert_endpoint(
         ).scalar_one()
 
 
-async def _insert_provider_upstream_config(
-    db_engine: AsyncEngine,
-    *,
-    endpoint_id: int,
-    config: str,
-) -> None:
+async def _insert_upstream(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
             text(
-                """
-                INSERT INTO provider_upstreams (endpoint_id, base_url, path, http_method, config)
-                VALUES (
-                    :endpoint_id, 'http://127.0.0.1:9000', '/invoke', 'POST', CAST(:config AS jsonb)
-                )
-                """
+                "INSERT INTO provider_upstreams (endpoint_id, base_url, path, http_method) "
+                "VALUES (:endpoint_id, 'https://provider.example.com', '/invoke', 'POST')"
             ),
-            {"endpoint_id": endpoint_id, "config": config},
+            {"endpoint_id": endpoint_id},
         )
 
 
@@ -243,6 +236,46 @@ async def _insert_current_listing_price(db_engine: AsyncEngine, *, endpoint_id: 
                 """
             ),
             {"endpoint_id": endpoint_id},
+        )
+
+
+async def _insert_signing_secret(
+    db_engine: AsyncEngine,
+    *,
+    service_id: int,
+    previous_ciphertext: str | None = None,
+    previous_expires: bool = False,
+) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                INSERT INTO provider_signing_secrets (
+                    account_id, ciphertext, issued_at, previous_ciphertext,
+                    previous_expires_at
+                )
+                SELECT
+                    provider_account_id, 'ciphertext', now(), :previous_ciphertext,
+                    CASE WHEN :previous_expires THEN now() + interval '1 day' END
+                FROM services WHERE id = :service_id
+                """
+            ),
+            {
+                "service_id": service_id,
+                "previous_ciphertext": previous_ciphertext,
+                "previous_expires": previous_expires,
+            },
+        )
+
+
+async def _insert_domain_token(db_engine: AsyncEngine, *, service_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO provider_domain_tokens (account_id, token) "
+                "SELECT provider_account_id, 'token' FROM services WHERE id = :service_id"
+            ),
+            {"service_id": service_id},
         )
 
 
@@ -343,18 +376,32 @@ def test_head_migration_rejects_endpoint_timeout_outside_the_cap(
         )
 
 
-def test_head_migration_rejects_non_object_provider_upstream_config(
+@pytest.mark.parametrize(
+    ("previous_ciphertext", "previous_expires"),
+    [
+        pytest.param("old", False, id="secret_without_expiry"),
+        pytest.param(None, True, id="expiry_without_secret"),
+    ],
+)
+def test_head_migration_requires_a_previous_signing_secret_and_its_expiry_together(
     clean_database: None,
     db_engine: AsyncEngine,
+    previous_ciphertext: str | None,
+    previous_expires: bool,
 ) -> None:
-    service_id = asyncio.run(_seed_service(db_engine, slug="upstream-config-check"))
-    endpoint_id = asyncio.run(
-        _insert_endpoint(db_engine, service_id=service_id, key="upstream-config-check")
-    )
+    service_id = asyncio.run(_seed_service(db_engine, slug="previous-secret-check"))
 
-    with pytest.raises(IntegrityError, match="ck_provider_upstreams_config_json_object"):
+    with pytest.raises(
+        IntegrityError,
+        match="ck_provider_signing_secrets_previous_secret_complete",
+    ):
         asyncio.run(
-            _insert_provider_upstream_config(db_engine, endpoint_id=endpoint_id, config="[1, 2]")
+            _insert_signing_secret(
+                db_engine,
+                service_id=service_id,
+                previous_ciphertext=previous_ciphertext,
+                previous_expires=previous_expires,
+            ),
         )
 
 
@@ -418,6 +465,9 @@ def test_migrations_downgrade_cleanly_with_catalogue_rows(
         _insert_endpoint(engine, service_id=service_id, key="priced", access_mode="paid")
     )
     asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
+    asyncio.run(_insert_upstream(engine, endpoint_id=endpoint_id))
+    asyncio.run(_insert_signing_secret(engine, service_id=service_id))
+    asyncio.run(_insert_domain_token(engine, service_id=service_id))
 
     try:
         command.downgrade(config, "base")

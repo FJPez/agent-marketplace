@@ -259,16 +259,9 @@ class EndpointUpstreamRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "base_url": "http://127.0.0.1:9000",
+                    "base_url": "https://provider.example.com",
                     "path": "/free-ping",
                     "http_method": "POST",
-                    "config": {
-                        "auth": {
-                            "type": "hmac_sha256",
-                            "key_id": "demo-key",
-                            "secret": "demo-secret",
-                        }
-                    },
                 }
             ]
         },
@@ -281,7 +274,6 @@ class EndpointUpstreamRequest(BaseModel):
         AfterValidator(normalize_upstream_path),
     ]
     http_method: Literal["POST", "PUT", "PATCH"]
-    config: SchemaObject = Field(default_factory=dict)
 
 
 class EndpointResponse(BaseModel):

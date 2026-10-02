@@ -4,7 +4,7 @@ import asyncio
 import os
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from eth_account import Account as EthAccount
 from sqlalchemy import select
@@ -211,23 +211,12 @@ async def _upsert_upstream(
             base_url=base_url,
             path=path,
             http_method="POST",
-            config={},
         )
         session.add(upstream)
 
     upstream.base_url = base_url
     upstream.path = path
     upstream.http_method = "POST"
-    upstream.config = cast(
-        "dict[str, object]",
-        {
-            "auth": {
-                "type": "hmac_sha256",
-                "key_id": "demo-key",
-                "secret": "demo-secret",
-            },
-        },
-    )
     await session.flush()
 
 

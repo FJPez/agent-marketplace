@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -7,12 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
-from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation, unique_violation_constraint
 from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
+from app.integrations.providers.dns import DnsResolver
+from app.integrations.providers.targets import UnsafeUpstreamTargetError, resolve_upstream_target
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
@@ -21,6 +23,10 @@ from app.schemas.service import (
 from app.services import moderation, revisions, service_access
 from app.services.moderation import ServiceUnavailableError
 from app.services.revisions import UpdateImpact
+
+# Publishing proves control of every upstream host with live DNS queries, so a service's
+# hosts are capped: that bounds the queries one publish request sends.
+MAX_UPSTREAM_HOSTS_PER_SERVICE = 10
 
 
 async def create_endpoint(
@@ -187,7 +193,7 @@ async def update_endpoint(
 async def upsert_upstream(
     *,
     session: AsyncSession,
-    settings: Settings,
+    resolver: DnsResolver,
     account_id: int,
     endpoint_id: int,
     request: EndpointUpstreamRequest,
@@ -195,8 +201,8 @@ async def upsert_upstream(
     try:
         # Resolves DNS - must run before the first query so no transaction or row
         # lock is held across the network I/O.
-        validated_base_url = validate_upstream_base_url(str(request.base_url), settings=settings)
-    except ValueError as exc:
+        target = await resolve_upstream_target(str(request.base_url), resolver=resolver)
+    except UnsafeUpstreamTargetError as exc:
         raise InvalidInputError(str(exc)) from exc
 
     await service_access.lock_owned_service_by_endpoint(
@@ -214,35 +220,63 @@ async def upsert_upstream(
     upstream = endpoint.upstream
     if (
         upstream is not None
-        and upstream.base_url == validated_base_url
+        and upstream.base_url == target.base_url
         and upstream.path == request.path
         and upstream.http_method == request.http_method
-        and upstream.config == request.config
     ):
         return
 
     if service.lifecycle is not ServiceLifecycle.DRAFT:
         raise InvalidStateError("service is not mutable outside draft")
+    await _ensure_upstream_host_capacity(
+        session=session,
+        service_id=service.id,
+        endpoint_id=endpoint.id,
+        host=target.host,
+    )
 
     now = datetime.now(UTC)
     if upstream is None:
         upstream = ProviderUpstream(
             endpoint_id=endpoint.id,
-            base_url=validated_base_url,
+            base_url=target.base_url,
             path=request.path,
             http_method=request.http_method,
-            config=request.config,
         )
         session.add(upstream)
         endpoint.upstream = upstream
     else:
-        upstream.base_url = validated_base_url
+        upstream.base_url = target.base_url
         upstream.path = request.path
         upstream.http_method = request.http_method
-        upstream.config = request.config
         upstream.updated_at = now
 
     await session.commit()
+
+
+async def _ensure_upstream_host_capacity(
+    *,
+    session: AsyncSession,
+    service_id: int,
+    endpoint_id: int,
+    host: str,
+) -> None:
+    """Reject a host that would take the service above its cap of distinct hosts."""
+    # The endpoint's own upstream is being replaced, so only the others count.
+    other_base_urls = await session.scalars(
+        select(ProviderUpstream.base_url)
+        .join(ServiceEndpoint)
+        .where(
+            ServiceEndpoint.service_id == service_id,
+            ProviderUpstream.endpoint_id != endpoint_id,
+        ),
+    )
+    hosts = {urlsplit(base_url).hostname for base_url in other_base_urls}
+    if host not in hosts and len(hosts) >= MAX_UPSTREAM_HOSTS_PER_SERVICE:
+        raise InvalidInputError(
+            f"a service's upstreams can name at most {MAX_UPSTREAM_HOSTS_PER_SERVICE} "
+            "distinct hosts; point this endpoint at one the service already uses",
+        )
 
 
 async def _ensure_endpoint_update_allowed(
