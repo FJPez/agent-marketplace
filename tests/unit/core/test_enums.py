@@ -29,14 +29,14 @@ def test_shared_enums_parse_from_strings() -> None:
 def test_shared_enums_serialize_as_values() -> None:
     model = EnumModel(
         env=AppEnv.PROD,
-        lifecycle=ServiceLifecycle.SUSPENDED,
+        lifecycle=ServiceLifecycle.DRAFT,
         access_mode=AccessMode.FREE,
         health_status=ServiceHealthStatus.ERROR,
     )
 
     assert model.model_dump(mode="json") == {
         "env": "prod",
-        "lifecycle": "suspended",
+        "lifecycle": "draft",
         "access_mode": "free",
         "health_status": "error",
     }

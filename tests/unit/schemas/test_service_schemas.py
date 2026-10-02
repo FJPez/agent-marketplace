@@ -259,6 +259,38 @@ def test_endpoint_requests_reject_timeout_seconds_outside_1_to_30(
         model.model_validate({**payload, "timeout_seconds": timeout_seconds})
 
 
+@pytest.mark.parametrize(("model", "payload"), ENDPOINT_REQUESTS)
+def test_an_invalid_request_schema_is_one_error_at_request_schema(
+    model: type[BaseModel],
+    payload: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError) as error:
+        model.model_validate({**payload, "request_schema": {"$ref": "#/$defs/text"}})
+
+    assert [(item["loc"], item["msg"]) for item in error.value.errors()] == [
+        (
+            ("request_schema",),
+            'Value error, request_schema $ref "#/$defs/text" must be a "#" fragment naming '
+            "a subschema of this schema at /$ref",
+        ),
+    ]
+
+
+def test_a_request_schema_nested_far_too_deep_is_a_single_error() -> None:
+    request_schema: dict[str, object] = {}
+    for _ in range(300):
+        request_schema = {"items": request_schema}
+
+    with pytest.raises(ValidationError) as error:
+        EndpointCreateRequest.model_validate(
+            {**VALID_ENDPOINT_CREATE, "request_schema": request_schema},
+        )
+
+    assert [(item["loc"], item["msg"]) for item in error.value.errors()] == [
+        (("request_schema",), "Value error, request_schema must nest at most 32 levels"),
+    ]
+
+
 def test_endpoint_create_request_normalizes_response_content_type() -> None:
     request = EndpointCreateRequest.model_validate(
         {**VALID_ENDPOINT_CREATE, "response_content_type": "  Text/Plain  "},

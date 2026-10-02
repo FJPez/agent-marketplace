@@ -10,7 +10,6 @@ from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.service_ref import PublicServiceRef
 from app.services import moderation
-from app.services.moderation import ServiceUnavailableError
 
 
 async def list_services(*, session: AsyncSession) -> list[Service]:
@@ -20,20 +19,13 @@ async def list_services(*, session: AsyncSession) -> list[Service]:
         .options(selectinload(Service.tags))
         .where(
             Service.lifecycle == ServiceLifecycle.ACTIVE,
+            moderation.is_clear(),
             Service.endpoints.any(ServiceEndpoint.is_enabled.is_(True)),
         )
         .order_by(desc(Service.created_at), desc(Service.id))
     )
     result = await session.scalars(statement)
-    visible_services = list(result.all())
-    if not visible_services:
-        return []
-
-    unlisted_ids = await moderation.get_unlisted_service_ids(
-        session=session,
-        service_ids=[service.id for service in visible_services],
-    )
-    return [service for service in visible_services if service.id not in unlisted_ids]
+    return list(result.all())
 
 
 async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -> Service:
@@ -44,7 +36,8 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
             selectinload(Service.tags),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.current_price),
         )
-        .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
+        # Suspended and delisted services stay indistinguishable from missing ones.
+        .where(Service.lifecycle == ServiceLifecycle.ACTIVE, moderation.is_clear())
     )
     if isinstance(service_ref, int):
         statement = statement.where(Service.id == service_ref)
@@ -54,10 +47,4 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
     service = await session.scalar(statement)
     if service is None or not any(endpoint.is_enabled for endpoint in service.endpoints):
         raise NotFoundError("service not found")
-
-    try:
-        await moderation.ensure_service_available(session=session, service_id=service.id)
-    except ServiceUnavailableError as exc:
-        # Suspended and delisted services must stay indistinguishable from missing ones publicly.
-        raise NotFoundError("service not found") from exc
     return service

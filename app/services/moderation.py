@@ -1,10 +1,15 @@
-"""Moderation state derivation and admin moderation actions for services."""
+"""Moderation state derivation and admin moderation actions for services.
+
+A service's moderation state is derived from its latest moderation action, the one
+source of truth for whether it is suspended or delisted.
+"""
 
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, ScalarSelect, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 from app.core.errors import InvalidStateError, NotFoundError
 from app.db.models import ModerationAction, Service
@@ -59,23 +64,16 @@ async def get_service_state(
     service_id: int,
 ) -> ModerationServiceState:
     """Return the state implied by the most recent moderation action."""
-    latest_action = await session.scalar(
-        select(ModerationAction.action)
-        .where(ModerationAction.service_id == service_id)
-        .order_by(ModerationAction.id.desc())
-        .limit(1),
-    )
+    latest_action = await session.scalar(select(_latest_action(service_id)))
     if latest_action is None:
         return ModerationServiceState.CLEAR
     return STATE_AFTER_ACTION[ModerationActionType(latest_action)]
 
 
-async def ensure_service_available(*, session: AsyncSession, service_id: int) -> None:
-    """Reject suspended and delisted services on public read paths."""
-    state = await get_service_state(session=session, service_id=service_id)
-    if state is ModerationServiceState.CLEAR:
-        return
-    raise ServiceUnavailableError(service_id=service_id, state=state)
+def is_clear() -> ColumnElement[bool]:
+    """SQL, in a query over services, true while no suspension or delisting is in force."""
+    restore = ModerationActionType.RESTORE.value
+    return func.coalesce(_latest_action(Service.id), restore) == restore
 
 
 async def ensure_service_publishable(*, session: AsyncSession, service_id: int) -> None:
@@ -83,30 +81,6 @@ async def ensure_service_publishable(*, session: AsyncSession, service_id: int) 
     state = await get_service_state(session=session, service_id=service_id)
     if state is ModerationServiceState.SUSPENDED:
         raise ServiceUnavailableError(service_id=service_id, state=state)
-
-
-async def get_unlisted_service_ids(
-    *,
-    session: AsyncSession,
-    service_ids: list[int],
-) -> set[int]:
-    """Return the ids whose latest moderation action leaves them hidden from the catalogue."""
-    if not service_ids:
-        return set()
-
-    latest_action_ids = (
-        select(func.max(ModerationAction.id))
-        .where(ModerationAction.service_id.in_(service_ids))
-        .group_by(ModerationAction.service_id)
-        .scalar_subquery()
-    )
-    result = await session.scalars(
-        select(ModerationAction.service_id).where(
-            ModerationAction.id.in_(latest_action_ids),
-            ModerationAction.action != ModerationActionType.RESTORE.value,
-        ),
-    )
-    return set(result)
 
 
 async def list_actions(*, session: AsyncSession, service_id: int) -> list[ModerationAction]:
@@ -200,3 +174,13 @@ async def _record_action(
     session.add(record)
     await session.commit()
     return record
+
+
+def _latest_action(service_id: int | InstrumentedAttribute[int]) -> ScalarSelect[str]:
+    return (
+        select(ModerationAction.action)
+        .where(ModerationAction.service_id == service_id)
+        .order_by(ModerationAction.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )

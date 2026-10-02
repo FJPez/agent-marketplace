@@ -93,8 +93,6 @@ async def update_service(
     if not effective_changes:
         return service
 
-    _ensure_service_update_allowed(service)
-
     # Stamped after the lock wait so the timestamp reflects when the row was
     # actually mutated.
     now = datetime.now(UTC)
@@ -136,9 +134,3 @@ async def replace_tags(
     service.updated_at = now
     await session.commit()
     return service
-
-
-def _ensure_service_update_allowed(service: Service) -> None:
-    if service.lifecycle in {ServiceLifecycle.DRAFT, ServiceLifecycle.ACTIVE}:
-        return
-    raise InvalidStateError("service is not mutable outside draft")

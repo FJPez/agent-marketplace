@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, Response, status
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
 from app.api.deps.dns import DnsResolverDep
+from app.api.deps.request_validation import RequestValidationPoolDep
 from app.api.deps.settings import SettingsDep
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -203,7 +204,7 @@ async def replace_provider_service_tags(
             "description": (
                 "`conflict`: the service's upstreams changed while publishing; publish "
                 "again. `invalid_state`: the service is not a draft (it is already "
-                "active, suspended or delisted), or moderation suspended it."
+                "active), or moderation suspended it."
             ),
         },
         422: {"description": "The service configuration is not publishable."},
@@ -239,6 +240,12 @@ async def publish_provider_service(
         404: {"description": "The parent service does not exist or is not owned by the actor."},
         409: {"description": "The endpoint cannot be created in the current service state."},
         422: {"description": "The endpoint payload was invalid."},
+        503: {
+            "description": (
+                "The request schema could not be compiled now: no worker was free, workers "
+                "cannot start, or the API is shutting down. Retry after `Retry-After`."
+            ),
+        },
     },
 )
 async def create_provider_endpoint(
@@ -277,10 +284,12 @@ async def create_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
     settings: SettingsDep,
+    validation_pool: RequestValidationPoolDep,
 ) -> EndpointResponse:
     endpoint = await provider_endpoints.create_endpoint(
         session=session,
         settings=settings,
+        validation_pool=validation_pool,
         account_id=actor.account_id,
         service_id=service_id,
         request=request,
@@ -305,6 +314,12 @@ async def create_provider_endpoint(
         404: {"description": "The requested endpoint does not exist or is not owned by the actor."},
         409: {"description": "The endpoint cannot be updated in the current state."},
         422: {"description": "The endpoint payload was invalid."},
+        503: {
+            "description": (
+                "A new request schema could not be compiled now: no worker was free, workers "
+                "cannot start, or the API is shutting down. Retry after `Retry-After`."
+            ),
+        },
     },
 )
 async def update_provider_endpoint(
@@ -327,10 +342,12 @@ async def update_provider_endpoint(
     actor: CurrentActor,
     session: SessionDep,
     settings: SettingsDep,
+    validation_pool: RequestValidationPoolDep,
 ) -> EndpointResponse:
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
         settings=settings,
+        validation_pool=validation_pool,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
         changes=request,

@@ -9,10 +9,14 @@ class AppEnv(StrEnum):
 
 
 class ServiceLifecycle(StrEnum):
+    """A service is a draft until it is published, then active.
+
+    Suspension and delisting are moderation states, derived from the service's
+    moderation actions (`app/services/moderation.py`), not lifecycle values.
+    """
+
     DRAFT = "draft"
     ACTIVE = "active"
-    SUSPENDED = "suspended"
-    DELISTED = "delisted"
 
 
 class AccessMode(StrEnum):

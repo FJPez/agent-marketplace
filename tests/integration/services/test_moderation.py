@@ -12,7 +12,7 @@ from tests.fixtures.domain import (
 )
 
 from app.core.errors import InvalidStateError, NotFoundError
-from app.db.models import ModerationAction
+from app.db.models import ModerationAction, Service
 from app.services import moderation
 from app.services.moderation import ModerationServiceState, ServiceUnavailableError
 
@@ -42,6 +42,7 @@ DERIVED_STATES = [
     (["suspend"], ModerationServiceState.SUSPENDED),
     (["delist"], ModerationServiceState.DELISTED),
     (["suspend", "restore"], ModerationServiceState.CLEAR),
+    (["delist", "restore"], ModerationServiceState.CLEAR),
     (["suspend", "delist"], ModerationServiceState.DELISTED),
     (["delist", "restore", "suspend"], ModerationServiceState.SUSPENDED),
 ]
@@ -151,7 +152,7 @@ async def test_suspending_a_missing_service_raises_not_found_and_records_nothing
 
 
 @pytest.mark.parametrize(("history", "expected_state"), DERIVED_STATES)
-async def test_get_service_state_follows_the_latest_action(
+async def test_the_moderation_state_follows_the_latest_action(
     db_session_factory: async_sessionmaker[AsyncSession],
     history: list[str],
     expected_state: ModerationServiceState,
@@ -171,11 +172,15 @@ async def test_get_service_state_follows_the_latest_action(
 
     async with db_session_factory() as session:
         state = await moderation.get_service_state(session=session, service_id=service_id)
+        is_clear = await session.scalar(
+            select(moderation.is_clear()).where(Service.id == service_id),
+        )
 
     assert state is expected_state
+    assert is_clear is (expected_state is ModerationServiceState.CLEAR)
 
 
-async def test_delisted_service_is_unavailable_but_still_publishable(
+async def test_a_delisted_service_may_still_publish(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
@@ -191,15 +196,10 @@ async def test_delisted_service_is_unavailable_but_still_publishable(
     )
 
     async with db_session_factory() as session:
-        with pytest.raises(ServiceUnavailableError) as error:
-            await moderation.ensure_service_available(session=session, service_id=service_id)
         await moderation.ensure_service_publishable(session=session, service_id=service_id)
 
-    assert error.value.service_id == service_id
-    assert error.value.state is ModerationServiceState.DELISTED
 
-
-async def test_suspended_service_is_neither_available_nor_publishable(
+async def test_a_suspended_service_may_not_publish(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
@@ -215,80 +215,11 @@ async def test_suspended_service_is_neither_available_nor_publishable(
     )
 
     async with db_session_factory() as session:
-        with pytest.raises(ServiceUnavailableError):
-            await moderation.ensure_service_available(session=session, service_id=service_id)
         with pytest.raises(ServiceUnavailableError) as error:
             await moderation.ensure_service_publishable(session=session, service_id=service_id)
 
+    assert error.value.service_id == service_id
     assert error.value.state is ModerationServiceState.SUSPENDED
-
-
-async def test_get_unlisted_service_ids_returns_only_currently_hidden_services(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    provider_account_id = await create_provider_account_record(db_session_factory)
-    clear_service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-        slug="never-moderated",
-    )
-    suspended_service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-        slug="suspended",
-    )
-    delisted_service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-        slug="delisted",
-    )
-    restored_service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=provider_account_id,
-        slug="restored",
-    )
-    await create_moderation_action_record(
-        db_session_factory,
-        service_id=suspended_service_id,
-        action="suspend",
-    )
-    await create_moderation_action_record(
-        db_session_factory,
-        service_id=delisted_service_id,
-        action="delist",
-    )
-    await create_moderation_action_record(
-        db_session_factory,
-        service_id=restored_service_id,
-        action="suspend",
-    )
-    await create_moderation_action_record(
-        db_session_factory,
-        service_id=restored_service_id,
-        action="restore",
-    )
-
-    async with db_session_factory() as session:
-        unlisted_ids = await moderation.get_unlisted_service_ids(
-            session=session,
-            service_ids=[
-                clear_service_id,
-                suspended_service_id,
-                delisted_service_id,
-                restored_service_id,
-            ],
-        )
-
-    assert unlisted_ids == {suspended_service_id, delisted_service_id}
-
-
-async def test_get_unlisted_service_ids_returns_empty_for_no_service_ids(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    async with db_session_factory() as session:
-        unlisted_ids = await moderation.get_unlisted_service_ids(session=session, service_ids=[])
-
-    assert unlisted_ids == set()
 
 
 async def test_list_actions_returns_the_service_history_oldest_first(

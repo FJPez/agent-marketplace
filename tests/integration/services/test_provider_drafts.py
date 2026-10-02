@@ -320,51 +320,6 @@ async def test_update_service_treats_normalized_identical_value_as_no_op(
     assert persisted.updated_at == before_updated_at
 
 
-async def test_update_service_no_op_on_suspended_service_returns_service(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        name="Suspended Name",
-        lifecycle=ServiceLifecycle.SUSPENDED,
-    )
-
-    async with db_session_factory() as session:
-        service = await update_service(
-            session=session,
-            account_id=account_id,
-            service_id=service_id,
-            changes=ServiceUpdateRequest(name="Suspended Name"),
-        )
-
-    assert service.id == service_id
-    assert service.name == "Suspended Name"
-
-
-async def test_update_service_suspended_lifecycle_raises_invalid_state(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.SUSPENDED,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidStateError):
-            await update_service(
-                session=session,
-                account_id=account_id,
-                service_id=service_id,
-                changes=ServiceUpdateRequest(name="New Name"),
-            )
-
-
 async def test_replace_tags_persists_normalized_sorted_tags(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

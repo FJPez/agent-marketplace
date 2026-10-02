@@ -14,6 +14,7 @@ import coredis
 import dns.asyncresolver
 
 from app.core.rate_limits_backend import RateLimitsBackend, create_rate_limits_backend
+from app.core.request_validation import ProcessRequestValidationPool
 from app.db.session import create_engine, create_session_factory
 from app.integrations.providers.dns import DnsPythonResolver, DnsResolver
 
@@ -34,6 +35,7 @@ class Resources:
     redis_client: Redis[str] | None
     rate_limits_backend: RateLimitsBackend
     dns_resolver: DnsResolver
+    request_validation_pool: ProcessRequestValidationPool
 
 
 @asynccontextmanager
@@ -58,6 +60,15 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
         system_resolver = dns.asyncresolver.Resolver()
         system_resolver.lifetime = 5.0
 
+        # Its worker processes start on first use, so a process that validates no request
+        # body never starts them.
+        request_validation_pool = ProcessRequestValidationPool(
+            workers=settings.request_validation_workers,
+            timeout_seconds=settings.request_validation_timeout_ms / 1000,
+            compile_timeout_seconds=settings.request_schema_compile_timeout_ms / 1000,
+        )
+        stack.push_async_callback(request_validation_pool.close)
+
         yield Resources(
             settings=settings,
             db_engine=db_engine,
@@ -65,4 +76,5 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             redis_client=redis_client,
             rate_limits_backend=create_rate_limits_backend(settings),
             dns_resolver=DnsPythonResolver(system_resolver),
+            request_validation_pool=request_validation_pool,
         )

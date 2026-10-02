@@ -1,4 +1,5 @@
 import asyncio
+import re
 
 import pytest
 from alembic import command
@@ -182,7 +183,7 @@ async def _insert_upstream(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
         )
 
 
-async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
+async def _seed_service(db_engine: AsyncEngine, *, slug: str, lifecycle: str = "draft") -> int:
     async with db_engine.begin() as connection:
         account_id = (
             await connection.execute(
@@ -205,12 +206,12 @@ async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
                         :slug,
                         'Migration Check Service',
                         'Migration check summary',
-                        'draft'
+                        :lifecycle
                     )
                     RETURNING id
                     """
                 ),
-                {"provider_account_id": account_id, "slug": slug},
+                {"provider_account_id": account_id, "slug": slug, "lifecycle": lifecycle},
             )
         ).scalar_one()
 
@@ -308,6 +309,13 @@ async def _read_health_check_service_ids(db_engine: AsyncEngine) -> list[int]:
         return [row[0] for row in result]
 
 
+async def _read_revision(db_engine: AsyncEngine) -> str:
+    async with db_engine.connect() as connection:
+        return (
+            await connection.execute(text("SELECT version_num FROM alembic_version"))
+        ).scalar_one()
+
+
 def test_head_migration_rejects_health_check_for_unknown_service(
     clean_database: None,
     db_engine: AsyncEngine,
@@ -403,6 +411,16 @@ def test_head_migration_requires_a_previous_signing_secret_and_its_expiry_togeth
                 previous_expires=previous_expires,
             ),
         )
+
+
+@pytest.mark.parametrize("lifecycle", ["suspended", "delisted"])
+def test_head_migration_rejects_the_retired_lifecycle_values(
+    clean_database: None,
+    db_engine: AsyncEngine,
+    lifecycle: str,
+) -> None:
+    with pytest.raises(DBAPIError):
+        asyncio.run(_seed_service(db_engine, slug="retired-lifecycle", lifecycle=lifecycle))
 
 
 def test_head_migration_rejects_non_object_service_revision_snapshot(
@@ -547,6 +565,79 @@ def test_dropping_endpoint_prices_refuses_to_discard_stored_cent_prices(
 
         with pytest.raises(DBAPIError, match="reset the local database"):
             command.upgrade(config, "head")
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+
+
+def test_request_schema_check_refuses_stored_schemas_the_invoke_path_cannot_compile(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "provider_domain_tokens_0007")
+    try:
+        service_id = asyncio.run(_seed_service(engine, slug="stored-schemas"))
+        asyncio.run(
+            _insert_endpoint(
+                engine,
+                service_id=service_id,
+                key="compilable",
+                request_schema='{"type": "object"}',
+            )
+        )
+        remote_ref_id = asyncio.run(
+            _insert_endpoint(
+                engine,
+                service_id=service_id,
+                key="remote-ref",
+                request_schema='{"$ref": "https://schemas.example.com/input.json"}',
+            )
+        )
+        oversized_pattern_id = asyncio.run(
+            _insert_endpoint(
+                engine,
+                service_id=service_id,
+                key="oversized-pattern",
+                request_schema='{"pattern": "((a{50}){50}){50}x"}',
+            )
+        )
+
+        with pytest.raises(
+            RuntimeError,
+            match=(
+                rf"service endpoints \[{remote_ref_id}, {oversized_pattern_id}\] have request "
+                "schemas"
+            ),
+        ):
+            command.upgrade(config, "head")
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+
+
+def test_narrowing_the_lifecycle_refuses_a_stored_retired_value(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "request_schemas_0008")
+    try:
+        asyncio.run(_seed_service(engine, slug="retired-lifecycle", lifecycle="suspended"))
+
+        with pytest.raises(
+            DBAPIError,
+            match=re.escape(
+                "services holds the retired lifecycle values suspended or delisted, which "
+                "only moderation actions record now; reset the local database "
+                "(README, Resetting a Local Database)"
+            ),
+        ):
+            command.upgrade(config, "head")
+
+        assert asyncio.run(_read_revision(engine)) == "request_schemas_0008"
     finally:
         command.downgrade(config, "base")
         command.upgrade(config, "head")
