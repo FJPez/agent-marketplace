@@ -42,7 +42,7 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
         select(Service)
         .options(
             selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.current_price),
         )
         .where(Service.lifecycle == ServiceLifecycle.ACTIVE)
     )

@@ -3,7 +3,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.enums import AccessMode
 from app.core.service_fields import SERVICE_TAGS_MAX_COUNT
-from app.schemas.pricing import FixedPrice
+from app.schemas.pricing import ListingPriceRequest
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
@@ -26,6 +26,12 @@ VALID_ENDPOINT_CREATE = {
     "response_schema": {"type": "object"},
     "timeout_seconds": 30,
 }
+# The endpoint request models, each with a payload that is valid without the field
+# under test.
+ENDPOINT_REQUESTS = [
+    (EndpointCreateRequest, VALID_ENDPOINT_CREATE),
+    (EndpointUpdateRequest, {}),
+]
 VALID_UPSTREAM = {
     "base_url": "http://127.0.0.1:9000",
     "path": "/translate",
@@ -84,7 +90,16 @@ def test_endpoint_update_request_rejects_unknown_field() -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["name", "access_mode", "request_schema", "response_schema", "timeout_seconds", "is_enabled"],
+    [
+        "name",
+        "access_mode",
+        "request_schema",
+        "response_schema",
+        "response_content_type",
+        "timeout_seconds",
+        "supports_idempotency",
+        "is_enabled",
+    ],
 )
 def test_endpoint_update_request_rejects_explicit_null(field: str) -> None:
     with pytest.raises(ValidationError) as error:
@@ -95,7 +110,7 @@ def test_endpoint_update_request_rejects_explicit_null(field: str) -> None:
     assert "cannot be null" in first_error["msg"]
 
 
-@pytest.mark.parametrize("field", ["summary", "description", "pricing"])
+@pytest.mark.parametrize("field", ["summary", "description", "price"])
 def test_endpoint_update_request_accepts_explicit_null_for_clearable_field(field: str) -> None:
     request = EndpointUpdateRequest.model_validate({field: None})
 
@@ -104,7 +119,7 @@ def test_endpoint_update_request_accepts_explicit_null_for_clearable_field(field
 
 
 def test_endpoint_update_request_omits_unsent_fields_from_fields_set() -> None:
-    request = EndpointUpdateRequest.model_validate({"timeout_seconds": 45})
+    request = EndpointUpdateRequest.model_validate({"timeout_seconds": 20})
 
     assert request.model_fields_set == {"timeout_seconds"}
     assert request.name is None
@@ -208,9 +223,62 @@ def test_endpoint_create_request_rejects_non_strict_timeout_seconds(
         )
 
 
-def test_endpoint_create_request_rejects_integer_is_enabled() -> None:
+@pytest.mark.parametrize("field", ["is_enabled", "supports_idempotency"])
+def test_endpoint_create_request_rejects_integer_flags(field: str) -> None:
     with pytest.raises(ValidationError):
-        EndpointCreateRequest.model_validate({**VALID_ENDPOINT_CREATE, "is_enabled": 1})
+        EndpointCreateRequest.model_validate({**VALID_ENDPOINT_CREATE, field: 1})
+
+
+def test_endpoint_create_request_defaults_invocation_fields() -> None:
+    request = EndpointCreateRequest.model_validate(VALID_ENDPOINT_CREATE)
+
+    assert request.supports_idempotency is False
+    assert request.response_content_type == "application/json"
+
+
+@pytest.mark.parametrize(("model", "payload"), ENDPOINT_REQUESTS)
+@pytest.mark.parametrize("timeout_seconds", [1, 30])
+def test_endpoint_requests_accept_timeout_seconds_up_to_30(
+    model: type[BaseModel],
+    payload: dict[str, object],
+    timeout_seconds: int,
+) -> None:
+    request = model.model_validate({**payload, "timeout_seconds": timeout_seconds})
+
+    assert request.model_dump()["timeout_seconds"] == timeout_seconds
+
+
+@pytest.mark.parametrize(("model", "payload"), ENDPOINT_REQUESTS)
+@pytest.mark.parametrize("timeout_seconds", [0, 31])
+def test_endpoint_requests_reject_timeout_seconds_outside_1_to_30(
+    model: type[BaseModel],
+    payload: dict[str, object],
+    timeout_seconds: int,
+) -> None:
+    with pytest.raises(ValidationError, match="timeout_seconds"):
+        model.model_validate({**payload, "timeout_seconds": timeout_seconds})
+
+
+def test_endpoint_create_request_normalizes_response_content_type() -> None:
+    request = EndpointCreateRequest.model_validate(
+        {**VALID_ENDPOINT_CREATE, "response_content_type": "  Text/Plain  "},
+    )
+
+    assert request.response_content_type == "text/plain"
+
+
+@pytest.mark.parametrize(
+    "response_content_type",
+    ["application/json; charset=utf-8", "json", "text/*", "a/b/c", "", "x/" + "y" * 128],
+    ids=["parameters", "no_subtype", "wildcard", "two_slashes", "empty", "subtype_too_long"],
+)
+def test_endpoint_create_request_rejects_invalid_response_content_type(
+    response_content_type: str,
+) -> None:
+    with pytest.raises(ValidationError, match="must be a media type"):
+        EndpointCreateRequest.model_validate(
+            {**VALID_ENDPOINT_CREATE, "response_content_type": response_content_type},
+        )
 
 
 def test_endpoint_create_request_rejects_price_on_free_endpoint() -> None:
@@ -222,7 +290,7 @@ def test_endpoint_create_request_rejects_price_on_free_endpoint() -> None:
             request_schema={"type": "object"},
             response_schema={"type": "object"},
             timeout_seconds=30,
-            pricing=FixedPrice(amount_minor=100, currency="USD"),
+            price=ListingPriceRequest(amount=10_000),
         )
 
 
@@ -234,10 +302,10 @@ def test_endpoint_create_request_allows_price_on_paid_endpoint() -> None:
         request_schema={"type": "object"},
         response_schema={"type": "object"},
         timeout_seconds=30,
-        pricing=FixedPrice(amount_minor=100, currency="USD"),
+        price=ListingPriceRequest(amount=10_000),
     )
 
-    assert request.pricing == FixedPrice(amount_minor=100, currency="USD")
+    assert request.price == ListingPriceRequest(amount=10_000)
 
 
 @pytest.mark.parametrize("http_method", ["POST", "PUT", "PATCH"])

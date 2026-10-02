@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,12 +8,11 @@ from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
 from app.core.upstream_targets import validate_upstream_base_url
-from app.db.errors import is_unique_violation
-from app.db.models.endpoint_price import EndpointPrice
+from app.db.errors import is_unique_violation, unique_violation_constraint
+from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
-from app.schemas.pricing import FixedPrice
 from app.schemas.service import (
     EndpointCreateRequest,
     EndpointUpdateRequest,
@@ -26,10 +26,16 @@ from app.services.revisions import UpdateImpact
 async def create_endpoint(
     *,
     session: AsyncSession,
+    settings: Settings,
     account_id: int,
     service_id: int,
     request: EndpointCreateRequest,
 ) -> ServiceEndpoint:
+    new_price = (
+        None
+        if request.price is None
+        else build_price_version(settings=settings, amount=request.price.amount)
+    )
     service = await service_access.lock_owned_service(
         session=session,
         account_id=account_id,
@@ -47,35 +53,31 @@ async def create_endpoint(
         access_mode=request.access_mode,
         request_schema=request.request_schema,
         response_schema=request.response_schema,
+        response_content_type=request.response_content_type,
         timeout_seconds=request.timeout_seconds,
+        supports_idempotency=request.supports_idempotency,
         is_enabled=request.is_enabled,
-        price=None,
+        current_price=None,
         upstream=None,
     )
     session.add(endpoint)
     try:
         await session.flush()
-        if request.pricing is not None:
-            pricing_row = EndpointPrice(
-                endpoint_id=endpoint.id,
-                amount_minor=request.pricing.amount_minor,
-                currency=request.pricing.currency,
-            )
-            session.add(pricing_row)
-            endpoint.price = pricing_row
-        await session.commit()
     except IntegrityError as exc:
         await session.rollback()
         if not is_unique_violation(exc):
             raise
         raise ConflictError("endpoint key already exists for this service") from exc
-
+    if new_price is not None:
+        await put_price_on_sale(session=session, endpoint=endpoint, price=new_price)
+    await session.commit()
     return endpoint
 
 
 async def update_endpoint(
     *,
     session: AsyncSession,
+    settings: Settings,
     account_id: int,
     endpoint_id: int,
     changes: EndpointUpdateRequest,
@@ -97,50 +99,45 @@ async def update_endpoint(
     target_access_mode = (
         changes.access_mode if changes.access_mode is not None else endpoint.access_mode
     )
-    price_specified = "pricing" in changes.model_fields_set
-
-    if target_access_mode is AccessMode.FREE and price_specified and changes.pricing is not None:
+    if target_access_mode is AccessMode.FREE and changes.price is not None:
         raise InvalidInputError("free endpoints cannot have a price")
 
     # Effective changes: supplied values that differ from the stored ones. They
     # drive no-op detection, the mutability gate, and revision classification,
-    # so resending current values is not a change at all. Pricing lives in its
-    # own table and is never assigned by setattr, so it is tracked separately.
-    supplied = changes.model_dump(exclude_unset=True, exclude={"pricing"})
+    # so resending current values is not a change at all. The price lives in
+    # its own table and is never assigned by setattr, so it is tracked separately.
+    supplied = changes.model_dump(exclude_unset=True, exclude={"price"})
     column_changes = {
         name: value for name, value in supplied.items() if value != getattr(endpoint, name)
     }
 
-    current_price = endpoint.price
-    resulting_price: FixedPrice | None = None
-    pricing_changed = False
-    if price_specified:
-        resulting_price = changes.pricing
-        pricing_changed = True
-    elif target_access_mode is AccessMode.FREE and current_price is not None:
-        # Switching to FREE drops the row even though pricing was omitted.
-        pricing_changed = True
-    if pricing_changed and current_price is not None and resulting_price is not None:
-        pricing_changed = (current_price.amount_minor, current_price.currency) != (
-            resulting_price.amount_minor,
-            resulting_price.currency,
-        )
-    elif pricing_changed:
-        pricing_changed = (current_price is None) != (resulting_price is None)
+    current_price = endpoint.current_price
+    current_amount = None if current_price is None else current_price.amount
+    price_supplied = "price" in changes.model_fields_set
+    if target_access_mode is AccessMode.FREE:
+        # Switching to FREE drops the current price even when price was omitted.
+        resulting_amount = None
+    elif price_supplied:
+        resulting_amount = None if changes.price is None else changes.price.amount
+    else:
+        resulting_amount = current_amount
+    # Resending the current amount moves the listing onto the payment terms in
+    # force when they have changed since its version was created. Without a
+    # treasury no version can be created, so the resend stays a no-op; omitting
+    # the price never re-stamps it.
+    price_changed = resulting_amount != current_amount or (
+        price_supplied
+        and current_price is not None
+        and settings.treasury_address is not None
+        and not is_on_current_terms(current_price, settings=settings)
+    )
 
     effective_changes: dict[str, object] = dict(column_changes)
-    if pricing_changed:
-        effective_changes["pricing"] = resulting_price
+    if price_changed:
+        effective_changes["price"] = resulting_amount
 
     if not effective_changes:
         return endpoint
-
-    if target_access_mode is AccessMode.FREE:
-        has_resulting_price = False
-    elif pricing_changed:
-        has_resulting_price = resulting_price is not None
-    else:
-        has_resulting_price = current_price is not None
 
     impact = revisions.classify_endpoint_update(effective_changes)
     await _ensure_endpoint_update_allowed(
@@ -152,35 +149,25 @@ async def update_endpoint(
     _ensure_active_paid_endpoint_priced(
         lifecycle=service.lifecycle,
         access_mode=target_access_mode,
-        has_price=has_resulting_price,
+        has_price=resulting_amount is not None,
     )
-
-    # Stamped after the lock wait so the timestamp reflects when the row was
-    # actually mutated.
-    now = datetime.now(UTC)
+    new_price = (
+        None
+        if not price_changed or resulting_amount is None
+        else build_price_version(settings=settings, amount=resulting_amount)
+    )
 
     for attribute_name, value in column_changes.items():
         setattr(endpoint, attribute_name, value)
-    endpoint.updated_at = now
+    # Stamped after the lock wait so the timestamp reflects when the row was
+    # actually mutated.
+    endpoint.updated_at = datetime.now(UTC)
 
-    if pricing_changed:
-        existing_price = endpoint.price
-        if resulting_price is None:
-            if existing_price is not None:
-                endpoint.price = None
-                await session.delete(existing_price)
-        elif existing_price is None:
-            pricing_row = EndpointPrice(
-                endpoint_id=endpoint.id,
-                amount_minor=resulting_price.amount_minor,
-                currency=resulting_price.currency,
-            )
-            session.add(pricing_row)
-            endpoint.price = pricing_row
-        else:
-            existing_price.amount_minor = resulting_price.amount_minor
-            existing_price.currency = resulting_price.currency
-            existing_price.updated_at = now
+    if new_price is not None:
+        await put_price_on_sale(session=session, endpoint=endpoint, price=new_price)
+    elif price_changed:
+        # Earlier versions stay: purchases and revisions still refer to them.
+        endpoint.current_price = None
 
     if service.lifecycle is ServiceLifecycle.ACTIVE and impact is UpdateImpact.MATERIAL:
         # The contract snapshot covers every endpoint and its price, so the full
@@ -275,6 +262,75 @@ async def _ensure_endpoint_update_allowed(
             raise InvalidStateError(f"service is {exc.state.value}") from exc
         return
     raise InvalidStateError("service is not mutable outside draft")
+
+
+def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
+    """Check a provider's amount and build its price version on the current terms.
+
+    The version is not added to the session: `put_price_on_sale` numbers it and
+    attaches it to its endpoint once every other check has passed.
+    """
+    if amount < settings.min_price_amount:
+        raise InvalidInputError(
+            f"price amount must be at least {settings.min_price_amount} atomic units "
+            "of the payment asset",
+        )
+    if settings.treasury_address is None:
+        raise InvalidStateError(
+            "paid prices are unavailable until APP_TREASURY_ADDRESS is configured",
+        )
+    return ListingPrice(amount=amount, **_current_payment_terms(settings))
+
+
+def is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
+    """Whether `price` carries the payment terms a version created now would.
+
+    The amount is not compared. Without a treasury no version can be created, so
+    no version is on the current terms.
+    """
+    return all(
+        getattr(price, term) == value for term, value in _current_payment_terms(settings).items()
+    )
+
+
+def _current_payment_terms(settings: Settings) -> dict[str, str | int | None]:
+    """The payment terms a new price version copies from the settings."""
+    return {
+        "asset": settings.payment_asset,
+        "network": settings.payment_network,
+        "pay_to": settings.treasury_address,
+        "max_timeout_seconds": settings.payment_max_timeout_seconds,
+        "fee_bps": settings.platform_fee_bps,
+    }
+
+
+async def put_price_on_sale(
+    *,
+    session: AsyncSession,
+    endpoint: ServiceEndpoint,
+    price: ListingPrice,
+) -> None:
+    """Store `price` as the endpoint's next version and make it the current price.
+
+    The editing services hold the service row lock, so max + 1 is normally free;
+    the unique (endpoint_id, version) key turns a writer without it (the demo
+    seed) into a conflict instead of a silently reused version number. On any
+    integrity error it rolls back the caller's whole transaction before raising.
+    """
+    latest_version = await session.scalar(
+        select(func.max(ListingPrice.version)).where(ListingPrice.endpoint_id == endpoint.id),
+    )
+    price.endpoint_id = endpoint.id
+    price.version = (latest_version or 0) + 1
+    # Assigning the relationship of an endpoint in the session adds the version.
+    endpoint.current_price = price
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        if unique_violation_constraint(exc) != LISTING_PRICE_VERSION_CONSTRAINT:
+            raise
+        raise ConflictError("the endpoint's price changed concurrently; retry") from exc
 
 
 def _ensure_active_paid_endpoint_priced(

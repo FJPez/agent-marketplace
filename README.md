@@ -133,13 +133,21 @@ required on a staging deploy before production relies on
 ## Resetting a Local Database
 
 The migration history was squashed into a single baseline on 2026-09-26. A
-database created before then cannot be upgraded; drop and recreate it:
+database created before then cannot be upgraded. The migration that replaces the
+USD-cent `endpoint_prices` with `listing_prices` refuses to run while
+`endpoint_prices` still holds rows (for example from an earlier `make seed`),
+because a cent price has no asset, network or treasury to become a price version.
+In either case, drop and recreate the database:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"
 docker compose exec -T postgres psql -U postgres -c "CREATE DATABASE agent_marketplace"
 uv run alembic upgrade head
 ```
+
+To reload the demo data, set `APP_TREASURY_ADDRESS` (the paid demo endpoint's
+`pay_to`, in `.env` or the environment) and export `PROVIDER_PRIVATE_KEY` (the
+demo provider's wallet key), then run `make seed` again.
 
 ## Admin Bootstrap
 
@@ -161,4 +169,14 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `X-Request-ID` is kept only if it is 1 to 128 letters, digits, `.`, `_`, `:`
   or `-`; otherwise the API generates one.
 - Staging and production require a non-local `APP_DATABASE_URL`,
-  `APP_REDIS_URL` and an explicit `APP_SIWE_DOMAIN`.
+  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN` and `APP_TREASURY_ADDRESS`.
+- Each new price version records the payment terms current when it is created:
+  the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
+  paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base
+  Sepolia), `APP_PAYMENT_ASSET` (default Base Sepolia USDC,
+  `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), `APP_PAYMENT_MAX_TIMEOUT_SECONDS`
+  (default 120, at most 3600) and `APP_PLATFORM_FEE_BPS` (default 1000, 10%).
+  Prices are in atomic units of the asset (1 USDC = 1,000,000) and must be at
+  least `APP_MIN_PRICE_AMOUNT` (default 10000, 0.01 USDC). Changing a setting
+  affects only price versions created afterwards; a provider moves a listing onto
+  the current terms by resending its price, which creates a new version.

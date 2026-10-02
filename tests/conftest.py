@@ -39,9 +39,11 @@ from app.core.config import Settings, get_settings
 from app.db.session import create_session_factory
 from app.main import create_app
 
+# settings first: the domain factories import its test constants, and a module
+# imported before pytest registers it as a plugin cannot be assertion-rewritten.
 pytest_plugins = (
-    "tests.fixtures.domain",
     "tests.fixtures.settings",
+    "tests.fixtures.domain",
 )
 
 

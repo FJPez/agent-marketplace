@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from sqlalchemy import MetaData
 from sqlalchemy.orm import DeclarativeBase
 
@@ -12,3 +14,12 @@ NAMING_CONVENTION = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
+
+
+def utc_now() -> datetime:
+    """Return the current time with its UTC zone, for Python-side column defaults.
+
+    A bare datetime.now() is naive: PostgreSQL still stores the right instant, but
+    the ORM keeps the naive value in memory, which API responses then reject.
+    """
+    return datetime.now(UTC)

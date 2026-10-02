@@ -1,9 +1,10 @@
 import pytest
+from tests.fixtures.settings import TEST_PRICE_TERMS
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
 from app.core.json_types import JsonObject
-from app.db.models.endpoint_price import EndpointPrice
+from app.db.models.listing_price import ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -29,7 +30,7 @@ def _build_endpoint(
     access_mode: AccessMode = AccessMode.FREE,
     is_enabled: bool = True,
     with_upstream: bool = True,
-    price: EndpointPrice | None = None,
+    price: ListingPrice | None = None,
 ) -> ServiceEndpoint:
     endpoint = ServiceEndpoint(
         service_id=1,
@@ -57,16 +58,8 @@ def _build_endpoint(
                 },
             },
         )
-    endpoint.price = price
+    endpoint.current_price = price
     return endpoint
-
-
-def _build_fixed_price() -> EndpointPrice:
-    return EndpointPrice(
-        endpoint_id=1,
-        amount_minor=500,
-        currency="USD",
-    )
 
 
 def test_validate_service_for_publish_rejects_service_without_endpoints() -> None:
@@ -99,12 +92,12 @@ def test_validate_service_for_publish_rejects_paid_endpoint_without_price() -> N
         validate_service_for_publish(service)
 
 
-def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_fixed_price() -> None:
+def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price() -> None:
     service = _build_service(
         endpoints=[
             _build_endpoint(
                 access_mode=AccessMode.PAID,
-                price=_build_fixed_price(),
+                price=ListingPrice(endpoint_id=1, version=1, amount=10_000, **TEST_PRICE_TERMS),
             ),
         ],
     )

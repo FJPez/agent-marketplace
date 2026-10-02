@@ -4,7 +4,7 @@ import pytest
 from alembic import command
 from sqlalchemy import inspect, text
 from sqlalchemy.engine.interfaces import ReflectedIndex
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 from tests.integration.db.support import MigrationDatabase
 
@@ -12,7 +12,7 @@ ALEMBIC_VERSION_TABLE = "alembic_version"
 DOMAIN_TABLES = {
     "accounts",
     "api_keys",
-    "endpoint_prices",
+    "listing_prices",
     "moderation_actions",
     "provider_upstreams",
     "service_endpoints",
@@ -135,8 +135,10 @@ async def _insert_endpoint(
     *,
     service_id: int,
     key: str,
+    access_mode: str = "free",
     request_schema: str = "{}",
     response_schema: str = "{}",
+    timeout_seconds: int = 30,
 ) -> int:
     async with db_engine.begin() as connection:
         return (
@@ -148,8 +150,9 @@ async def _insert_endpoint(
                         request_schema, response_schema, timeout_seconds
                     )
                     VALUES (
-                        :service_id, :key, 'Check Endpoint', 'free',
-                        CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb), 30
+                        :service_id, :key, 'Check Endpoint', :access_mode,
+                        CAST(:request_schema AS jsonb), CAST(:response_schema AS jsonb),
+                        :timeout_seconds
                     )
                     RETURNING id
                     """
@@ -157,8 +160,10 @@ async def _insert_endpoint(
                 {
                     "service_id": service_id,
                     "key": key,
+                    "access_mode": access_mode,
                     "request_schema": request_schema,
                     "response_schema": response_schema,
+                    "timeout_seconds": timeout_seconds,
                 },
             )
         ).scalar_one()
@@ -215,6 +220,30 @@ async def _seed_service(db_engine: AsyncEngine, *, slug: str) -> int:
                 {"provider_account_id": account_id, "slug": slug},
             )
         ).scalar_one()
+
+
+async def _insert_current_listing_price(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                """
+                WITH price AS (
+                    INSERT INTO listing_prices (
+                        endpoint_id, version, amount, asset, network, pay_to,
+                        max_timeout_seconds, fee_bps
+                    )
+                    VALUES (
+                        :endpoint_id, 1, 10000, '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+                        'eip155:84532', '0x1111111111111111111111111111111111111111', 120, 1000
+                    )
+                    RETURNING id
+                )
+                UPDATE service_endpoints SET current_price_id = (SELECT id FROM price)
+                WHERE id = :endpoint_id
+                """
+            ),
+            {"endpoint_id": endpoint_id},
+        )
 
 
 async def _insert_health_check(db_engine: AsyncEngine, *, service_id: int) -> None:
@@ -295,6 +324,25 @@ def test_head_migration_rejects_non_object_service_endpoint_schema(
         )
 
 
+@pytest.mark.parametrize("timeout_seconds", [0, 31])
+def test_head_migration_rejects_endpoint_timeout_outside_the_cap(
+    clean_database: None,
+    db_engine: AsyncEngine,
+    timeout_seconds: int,
+) -> None:
+    service_id = asyncio.run(_seed_service(db_engine, slug="timeout-cap-check"))
+
+    with pytest.raises(IntegrityError, match="ck_service_endpoints_timeout_seconds_range"):
+        asyncio.run(
+            _insert_endpoint(
+                db_engine,
+                service_id=service_id,
+                key="timeout-cap-check",
+                timeout_seconds=timeout_seconds,
+            )
+        )
+
+
 def test_head_migration_rejects_non_object_provider_upstream_config(
     clean_database: None,
     db_engine: AsyncEngine,
@@ -356,7 +404,7 @@ async def _set_current_revision(
         )
 
 
-def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
+def test_migrations_downgrade_cleanly_with_catalogue_rows(
     migration_database: MigrationDatabase,
 ) -> None:
     config = migration_database.config
@@ -366,10 +414,89 @@ def test_baseline_migration_downgrades_cleanly_with_catalogue_rows(
     asyncio.run(_insert_health_check(engine, service_id=service_id))
     revision_id = asyncio.run(_insert_service_revision(engine, service_id=service_id))
     asyncio.run(_set_current_revision(engine, service_id=service_id, revision_id=revision_id))
+    endpoint_id = asyncio.run(
+        _insert_endpoint(engine, service_id=service_id, key="priced", access_mode="paid")
+    )
+    asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
 
     try:
         command.downgrade(config, "base")
 
         assert asyncio.run(get_table_names(engine)) <= {ALEMBIC_VERSION_TABLE}
     finally:
+        command.upgrade(config, "head")
+
+
+async def _read_endpoint_invocation_fields(
+    db_engine: AsyncEngine,
+    *,
+    endpoint_id: int,
+) -> tuple[int, bool, str]:
+    async with db_engine.connect() as connection:
+        row = (
+            await connection.execute(
+                text(
+                    "SELECT timeout_seconds, supports_idempotency, response_content_type "
+                    "FROM service_endpoints WHERE id = :endpoint_id"
+                ),
+                {"endpoint_id": endpoint_id},
+            )
+        ).one()
+    return row.timeout_seconds, row.supports_idempotency, row.response_content_type
+
+
+def test_endpoint_fields_migration_caps_existing_timeouts_and_fills_defaults(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "baseline_0001")
+    try:
+        service_id = asyncio.run(_seed_service(engine, slug="timeout-cap-upgrade"))
+        endpoint_id = asyncio.run(
+            _insert_endpoint(engine, service_id=service_id, key="slow", timeout_seconds=3600)
+        )
+
+        command.upgrade(config, "endpoint_fields_0002")
+
+        assert asyncio.run(_read_endpoint_invocation_fields(engine, endpoint_id=endpoint_id)) == (
+            30,
+            False,
+            "application/json",
+        )
+    finally:
+        command.downgrade(config, "base")
+        command.upgrade(config, "head")
+
+
+async def _insert_cent_price(db_engine: AsyncEngine, *, endpoint_id: int) -> None:
+    async with db_engine.begin() as connection:
+        await connection.execute(
+            text(
+                "INSERT INTO endpoint_prices (endpoint_id, amount_minor, currency) "
+                "VALUES (:endpoint_id, 25, 'USD')"
+            ),
+            {"endpoint_id": endpoint_id},
+        )
+
+
+def test_dropping_endpoint_prices_refuses_to_discard_stored_cent_prices(
+    migration_database: MigrationDatabase,
+) -> None:
+    config = migration_database.config
+    engine = migration_database.engine
+    command.downgrade(config, "base")
+    command.upgrade(config, "listing_prices_0003")
+    try:
+        service_id = asyncio.run(_seed_service(engine, slug="cent-prices"))
+        endpoint_id = asyncio.run(
+            _insert_endpoint(engine, service_id=service_id, key="paid", access_mode="paid")
+        )
+        asyncio.run(_insert_cent_price(engine, endpoint_id=endpoint_id))
+
+        with pytest.raises(DBAPIError, match="reset the local database"):
+            command.upgrade(config, "head")
+    finally:
+        command.downgrade(config, "base")
         command.upgrade(config, "head")

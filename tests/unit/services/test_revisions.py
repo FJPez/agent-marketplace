@@ -1,5 +1,8 @@
+import pytest
+from tests.fixtures.settings import TEST_PRICE_TERMS
+
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.db.models.endpoint_price import EndpointPrice
+from app.db.models.listing_price import ListingPrice
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.services.revisions import (
@@ -29,7 +32,9 @@ def _service() -> Service:
         access_mode=AccessMode.FREE,
         request_schema={"type": "object", "properties": {"text": {"type": "string"}}},
         response_schema={"type": "object", "properties": {"translated": {"type": "string"}}},
+        response_content_type="application/json",
         timeout_seconds=30,
+        supports_idempotency=False,
         is_enabled=True,
     )
     second_endpoint = ServiceEndpoint(
@@ -42,32 +47,28 @@ def _service() -> Service:
         access_mode=AccessMode.PAID,
         request_schema={"type": "object", "properties": {"text": {"type": "string"}}},
         response_schema={"type": "object", "properties": {"language": {"type": "string"}}},
+        response_content_type="text/plain",
         timeout_seconds=15,
+        supports_idempotency=True,
         is_enabled=False,
     )
-    second_endpoint.price = EndpointPrice(
+    second_endpoint.current_price = ListingPrice(
+        id=301,
         endpoint_id=second_endpoint.id,
-        amount_minor=2500,
-        currency="USD",
+        version=2,
+        amount=25_000,
+        **TEST_PRICE_TERMS,
     )
     service.endpoints = [second_endpoint, first_endpoint]
     return service
 
 
-def test_classify_endpoint_update_marks_contract_fields_as_material() -> None:
-    impact = classify_endpoint_update(
-        {"request_schema": {"type": "object"}},
-    )
-
-    assert impact is UpdateImpact.MATERIAL
-
-
-def test_classify_endpoint_update_marks_pricing_as_material() -> None:
-    impact = classify_endpoint_update(
-        {"pricing": {"amount_minor": 100, "currency": "USD"}},
-    )
-
-    assert impact is UpdateImpact.MATERIAL
+@pytest.mark.parametrize(
+    "field",
+    ["request_schema", "price", "response_content_type", "supports_idempotency"],
+)
+def test_classify_endpoint_update_marks_contract_fields_as_material(field: str) -> None:
+    assert classify_endpoint_update({field}) is UpdateImpact.MATERIAL
 
 
 def test_classify_endpoint_update_marks_descriptive_fields_as_non_material() -> None:
@@ -99,12 +100,10 @@ def test_build_contract_snapshot_keeps_only_contract_affecting_fields() -> None:
                     "type": "object",
                     "properties": {"language": {"type": "string"}},
                 },
-                "pricing": {
-                    "pricing_type": "fixed_per_call",
-                    "amount_minor": 2500,
-                    "currency": "USD",
-                },
+                "response_content_type": "text/plain",
+                "price": {"id": 301, "version": 2},
                 "timeout_seconds": 15,
+                "supports_idempotency": True,
                 "is_enabled": False,
             },
             {
@@ -119,12 +118,10 @@ def test_build_contract_snapshot_keeps_only_contract_affecting_fields() -> None:
                     "type": "object",
                     "properties": {"translated": {"type": "string"}},
                 },
-                "pricing": {
-                    "pricing_type": "free",
-                    "amount_minor": None,
-                    "currency": None,
-                },
+                "response_content_type": "application/json",
+                "price": None,
                 "timeout_seconds": 30,
+                "supports_idempotency": False,
                 "is_enabled": True,
             },
         ],

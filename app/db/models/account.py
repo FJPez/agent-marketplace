@@ -1,13 +1,9 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
+from app.db.base import Base, utc_now
 
 
 class Account(Base):
@@ -42,7 +38,7 @@ class Account(Base):
     )
     nonce_issued_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=_utc_now,
+        default=utc_now,
         server_default=text("now()"),
     )
     token_version: Mapped[int] = mapped_column(
@@ -57,12 +53,12 @@ class Account(Base):
     pending_wallet_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=_utc_now,
+        default=utc_now,
         server_default=text("now()"),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=_utc_now,
+        default=utc_now,
         server_default=text("now()"),
-        onupdate=_utc_now,
+        onupdate=utc_now,
     )

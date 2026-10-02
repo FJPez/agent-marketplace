@@ -215,7 +215,11 @@ async def publish_provider_service(
     response_model=EndpointResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create a provider endpoint",
-    description="Creates a new endpoint under an owned provider service.",
+    description=(
+        "Creates a new endpoint under an owned provider service. A paid endpoint's "
+        "`price.amount` is in atomic units of the marketplace's payment asset (for USDC, "
+        "1000000 is 1 USDC) and becomes its first price version."
+    ),
     responses={
         201: {"description": "Endpoint created successfully."},
         404: {"description": "The parent service does not exist or is not owned by the actor."},
@@ -258,9 +262,11 @@ async def create_provider_endpoint(
     ],
     actor: CurrentActor,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> EndpointResponse:
     endpoint = await provider_endpoints.create_endpoint(
         session=session,
+        settings=settings,
         account_id=actor.account_id,
         service_id=service_id,
         request=request,
@@ -272,7 +278,14 @@ async def create_provider_endpoint(
     "/endpoints/{endpoint_id}",
     response_model=EndpointResponse,
     summary="Update a provider endpoint",
-    description="Updates an owned provider endpoint and its pricing configuration.",
+    description=(
+        "Updates an owned provider endpoint. A new `price.amount` creates a new immutable "
+        "price version on the marketplace's current payment terms; earlier versions are kept. "
+        "Resending the current amount after the marketplace's payment terms changed also "
+        "creates a version on the new terms, so it must meet the current minimum price and, "
+        "on a suspended service, is refused like any other change; omit `price` to leave it "
+        "untouched."
+    ),
     responses={
         200: {"description": "Endpoint updated successfully."},
         404: {"description": "The requested endpoint does not exist or is not owned by the actor."},
@@ -286,12 +299,12 @@ async def update_provider_endpoint(
         EndpointUpdateRequest,
         Body(
             openapi_examples={
-                "paid-endpoint-pricing": {
-                    "summary": "Update endpoint pricing",
+                "paid-endpoint-price": {
+                    "summary": "Update the endpoint's price",
                     "value": {
                         "summary": "A paid endpoint that returns a compact summary.",
-                        "timeout_seconds": 45,
-                        "pricing": {"amount_minor": 250, "currency": "USD"},
+                        "timeout_seconds": 20,
+                        "price": {"amount": 25_000},
                     },
                 }
             }
@@ -299,9 +312,11 @@ async def update_provider_endpoint(
     ],
     actor: CurrentActor,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> EndpointResponse:
     endpoint = await provider_endpoints.update_endpoint(
         session=session,
+        settings=settings,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
         changes=request,

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.json_types import JsonObject
 from app.core.service_fields import HTTP_METHOD_MAX_LENGTH
-from app.db.base import Base
+from app.db.base import Base, utc_now
 
 if TYPE_CHECKING:
     from app.db.models.service_endpoint import ServiceEndpoint
@@ -40,7 +40,7 @@ class ProviderUpstream(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=text("now()"),
-        onupdate=datetime.now,
+        onupdate=utc_now,
     )
 
     endpoint: Mapped[ServiceEndpoint] = relationship(back_populates="upstream")

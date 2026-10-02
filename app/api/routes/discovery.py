@@ -74,7 +74,11 @@ async def get_service_schema(
     "/services/{service_id_or_slug}/pricing",
     response_model=PublicServicePricingResponse,
     summary="Get public service pricing",
-    description=("Returns the public pricing information for each enabled endpoint on a service."),
+    description=(
+        "Returns the public price catalogue of a service: for each enabled endpoint its id, "
+        "invoke URL and, for a paid endpoint, the current price version with its amount in "
+        "atomic units of the asset, the asset, the network and the pay_to address."
+    ),
     responses={
         200: {"description": "Public service pricing returned successfully."},
         404: {"description": "No public service matched the supplied identifier."},

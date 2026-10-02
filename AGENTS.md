@@ -124,6 +124,9 @@ Layer responsibilities:
   the first column, so two unique keys on one table that start with the same
   column would get the same name. (The convention still prefixes a check
   constraint's name with `ck_<table>_`.)
+- When a table has more than one unique key, a service that turns a unique
+  violation into a domain error checks which key was violated with
+  `unique_violation_constraint(exc)` from `app/db/errors.py`.
 
 ## Primary goals
 

@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Protocol
 
 import pytest
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
+from app.core.enums import AppEnv
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
@@ -15,11 +16,34 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
+TEST_TREASURY_ADDRESS = "0x1111111111111111111111111111111111111111"
+# The payment terms a price version is stamped with under the Settings defaults and
+# the test treasury.
+TEST_PRICE_TERMS = {
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "network": "eip155:84532",
+    "pay_to": TEST_TREASURY_ADDRESS,
+    "max_timeout_seconds": 120,
+    "fee_bps": 1_000,
+}
 # coredis rejects this URL as soon as a client is built from it (the port is out of range).
 MALFORMED_REDIS_URL = "redis://localhost:99999/0"
 # Nothing listens on port 1, so connecting fails at once.
 UNREACHABLE_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@127.0.0.1:1/agent_marketplace"
 UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
+
+
+def build_service_settings() -> Settings:
+    """Settings for calling services directly.
+
+    The test env allows loopback upstreams; the treasury is passed explicitly rather
+    than left to the session-wide APP_TREASURY_ADDRESS.
+    """
+    return Settings(
+        env=AppEnv.TEST,
+        jwt_secret_key=TEST_JWT_SECRET_KEY,
+        treasury_address=TEST_TREASURY_ADDRESS,
+    )
 
 
 class SettingsEnvFactory(Protocol):
@@ -38,11 +62,13 @@ def base_test_env() -> Generator[None, None, None]:
         "APP_JWT_SECRET_KEY": os.environ.get("APP_JWT_SECRET_KEY"),
         "APP_SIWE_DOMAIN": os.environ.get("APP_SIWE_DOMAIN"),
         "APP_ENV_FILE": os.environ.get("APP_ENV_FILE"),
+        "APP_TREASURY_ADDRESS": os.environ.get("APP_TREASURY_ADDRESS"),
     }
 
     os.environ["APP_JWT_SECRET_KEY"] = TEST_JWT_SECRET_KEY
     os.environ["APP_SIWE_DOMAIN"] = TEST_SIWE_DOMAIN
     os.environ["APP_ENV_FILE"] = TEST_ENV_FILE
+    os.environ["APP_TREASURY_ADDRESS"] = TEST_TREASURY_ADDRESS
     get_settings.cache_clear()
 
     try:
@@ -72,6 +98,7 @@ def settings_env_factory(
             monkeypatch.setenv("APP_JWT_SECRET_KEY", TEST_JWT_SECRET_KEY)
             monkeypatch.setenv("APP_SIWE_DOMAIN", TEST_SIWE_DOMAIN)
             monkeypatch.setenv("APP_ENV_FILE", TEST_ENV_FILE)
+            monkeypatch.setenv("APP_TREASURY_ADDRESS", TEST_TREASURY_ADDRESS)
 
         for key, value in (env or {}).items():
             if value is None:
