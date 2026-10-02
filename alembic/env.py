@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 import app.db.models  # noqa: F401
 from app.core.config import Settings
 from app.db.base import Base
-from app.db.types import render_alembic_item
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Connection
@@ -36,7 +35,6 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_item=render_alembic_item,
     )
 
     with context.begin_transaction():
@@ -44,11 +42,7 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(
-        connection=connection,
-        target_metadata=target_metadata,
-        render_item=render_alembic_item,
-    )
+    context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
         context.run_migrations()
