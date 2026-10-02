@@ -1,0 +1,216 @@
+"""Provider payout addresses: proven with an EIP-712 signature, then held before use.
+
+A provider asks for a challenge naming the address and network, signs the challenge's
+typed data with that address's key (`eth_signTypedData_v4`) and submits the signature.
+The typed data binds the proof to the provider's account, the address, the network and
+its purpose, under a server-issued nonce that expires and can be used once, so neither
+a login signature (EIP-191 text) nor a proof made for another account, address or
+network can pass for it. Every proof is kept, and the latest one on a network decides
+where payouts go, once its hold has ended.
+
+Challenges and proofs are timed by the database's clock, so skew between API hosts, or
+between an API host and the payout builder, cannot shorten a hold or stretch a
+challenge.
+"""
+
+from datetime import datetime, timedelta
+
+from eth_account import Account
+from eth_account.messages import encode_typed_data
+from eth_keys.exceptions import BadSignature
+from sqlalchemy import DateTime, func, select
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import Settings
+from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
+from app.core.json_types import JsonObject
+from app.core.security import canonical_signature, checksum_address, generate_nonce
+from app.db.models import PayoutAddress, PayoutAddressChallenge
+
+# The database's time when the statement starts. Not now(): that is when the
+# transaction started, which can be before a lock wait.
+_DATABASE_NOW = func.statement_timestamp(type_=DateTime(timezone=True))
+
+
+async def request_payout_address_challenge(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    account_id: int,
+    address: str,
+    network: str,
+) -> PayoutAddressChallenge:
+    """Issue the challenge that proves `address` on `network`, replacing a pending one.
+
+    The address is challenged, and later recorded, in its EIP-55 form.
+    """
+    if network != settings.payment_network:
+        raise InvalidInputError(
+            f"network must be {settings.payment_network}, the network payouts are sent on",
+        )
+    try:
+        checksummed = checksum_address(address)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
+    values = {
+        "network": network,
+        "address": checksummed,
+        "nonce": generate_nonce(),
+        "expires_at": _DATABASE_NOW + timedelta(seconds=settings.payout_address_challenge_seconds),
+    }
+    challenge = (
+        await session.execute(
+            insert(PayoutAddressChallenge)
+            .values(account_id=account_id, **values)
+            .on_conflict_do_update(index_elements=[PayoutAddressChallenge.account_id], set_=values)
+            .returning(PayoutAddressChallenge)
+            # A challenge this session loaded earlier would otherwise be returned as it
+            # was, not as replaced.
+            .execution_options(populate_existing=True),
+        )
+    ).scalar_one()
+    await session.commit()
+    return challenge
+
+
+def proof_typed_data(challenge: PayoutAddressChallenge) -> JsonObject:
+    """The EIP-712 typed data whose signature by the challenge's address proves it."""
+    return {
+        "types": {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+            ],
+            "PayoutAddressProof": [
+                {"name": "accountId", "type": "uint256"},
+                {"name": "payoutAddress", "type": "address"},
+                {"name": "network", "type": "string"},
+                {"name": "nonce", "type": "string"},
+            ],
+        },
+        "primaryType": "PayoutAddressProof",
+        "domain": {
+            "name": "Agent Marketplace",
+            "version": "1",
+            # The network is the payment network, which Settings keeps to eip155:<chain id>.
+            "chainId": int(challenge.network.removeprefix("eip155:")),
+        },
+        "message": {
+            "accountId": challenge.account_id,
+            "payoutAddress": challenge.address,
+            "network": challenge.network,
+            "nonce": challenge.nonce,
+        },
+    }
+
+
+async def prove_payout_address(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    account_id: int,
+    signature: str,
+) -> PayoutAddress:
+    """Record the pending challenge's address as the provider's payout address.
+
+    It takes over at once from any earlier one, and payouts are held until it becomes
+    effective. The challenge is consumed, so the same proof cannot be recorded twice.
+    """
+    try:
+        canonical = canonical_signature(signature)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
+    challenge = await session.scalar(
+        select(PayoutAddressChallenge)
+        .where(PayoutAddressChallenge.account_id == account_id)
+        .with_for_update(),
+    )
+    if challenge is None:
+        raise InvalidStateError("no payout address challenge is pending; request one first")
+    now = (await session.execute(select(_DATABASE_NOW))).scalar_one()
+    if challenge.expires_at <= now:
+        raise InvalidStateError("the payout address challenge has expired; request a new one")
+    # A canonical signature can still carry an r or s that recovers no key.
+    try:
+        signer = Account.recover_message(
+            encode_typed_data(full_message=proof_typed_data(challenge)),
+            signature=canonical,
+        )
+    except BadSignature as exc:
+        raise InvalidInputError("signature is not valid") from exc
+    if signer != challenge.address:
+        raise InvalidInputError(
+            f"signature was not made by {challenge.address} over the pending challenge",
+        )
+
+    payout_address = PayoutAddress(
+        account_id=account_id,
+        network=challenge.network,
+        address=challenge.address,
+        nonce=challenge.nonce,
+        signature=canonical,
+        verified_at=now,
+        effective_at=now + timedelta(seconds=settings.payout_address_hold_seconds),
+    )
+    session.add(payout_address)
+    await session.delete(challenge)
+    await session.commit()
+    return payout_address
+
+
+async def get_payout_address(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    account_id: int,
+) -> PayoutAddress:
+    """The provider's latest payout address on the payment network, held or not."""
+    latest = await _latest_payout_address(
+        session=session,
+        account_id=account_id,
+        network=settings.payment_network,
+    )
+    if latest is None:
+        raise NotFoundError(f"no payout address has been proven on {settings.payment_network}")
+    return latest
+
+
+async def effective_payout_address(
+    *,
+    session: AsyncSession,
+    account_id: int,
+    network: str,
+    at: datetime | None = None,
+) -> str | None:
+    """The address payouts to the provider on `network` may be sent to at `at`.
+
+    None while payouts are held: before the provider's latest proof becomes effective,
+    even when an earlier address was effective (a change holds payouts), and when the
+    provider has proven none. For the payout builder, which should leave `at` out: it
+    defaults to the database's clock, which timed the proofs, so a host clock that is
+    ahead cannot end a hold early.
+    """
+    latest = await _latest_payout_address(session=session, account_id=account_id, network=network)
+    if latest is None:
+        return None
+    if at is None:
+        at = (await session.execute(select(_DATABASE_NOW))).scalar_one()
+    if latest.effective_at > at:
+        return None
+    return latest.address
+
+
+async def _latest_payout_address(
+    *,
+    session: AsyncSession,
+    account_id: int,
+    network: str,
+) -> PayoutAddress | None:
+    return await session.scalar(
+        select(PayoutAddress)
+        .where(PayoutAddress.account_id == account_id, PayoutAddress.network == network)
+        .order_by(PayoutAddress.id.desc())
+        .limit(1),
+    )

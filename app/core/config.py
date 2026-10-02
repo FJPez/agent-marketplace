@@ -4,7 +4,6 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
-from eth_utils import is_checksum_address, is_checksum_formatted_address
 from pydantic import AfterValidator, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
@@ -15,25 +14,12 @@ from pydantic_settings import (
 )
 
 from app.core.enums import AppEnv
-from app.core.security import normalize_wallet_address
+from app.core.security import checksum_address
 
 _LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
 _DEFAULT_SIWE_DOMAIN = "testserver"
 _ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-
-
-def _checksum_address(value: str) -> str:
-    """Return the EIP-55 form of an EVM address.
-
-    An all-lowercase or all-uppercase address carries no checksum and is accepted. A
-    mixed-case one must already be correctly checksummed: a wrong checksum means a
-    mistyped address, and these addresses decide where payments go.
-    """
-    if is_checksum_formatted_address(value) and not is_checksum_address(value):
-        msg = "address has an invalid EIP-55 checksum"
-        raise ValueError(msg)
-    return normalize_wallet_address(value)
 
 
 def _reject_zero_address(value: str) -> str:
@@ -48,7 +34,7 @@ def _reject_zero_address(value: str) -> str:
 # A payment address (the treasury, the asset contract) in its EIP-55 form.
 EvmAddress = Annotated[
     str,
-    AfterValidator(_checksum_address),
+    AfterValidator(checksum_address),
     AfterValidator(_reject_zero_address),
 ]
 
@@ -118,6 +104,13 @@ class Settings(BaseSettings):
     provider_secret_encryption_keys: Annotated[tuple[SecretStr, ...], NoDecode] = ()
     # How long a rotated-out signing secret keeps signing beside its replacement.
     provider_secret_grace_seconds: int = Field(default=86_400, gt=0)
+    # How long a provider has to sign a payout address challenge.
+    payout_address_challenge_seconds: int = Field(default=300, gt=0)
+    # How long payouts are held after every payout address proof, even one of the
+    # address already in use. It covers a change the owner notices and answers by
+    # proving its own address again, which restarts the hold. It does not stop an
+    # account takeover: see the payout address notes in README.md.
+    payout_address_hold_seconds: int = Field(default=86_400, gt=0)
     # Request bodies are validated in this many worker processes, each validation within
     # this deadline (app/core/request_validation.py). A caller also waits at most the
     # deadline for a free worker. A worker starts at about 25 MiB and is replaced once it

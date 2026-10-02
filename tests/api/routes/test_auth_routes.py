@@ -263,18 +263,25 @@ async def test_create_api_key_rejects_past_expiration(async_client: AsyncClient)
 
 
 @pytest.mark.asyncio
-async def test_get_auth_nonce_rejects_invalid_wallet_address(async_client: AsyncClient) -> None:
-    response = await async_client.get(
-        "/v1/auth/nonce",
-        params={"address": "not-a-wallet-address"},
-    )
+@pytest.mark.parametrize(
+    ("address", "message"),
+    [
+        pytest.param("not-a-wallet-address", "invalid EVM address", id="not_an_address"),
+        pytest.param(
+            "0x036cbD53842c5426634e7929541eC2318f3dCF7e",
+            "address has an invalid EIP-55 checksum",
+            id="mistyped_checksum",
+        ),
+    ],
+)
+async def test_get_auth_nonce_rejects_a_malformed_address(
+    async_client: AsyncClient,
+    address: str,
+    message: str,
+) -> None:
+    response = await async_client.get("/v1/auth/nonce", params={"address": address})
 
     assert response.status_code == 422
-    body = response.json()
-    assert isinstance(body["errors"], list)
-    matching_errors = [
-        error
-        for error in body["errors"]
-        if error["loc"][-1] == "address" and "invalid wallet address" in error["msg"]
+    assert [(error["loc"], error["msg"]) for error in response.json()["errors"]] == [
+        (["query", "address"], f"Value error, {message}"),
     ]
-    assert matching_errors

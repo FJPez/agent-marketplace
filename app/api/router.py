@@ -6,6 +6,7 @@ from app.api.routes.admin import router as admin_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.discovery import router as discovery_router
 from app.api.routes.health import router as health_router
+from app.api.routes.payout_addresses import router as payout_addresses_router
 from app.api.routes.provider_services import router as provider_services_router
 from app.api.routes.provider_trust import router as provider_trust_router
 
@@ -17,4 +18,5 @@ api_router.include_router(account_router, prefix="/v1")
 api_router.include_router(account_wallet_router, prefix="/v1")
 api_router.include_router(provider_services_router, prefix="/v1")
 api_router.include_router(provider_trust_router, prefix="/v1")
+api_router.include_router(payout_addresses_router, prefix="/v1")
 api_router.include_router(discovery_router, prefix="/v1")

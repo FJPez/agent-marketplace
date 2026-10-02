@@ -3,19 +3,29 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from eth_keys.constants import SECPK1_N
 from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.security import (
     TokenPayload,
+    canonical_signature,
+    checksum_address,
     decode_token,
     encode_token,
     generate_api_key,
     hash_api_key,
-    normalize_wallet_address,
     parse_siwe_message,
     verify_siwe_signature,
 )
+
+# An address in its EIP-55 form, and the same address with one letter's case flipped.
+CHECKSUMMED_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+MISTYPED_ADDRESS = "0x036cbD53842c5426634e7929541eC2318f3dCF7e"
+# The r and s of a signature, in hex: s at most half the curve order (low s) or above it.
+SIGNATURE_R = "ab" * 32
+LOW_S = format(SECPK1_N // 2, "064x")
+HIGH_S = format(SECPK1_N // 2 + 1, "064x")
 
 
 def _settings() -> Settings:
@@ -25,12 +35,107 @@ def _settings() -> Settings:
     )
 
 
-def test_normalize_wallet_address_returns_checksum_address() -> None:
-    signer = Account.create()
+@pytest.mark.parametrize(
+    "address",
+    [
+        pytest.param(CHECKSUMMED_ADDRESS.lower(), id="lowercase"),
+        pytest.param("0x" + CHECKSUMMED_ADDRESS[2:].upper(), id="uppercase"),
+        pytest.param(CHECKSUMMED_ADDRESS, id="checksummed"),
+    ],
+)
+def test_checksum_address_returns_the_eip55_form(address: str) -> None:
+    assert checksum_address(address) == CHECKSUMMED_ADDRESS
 
-    normalized = normalize_wallet_address(signer.address.lower())
 
-    assert normalized == signer.address
+@pytest.mark.parametrize(
+    ("address", "message"),
+    [
+        pytest.param(
+            MISTYPED_ADDRESS,
+            "address has an invalid EIP-55 checksum",
+            id="mistyped_checksum",
+        ),
+        pytest.param("0x1234", "invalid EVM address", id="not_an_address"),
+        pytest.param(CHECKSUMMED_ADDRESS[2:], "invalid EVM address", id="missing_0x_prefix"),
+        pytest.param(
+            "0X" + CHECKSUMMED_ADDRESS[2:],
+            "invalid EVM address",
+            id="uppercase_0x_prefix",
+        ),
+        pytest.param(" " + CHECKSUMMED_ADDRESS, "invalid EVM address", id="leading_space"),
+        pytest.param(CHECKSUMMED_ADDRESS + " ", "invalid EVM address", id="trailing_space"),
+        pytest.param(CHECKSUMMED_ADDRESS[:-1], "invalid EVM address", id="too_short"),
+        pytest.param(CHECKSUMMED_ADDRESS + "e", "invalid EVM address", id="too_long"),
+        pytest.param(
+            CHECKSUMMED_ADDRESS[:-1] + "g",
+            "invalid EVM address",
+            id="non_hex_character",
+        ),
+    ],
+)
+def test_checksum_address_rejects_what_is_not_a_well_typed_address(
+    address: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        checksum_address(address)
+
+
+@pytest.mark.parametrize(
+    ("signature", "canonical"),
+    [
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}1b", f"0x{SIGNATURE_R}{LOW_S}1b", id="v_27"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}1c", f"0x{SIGNATURE_R}{LOW_S}1c", id="v_28"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}00", f"0x{SIGNATURE_R}{LOW_S}1b", id="v_0"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}01", f"0x{SIGNATURE_R}{LOW_S}1c", id="v_1"),
+        pytest.param(
+            f"0x{SIGNATURE_R}{LOW_S}1B".upper().replace("0X", "0x"),
+            f"0x{SIGNATURE_R}{LOW_S}1b",
+            id="uppercase_hex",
+        ),
+    ],
+)
+def test_canonical_signature_returns_low_s_and_v_27_or_28_in_lowercase_hex(
+    signature: str,
+    canonical: str,
+) -> None:
+    assert canonical_signature(signature) == canonical
+
+
+@pytest.mark.parametrize(
+    "signature",
+    [
+        pytest.param(f"0x{SIGNATURE_R}{HIGH_S}1b", id="high_s"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}25", id="eip155_v_37"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}02", id="v_2"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}", id="no_v"),
+        pytest.param(f"{SIGNATURE_R}{LOW_S}1b", id="missing_0x_prefix"),
+        pytest.param(f"0x{SIGNATURE_R}{LOW_S}1b\n", id="trailing_newline"),
+    ],
+)
+def test_canonical_signature_refuses_a_malformed_or_non_canonical_signature(
+    signature: str,
+) -> None:
+    with pytest.raises(ValueError, match="signature is not valid"):
+        canonical_signature(signature)
+
+
+def test_parse_siwe_message_rejects_an_address_with_a_mistyped_checksum() -> None:
+    message = "\n".join(
+        [
+            "testserver wants you to sign in with your Ethereum account:",
+            MISTYPED_ADDRESS,
+            "",
+            "URI: http://testserver",
+            "Version: 1",
+            "Chain ID: 1",
+            "Nonce: abc123",
+            "Issued At: 2026-03-16T12:00:00Z",
+        ],
+    )
+
+    with pytest.raises(ValueError, match="address has an invalid EIP-55 checksum"):
+        parse_siwe_message(message)
 
 
 def test_encode_and_decode_token_round_trip() -> None:
