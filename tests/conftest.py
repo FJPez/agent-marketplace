@@ -49,20 +49,13 @@ pytest_plugins = (
 
 @pytest.fixture(autouse=True)
 def restore_logging_configuration() -> Generator[None, None, None]:
-    """Undo, after each test, what `configure_logging` (run by every `create_app`) sets.
-
-    Otherwise the `app` logger keeps a handler bound to the test's capture stream, which
-    pytest closes when the test ends, and later tests log into a closed file.
-    """
+    """Undo, after each test, what `configure_logging` (run by every `create_app`) sets."""
     app_logger = logging.getLogger("app")
-    uvicorn_error_logger = logging.getLogger("uvicorn.error")
-    handlers, filters, level = app_logger.handlers[:], app_logger.filters[:], app_logger.level
-    uvicorn_error_filters = uvicorn_error_logger.filters[:]
+    handlers, level = app_logger.handlers[:], app_logger.level
     yield
+    # Otherwise later tests log into this test's capture stream, which pytest has closed.
     app_logger.handlers = handlers
-    app_logger.filters = filters
     app_logger.setLevel(level)
-    uvicorn_error_logger.filters = uvicorn_error_filters
 
 
 def _build_alembic_config(database_url: str) -> Config:
