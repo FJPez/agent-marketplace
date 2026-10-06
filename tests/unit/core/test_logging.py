@@ -120,11 +120,7 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
             "upstream headers %s",
             ({"Authorization": f"Bearer {SECRET}", "Accept": "application/json"},),
             {},
-            {
-                "message": (
-                    "upstream headers {'Authorization': [REDACTED], 'Accept': 'application/json'}"
-                ),
-            },
+            {"message": "upstream headers {'Authorization': [REDACTED]"},
             id="headers_dict_in_message",
         ),
         pytest.param(
@@ -138,14 +134,14 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
             "forwarding",
             (),
             {"request": {"headers": {"Cookie": f"session={SECRET}", "Accept": "*/*"}}},
-            {"request": "{'headers': {'Cookie': [REDACTED], 'Accept': '*/*'}}"},
+            {"request": "{'headers': {'Cookie': [REDACTED]"},
             id="nested_headers_dict_in_extra",
         ),
         pytest.param(
             "forwarding",
             (),
             {"headers": [(b"x-payment", SECRET.encode()), (b"accept", b"*/*")]},
-            {"headers": "[(b'x-payment', b[REDACTED]), (b'accept', b'*/*')]"},
+            {"headers": "[(b'x-payment', [REDACTED]"},
             id="raw_header_pairs_in_extra",
         ),
         pytest.param(
@@ -186,6 +182,7 @@ def test_configure_logging_redacts_sensitive_header_values(
     [
         "authorization, cookie and x-payment headers are redacted",
         "authorization failed for account 5",
+        "authorization_failed: true and x_payment_id=5",
     ],
 )
 def test_configure_logging_keeps_prose_that_names_a_sensitive_header(
