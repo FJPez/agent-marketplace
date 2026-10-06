@@ -18,14 +18,9 @@ logger = get_logger(__name__)
 
 
 def install_observability(app: FastAPI) -> None:
-    """Install the request middleware: request id, request logging and the 500 response.
+    """Install the request id, request logging and the catch-all 500.
 
-    Call this after every other middleware is installed: the middleware installed last
-    runs outermost, and this one must wrap them all so their responses (for example a
-    guardrails 429) carry `X-Request-ID` and are logged, and so it handles an exception
-    that any of them or a route raises. Nothing escapes to Starlette's
-    `ServerErrorMiddleware`, which would re-raise it for uvicorn to log a second time,
-    as plain text outside the app's redaction.
+    Install it last, so it runs outermost and also covers the other middleware.
     """
 
     @app.middleware("http")
