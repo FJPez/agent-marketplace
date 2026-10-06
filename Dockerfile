@@ -22,10 +22,7 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# uvicorn takes the client address from X-Forwarded-For only when the connection
-# comes from FORWARDED_ALLOW_IPS. The default trusts only loopback, so a published
-# container ignores forged headers; behind a proxy that overwrites the header, set it
-# to that proxy's addresses or "*" (on Railway, only while the README's check passes).
+# uvicorn trusts X-Forwarded-For only from FORWARDED_ALLOW_IPS; see the README's Deployment section.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \

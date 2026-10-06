@@ -82,7 +82,6 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    worker_shutdown_timeout_seconds: float = Field(default=25.0, gt=0)
     # Payment terms stamped on every new price version (spec section 12). The
     # treasury is every paid listing's payTo; staging and prod refuse to start
     # without one, and without one elsewhere no paid price can be set.

@@ -1,16 +1,13 @@
-"""The API and worker started the way the Dockerfile and compose start them."""
+"""The API started the way the Dockerfile and compose start it."""
 
 import json
 import os
-import select
-import signal
 import socket
 import subprocess
 import sys
 
 import httpx
-import pytest
-from tests.fixtures.settings import MALFORMED_REDIS_URL, PROJECT_ROOT
+from tests.fixtures.settings import PROJECT_ROOT
 from tests.integration.failing_app import PAYMENT_SECRET
 
 REQUEST_ID = "entrypoint-test"
@@ -22,11 +19,8 @@ def _json_lines(output: str) -> list[dict[str, object]]:
 
 
 def _serve_one_request(app: str, path: str, *options: str) -> tuple[httpx.Response, str, str]:
-    """Start uvicorn on `app`, send one GET for `path`, stop it; return the output too.
-
-    uvicorn serves on a socket bound here, so there is no free-port race, and the
-    request waits in the backlog until the app has started.
-    """
+    """Start uvicorn on `app`, send one GET for `path`, stop it; return the output too."""
+    # uvicorn serves on a socket bound here, so the request waits in its backlog.
     with socket.create_server(("127.0.0.1", 0)) as server:
         process = subprocess.Popen(
             [sys.executable, "-m", "uvicorn", app, *options, "--fd", str(server.fileno())],
@@ -88,71 +82,3 @@ def test_api_process_logs_an_unhandled_error_once_and_redacted() -> None:
         "path": "/fail",
     }.items() <= error_log.items()
     assert "RuntimeError: facilitator rejected X-PAYMENT: [REDACTED]" in str(error_log["exception"])
-
-
-@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT], ids=["sigterm", "sigint"])
-def test_worker_process_stops_cleanly_on_a_signal(signum: signal.Signals) -> None:
-    process = subprocess.Popen(
-        [sys.executable, "-m", "app.worker"],
-        cwd=PROJECT_ROOT,
-        env=os.environ | {"APP_LOG_LEVEL": "INFO"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    try:
-        assert process.stdout is not None
-        # Signal only once the worker has installed its handlers and logged its start.
-        readable, _, _ = select.select([process.stdout], [], [], 30)
-        assert readable, "the worker did not log its start"
-        started = json.loads(process.stdout.readline())
-        process.send_signal(signum)
-        output, _ = process.communicate(timeout=30)
-    finally:
-        process.kill()
-
-    assert process.returncode == 0
-    assert (started["logger"], started["message"]) == ("app.worker", "worker started")
-    assert [entry["message"] for entry in _json_lines(output)] == [
-        "worker stopping",
-        "worker stopped",
-    ]
-
-
-def test_worker_process_logs_a_crash_as_a_json_line() -> None:
-    # Logging is configured by then: opening the resources fails on the Redis URL.
-    result = subprocess.run(
-        [sys.executable, "-m", "app.worker"],
-        cwd=PROJECT_ROOT,
-        env=os.environ | {"APP_LOG_LEVEL": "INFO", "APP_REDIS_URL": MALFORMED_REDIS_URL},
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-
-    assert result.returncode == 1
-    (crash,) = _json_lines(result.stdout)
-    assert (crash["logger"], crash["level"], crash["message"]) == (
-        "app.worker",
-        "ERROR",
-        "worker crashed",
-    )
-    assert "ValueError: Port out of range" in str(crash["exception"])
-    assert result.stderr == ""
-
-
-def test_worker_imports_neither_the_api_nor_fastapi() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys, app.worker; print(sorted({'app.main', 'fastapi'} & sys.modules.keys()))",
-        ],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-
-    assert result.stdout.strip() == "[]"

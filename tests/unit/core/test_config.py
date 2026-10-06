@@ -96,7 +96,6 @@ def test_settings_use_default_values(
     assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
     assert settings.log_level == "INFO"
-    assert settings.worker_shutdown_timeout_seconds == 25.0
     assert settings.treasury_address is None
     assert settings.payment_network == "eip155:84532"
     assert settings.payment_asset == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
@@ -356,10 +355,6 @@ def test_settings_ignore_retired_payment_variables(
             id="idle-in-transaction-timeout-zero",
         ),
         pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
-        pytest.param(
-            {"APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS": "0"},
-            id="worker-shutdown-timeout-zero",
-        ),
         pytest.param({"APP_PROVIDER_SECRET_GRACE_SECONDS": "0"}, id="secret-grace-zero"),
         pytest.param(
             {"APP_PAYOUT_ADDRESS_CHALLENGE_SECONDS": "0"},

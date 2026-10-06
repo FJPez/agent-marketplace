@@ -56,22 +56,10 @@ at start drops those left behind by runs that were killed before teardown.
 Tests marked `e2e` run against live services and are deselected by default; run
 them with `uv run pytest -m e2e`.
 
-## Worker
-
-`make worker` runs the background worker (`python -m app.worker`) against the
-same settings as the API. It runs the registered loops until SIGTERM or SIGINT;
-no loop is registered yet (the recovery loops arrive with the paid invocation
-lifecycle). On a signal it starts no new iteration and gives a running one
-`APP_WORKER_SHUTDOWN_TIMEOUT_SECONDS` (default 25) to finish before cancelling
-it.
-
 ## Deployment
 
-Both processes run from the one Docker image: the API with the image's default
-command, the worker with `python -m app.worker`.
-
-`make docker-run` builds the image and starts PostgreSQL, Redis, the API on
-`http://127.0.0.1:18000` and the worker; `make docker-stop` stops them.
+`make docker-run` builds the image and starts PostgreSQL, Redis and the API on
+`http://127.0.0.1:18000`; `make docker-stop` stops them.
 
 The API trusts `X-Forwarded-For` only from the addresses in
 `FORWARDED_ALLOW_IPS` (default `127.0.0.1`), so a published container ignores
@@ -79,35 +67,24 @@ forged headers and rate limits key on the connecting address.
 
 ### Railway
 
-Railway runs two services from this repository, both built from the
-`Dockerfile`:
+Railway builds the API from the `Dockerfile` and reads `railway.toml` for the
+`/health/ready` health check and a pre-deploy command that migrates the
+database and bootstraps the admin. Set the `APP_*` variables,
+`FORWARDED_ALLOW_IPS=*` (only while the check below passes) and
+`RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends SIGKILL right
+after SIGTERM, cutting off the requests in flight at every deploy; with 30
+seconds, uvicorn finishes them before it exits.
 
-- **API.** Configured by `railway.toml`: the `/health/ready` health check and a
-  pre-deploy command that migrates the database and bootstraps the admin. Set
-  the `APP_*` variables, `FORWARDED_ALLOW_IPS=*` (only while the check below
-  passes) and `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends
-  SIGKILL right after SIGTERM, cutting off the requests in flight at every
-  deploy; with 30 seconds, uvicorn finishes them before it exits.
-- **Worker.** Create a second service from the same repository. New services
-  cannot use a Railway config file, so set it up in the service settings: start
-  command `python -m app.worker`, no health check path, no pre-deploy command
-  (the API's deploy runs the migrations) and no public domain. Give it the same
-  `APP_*` variables as the API (for example as shared variables), plus
-  `APP_DB_APPLICATION_NAME=agent-marketplace-worker` and
-  `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends SIGKILL
-  right after SIGTERM; 30 seconds covers the worker's 25-second shutdown
-  timeout.
-- **Signing secret keys.** Generate `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` with the
-  command in `.env.example` (see
-  [Signing Secret Encryption Keys](#signing-secret-encryption-keys)) and set it as a
-  shared variable used by both the API and the worker: in staging and production
-  neither starts without it.
+Generate `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` with the command in
+`.env.example` (see
+[Signing Secret Encryption Keys](#signing-secret-encryption-keys)) and set it on
+the service: in staging and production the API does not start without it.
 
 Railway's config as code (`railway.toml`) is deprecated, and Railway stops
 reading it on 2026-12-01. After that the API would deploy without its health
 check and without the pre-deploy migration, so a deploy could go live on an
-unmigrated schema. Before then, move both services to Railway's infrastructure
-as code (`.railway/railway.ts`), after confirming it can express the pre-deploy
+unmigrated schema. Before then, move the service to Railway's infrastructure as
+code (`.railway/railway.ts`), after confirming it can express the pre-deploy
 command and the draining time.
 
 #### Checking the proxy trust after a deploy
