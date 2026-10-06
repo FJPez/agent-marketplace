@@ -20,20 +20,16 @@ REQUEST_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._:-]{1,128}
 
 REDACTED: Final[str] = "[REDACTED]"
 # Header values that are credentials or spendable payment authorizations.
-SENSITIVE_HEADERS: Final[frozenset[str]] = frozenset(
-    {"authorization", "cookie", "payment-signature", "x-payment"}
-)
+HEADER_NAME: Final[str] = r"authorization|cookie|payment[-_]signature|x[-_]payment"
+# name: value   name=value   'name': 'value'
+KEY_SEPARATOR: Final[str] = r"""['"]?\s*[:=]\s*"""
+# ('name', 'value')
+PAIR_SEPARATOR: Final[str] = r"""['"]\s*,\s*"""
+
+SENSITIVE_HEADER_NAME: Final[re.Pattern[str]] = re.compile(HEADER_NAME, re.IGNORECASE)
 SENSITIVE_HEADER_IN_TEXT: Final[re.Pattern[str]] = re.compile(
-    rf"""
-    # the header name, with "-" or "_" between its words
-    \b({"|".join(name.replace("-", "[-_]") for name in sorted(SENSITIVE_HEADERS))})\b
-    (  # the separator before the value:
-        ['"]\s*,\s*b?(?=['"])  # a quoted pair: ('name', 'value') or (b'name', b'value')
-        |['"]?\s*[:=]\s*  # ":" or "=", possibly after the closing quote of a dict key
-    )
-    ('[^']*'|"[^"]*"|[^\r\n]*)  # a quoted value, else the rest of the line
-    """,
-    re.IGNORECASE | re.VERBOSE,
+    rf"\b({HEADER_NAME})\b({KEY_SEPARATOR}|{PAIR_SEPARATOR}).*",
+    re.IGNORECASE,
 )
 # Attributes every LogRecord has; any other attribute came from `extra`.
 RECORD_ATTRIBUTES: Final[frozenset[str]] = frozenset(
@@ -56,6 +52,7 @@ def configure_logging(level: str) -> None:
 
 
 def redact(text: str) -> str:
+    """Replace everything after a sensitive header name, to the end of its line."""
     return SENSITIVE_HEADER_IN_TEXT.sub(rf"\1\2{REDACTED}", text)
 
 
@@ -76,7 +73,7 @@ class JsonFormatter(logging.Formatter):
             # An extra cannot replace a field already set above.
             if name in RECORD_ATTRIBUTES or name in entry:
                 continue
-            if name.lower().replace("_", "-") in SENSITIVE_HEADERS:
+            if SENSITIVE_HEADER_NAME.fullmatch(name):
                 entry[name] = REDACTED
             elif value is None or isinstance(value, bool | int | float):
                 entry[name] = value
