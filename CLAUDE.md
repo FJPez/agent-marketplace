@@ -101,6 +101,13 @@ Layer responsibilities:
 - Do not wrap every route in `try`/`except` and do not log the same exception
   at every layer.
 
+### Logging
+
+- Never log headers, request or response bodies, or payment payloads. Pass ids
+  and short scalar values as `extra`.
+- `app/core/logging.py` writes JSON lines and redacts sensitive header values
+  found in log text. That is a safety net, not a licence to log them.
+
 ### Schemas
 
 - Use separate Pydantic models for separate API states: `XCreate`, `XUpdate`,
