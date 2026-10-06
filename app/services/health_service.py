@@ -1,16 +1,10 @@
-from __future__ import annotations
-
-from typing import TYPE_CHECKING
-
 from coredis.exceptions import RedisError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.errors import UnavailableError
+from app.core.resources import Resources
 from app.schemas.common import HealthResponse
-
-if TYPE_CHECKING:
-    from app.core.resources import Resources
 
 
 def get_health_response() -> HealthResponse:
