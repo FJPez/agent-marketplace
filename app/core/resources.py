@@ -1,29 +1,18 @@
-"""The process-wide resources shared by the API and the worker.
+"""The process-wide resources the API opens for its lifetime."""
 
-Framework-free on purpose: the worker (`python -m app.worker`) opens the same
-resources as the API lifespan without importing FastAPI or `app.main`.
-"""
-
-from __future__ import annotations
-
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import coredis
 import dns.asyncresolver
+from coredis.client.basic import Redis
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.core.config import Settings
 from app.core.rate_limits_backend import RateLimitsBackend, create_rate_limits_backend
 from app.db.session import create_engine, create_session_factory
 from app.integrations.providers.dns import DnsPythonResolver, DnsResolver
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
-    from coredis.client.basic import Redis
-    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
-
-    from app.core.config import Settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,13 +27,7 @@ class Resources:
 
 @asynccontextmanager
 async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
-    """Build the resources and close them on exit.
-
-    Nothing connects here: the engine and the Redis clients connect on first use, so
-    opening succeeds even while a dependency is down (readiness reports it). Each
-    resource's cleanup is registered immediately after it is created, so a failure
-    partway through startup still releases whatever was already opened.
-    """
+    """Build the resources and close them on exit; nothing connects until first use."""
     async with AsyncExitStack() as stack:
         db_engine = create_engine(settings)
         stack.push_async_callback(db_engine.dispose)
