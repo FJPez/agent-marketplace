@@ -6,7 +6,8 @@ from tests.fixtures.logs import LoggedEntries
 from tests.fixtures.settings import SettingsEnvFactory
 
 import app.core.resources as resources_module
-from app.core.logging import REQUEST_ID_HEADER, configure_logging
+from app.core.logging import configure_logging
+from app.core.request_id import REQUEST_ID_HEADER
 from app.main import create_app
 
 

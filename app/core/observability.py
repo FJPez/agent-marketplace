@@ -4,13 +4,8 @@ from time import perf_counter
 
 from fastapi import FastAPI, Request, Response, status
 
-from app.core.logging import (
-    REQUEST_ID_HEADER,
-    bind_request_id,
-    reset_request_id,
-    resolve_request_id,
-)
 from app.core.problems import ProblemResponse
+from app.core.request_id import REQUEST_ID_HEADER, current_request_id, resolve_request_id
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
 logger = logging.getLogger(__name__)
@@ -28,7 +23,7 @@ def install_observability(app: FastAPI) -> None:
         call_next: RequestHandler,
     ) -> Response:
         request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
-        token = bind_request_id(request_id)
+        token = current_request_id.set(request_id)
         start_time = perf_counter()
         try:
             response = await call_next(request)
@@ -57,4 +52,4 @@ def install_observability(app: FastAPI) -> None:
             )
             return response
         finally:
-            reset_request_id(token)
+            current_request_id.reset(token)
