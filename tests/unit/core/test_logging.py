@@ -1,17 +1,12 @@
 import json
 import logging
-import uuid
 from datetime import datetime
 
 import pytest
 from tests.fixtures.logs import LoggedEntries
 
-from app.core.logging import (
-    bind_request_id,
-    configure_logging,
-    reset_request_id,
-    resolve_request_id,
-)
+from app.core.logging import configure_logging
+from app.core.request_id import current_request_id
 
 SECRET = "sk-live-4f9a7c"
 
@@ -22,27 +17,6 @@ def logger() -> logging.Logger:
     return logging.getLogger("app.tests")
 
 
-@pytest.mark.parametrize(
-    "request_id",
-    ["incoming-request-id", "0af7651916cd43dd8448eb211c80319c", "trace.id:1_2", "a" * 128],
-)
-def test_resolve_request_id_keeps_a_valid_client_value(request_id: str) -> None:
-    assert resolve_request_id(request_id) == request_id
-
-
-@pytest.mark.parametrize(
-    "request_id",
-    [None, "", "   ", "a" * 129, "abc\ndef", 'abc","level":"CRITICAL', "abc def", "café"],
-    ids=["missing", "empty", "blank", "too_long", "newline", "json", "space", "non_ascii"],
-)
-def test_resolve_request_id_generates_a_uuid_for_a_missing_or_invalid_value(
-    request_id: str | None,
-) -> None:
-    generated = resolve_request_id(request_id)
-
-    assert str(uuid.UUID(generated)) == generated
-
-
 def test_configure_logging_writes_each_app_record_once_as_a_json_line(
     logger: logging.Logger,
     logged_entries: LoggedEntries,
@@ -50,12 +24,12 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
     configure_logging("INFO")
     # create_app applies the configuration again every time it builds an app.
     configure_logging("INFO")
-    token = bind_request_id("req-789")
+    token = current_request_id.set("req-789")
     try:
         logger.debug("below the configured level")
         logger.info("line one\nline two", extra={"service_id": 7, "ratio": 0.5, "cached": True})
     finally:
-        reset_request_id(token)
+        current_request_id.reset(token)
 
     (entry,) = logged_entries()
     assert datetime.fromisoformat(str(entry.pop("time"))).tzinfo is not None
