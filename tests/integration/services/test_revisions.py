@@ -1,3 +1,5 @@
+from secrets import token_hex
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,7 +17,7 @@ async def _create_provider_account(
     *,
     display_name: str,
 ) -> int:
-    account = Account(display_name=display_name)
+    account = Account(display_name=display_name, wallet_address=f"0x{token_hex(20)}")
     session.add(account)
     await session.flush()
     return account.id
