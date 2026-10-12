@@ -94,7 +94,7 @@ async def confirm_wallet_change(
     session.add(
         WalletChangeLog(
             account_id=account.id,
-            previous_wallet_address=_require_wallet_address(account),
+            previous_wallet_address=account.wallet_address,
             new_wallet_address=parsed.address,
         ),
     )
@@ -131,10 +131,3 @@ def _ensure_cooldown(account: Account, *, settings: Settings, now: datetime) -> 
     available_at = account.wallet_changed_at + timedelta(seconds=settings.wallet_change_cooldown)
     if available_at > now:
         raise InvalidStateError("wallet change is in cooldown")
-
-
-def _require_wallet_address(account: Account) -> str:
-    if account.wallet_address is None:
-        msg = "account wallet address is required"
-        raise InvalidStateError(msg)
-    return account.wallet_address
