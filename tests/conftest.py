@@ -41,6 +41,7 @@ from app.main import create_app
 
 pytest_plugins = (
     "tests.fixtures.domain",
+    "tests.fixtures.logs",
     "tests.fixtures.settings",
 )
 

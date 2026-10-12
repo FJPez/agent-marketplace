@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Awaitable, Callable
 from time import perf_counter
 
@@ -6,15 +7,13 @@ from fastapi import FastAPI, Request, Response, status
 from app.core.logging import (
     REQUEST_ID_HEADER,
     bind_request_id,
-    build_log_context,
-    get_logger,
     reset_request_id,
     resolve_request_id,
 )
 from app.core.problems import ProblemResponse
 
 RequestHandler = Callable[[Request], Awaitable[Response]]
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def install_observability(app: FastAPI) -> None:
@@ -24,7 +23,7 @@ def install_observability(app: FastAPI) -> None:
     """
 
     @app.middleware("http")
-    async def request_id_middleware(
+    async def log_request(
         request: Request,
         call_next: RequestHandler,
     ) -> Response:
@@ -36,11 +35,7 @@ def install_observability(app: FastAPI) -> None:
         except Exception:
             logger.exception(
                 "request failed",
-                extra=build_log_context(
-                    request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
-                ),
+                extra={"method": request.method, "path": request.url.path},
             )
             # The exception text may hold internals, so it is logged above and never returned.
             return ProblemResponse(
@@ -53,13 +48,12 @@ def install_observability(app: FastAPI) -> None:
             response.headers[REQUEST_ID_HEADER] = request_id
             logger.info(
                 "request completed",
-                extra=build_log_context(
-                    request_id=request_id,
-                    method=request.method,
-                    path=request.url.path,
-                    status_code=response.status_code,
-                    duration_ms=int((perf_counter() - start_time) * 1000),
-                ),
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_ms": int((perf_counter() - start_time) * 1000),
+                },
             )
             return response
         finally:
