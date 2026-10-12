@@ -160,6 +160,8 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   `Cookie`, `PAYMENT-SIGNATURE` and `X-PAYMENT` headers are redacted. A client's
   `X-Request-ID` is kept only if it is 1 to 128 letters, digits, `.`, `_`, `:`
   or `-`; otherwise the API generates one.
+- A request body over `APP_MAX_REQUEST_BODY_BYTES` (default 1 MiB) is refused
+  with `413` before it is read into memory.
 - Staging and production require a non-local `APP_DATABASE_URL`,
   `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN`, `APP_TREASURY_ADDRESS` and
   `APP_PROVIDER_SECRET_ENCRYPTION_KEYS`.

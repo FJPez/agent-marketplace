@@ -80,6 +80,15 @@ Layer responsibilities:
 - The statement, lock and idle-in-transaction timeouts set in
   `app/db/session.py` are a backstop for these rules, not a design tool.
 
+### Authentication and rate limiting
+
+- The actor is resolved once per request, by `get_optional_actor` in
+  `app/api/deps/auth.py`. The other authentication dependencies and the rate
+  limit depend on it, so FastAPI shares the one result. Build a new
+  authentication dependency on that chain; never resolve the actor again.
+- The global rate limit is a dependency of `v1_router` in `app/api/router.py`.
+  Include every new `/v1` router there, or its routes are not limited.
+
 ### Errors
 
 - Services raise application exceptions from the shared taxonomy in
