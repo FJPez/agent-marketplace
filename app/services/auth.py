@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.actor import ActorContext
 from app.core.config import Settings
-from app.core.errors import PermissionDeniedError, UnauthenticatedError
+from app.core.errors import UnauthenticatedError
 from app.core.security import (
     AuthTokenType,
     checksum_address,
@@ -163,38 +163,15 @@ async def resolve_actor(
     *,
     session: AsyncSession,
     settings: Settings,
-    authorization: str,
-    touch_api_key: bool = True,
+    token: str,
 ) -> ActorContext:
-    token = _extract_bearer_token(authorization)
+    """Resolve a bearer token, an API key or a JWT access token, to its actor."""
     if token.startswith(settings.api_key_prefix):
-        return await _resolve_api_key_actor(
-            session=session,
-            settings=settings,
-            token=token,
-            touch_api_key=touch_api_key,
-        )
+        actor = await _resolve_api_key_actor(session=session, settings=settings, token=token)
+        # Stores the key's last use when `_touch_api_key` recorded one.
+        await session.commit()
+        return actor
     return await _resolve_jwt_token_actor(session=session, settings=settings, token=token)
-
-
-async def resolve_jwt_actor(
-    *,
-    session: AsyncSession,
-    settings: Settings,
-    authorization: str,
-) -> ActorContext:
-    token = _extract_bearer_token(authorization)
-    if token.startswith(settings.api_key_prefix):
-        raise PermissionDeniedError("jwt authentication required")
-    return await _resolve_jwt_token_actor(session=session, settings=settings, token=token)
-
-
-def _extract_bearer_token(authorization: str) -> str:
-    scheme, _, token = authorization.partition(" ")
-    if scheme != "Bearer" or not token:
-        msg = "Bearer token is required"
-        raise UnauthenticatedError(msg)
-    return token
 
 
 def _nonce_is_active(account: Account, *, settings: Settings) -> bool:
@@ -209,7 +186,6 @@ async def _resolve_api_key_actor(
     session: AsyncSession,
     settings: Settings,
     token: str,
-    touch_api_key: bool,
 ) -> ActorContext:
     api_key = await session.scalar(
         select(ApiKey).where(ApiKey.key_hash == hash_api_key(token)),
@@ -234,8 +210,7 @@ async def _resolve_api_key_actor(
         auth_method="api_key",
         wallet_address=account.wallet_address,
     )
-    if touch_api_key:
-        await _touch_api_key(session=session, settings=settings, api_key=api_key, now=now)
+    await _touch_api_key(session=session, settings=settings, api_key=api_key, now=now)
     return actor
 
 
@@ -259,7 +234,6 @@ async def _touch_api_key(
         )
         .values(last_used_at=now),
     )
-    await session.commit()
 
 
 async def _resolve_jwt_token_actor(

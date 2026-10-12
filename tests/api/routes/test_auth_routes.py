@@ -211,7 +211,7 @@ async def test_api_key_crud_routes_require_jwt_and_support_create_list_revoke(
     assert revoked_response.json() == {
         "type": "/problems/unauthenticated",
         "status": 401,
-        "detail": "invalid api key",
+        "detail": "a valid bearer token is required",
     }
 
 

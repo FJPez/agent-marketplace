@@ -4,12 +4,14 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from starlette.requests import Request
+from tests.fixtures.settings import SettingsEnvFactory
 
 import app.main as main_module
 from app.api.deps.dns import get_dns_resolver
 from app.core.config import AppEnv, Settings
 from app.core.lifespan import get_resources
 from app.core.rate_limits_backend import MemoryRateLimitsBackend, RedisRateLimitsBackend
+from app.core.request_id import REQUEST_ID_HEADER
 from app.main import create_app
 
 
@@ -58,6 +60,23 @@ def test_retired_execution_routes_are_not_served(method: str, path: str) -> None
         response = client.request(method, path, json={})
 
     assert response.status_code == 404
+
+
+def test_an_oversized_request_body_is_refused_and_keeps_its_request_id(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env={"APP_MAX_REQUEST_BODY_BYTES": "64"})
+
+    with TestClient(create_app()) as client:
+        response = client.post(
+            "/v1/auth/verify",
+            content=b"x" * 65,
+            headers={REQUEST_ID_HEADER: "request-413"},
+        )
+
+    assert response.status_code == 413
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers[REQUEST_ID_HEADER] == "request-413"
 
 
 def test_create_app_applies_runtime_resource_settings(
