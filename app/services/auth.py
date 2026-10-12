@@ -183,15 +183,10 @@ async def resolve_jwt_actor(
     settings: Settings,
     authorization: str,
 ) -> ActorContext:
-    actor = await resolve_actor(
-        session=session,
-        settings=settings,
-        authorization=authorization,
-        touch_api_key=False,
-    )
-    if actor.auth_method != "jwt":
+    token = _extract_bearer_token(authorization)
+    if token.startswith(settings.api_key_prefix):
         raise PermissionDeniedError("jwt authentication required")
-    return actor
+    return await _resolve_jwt_token_actor(session=session, settings=settings, token=token)
 
 
 def _require_wallet_address(account: Account) -> str:

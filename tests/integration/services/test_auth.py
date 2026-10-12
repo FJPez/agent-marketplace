@@ -661,3 +661,19 @@ async def test_resolve_jwt_actor_with_api_key_raises_permission_denied(
             )
 
     assert await stored_last_used_at(account_id) is None
+
+
+async def test_resolve_jwt_actor_refuses_an_unknown_api_key_without_a_query(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = _auth_settings()
+
+    async with db_session_factory() as session:
+        with pytest.raises(PermissionDeniedError, match="jwt authentication required"):
+            await resolve_jwt_actor(
+                session=session,
+                settings=settings,
+                authorization=f"Bearer {settings.api_key_prefix}unknown",
+            )
+
+        assert not session.in_transaction()
