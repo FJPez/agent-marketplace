@@ -69,15 +69,11 @@ async def confirm_wallet_change(
         raise InvalidStateError("SIWE message has expired")
 
     try:
-        parsed = verify_siwe_signature(
-            settings,
-            message=message,
-            signature=signature,
-            expected_nonce=account.nonce,
-            now=now,
-        )
+        parsed = verify_siwe_signature(settings, message=message, signature=signature, now=now)
     except ValueError as exc:
         raise InvalidStateError(str(exc)) from exc
+    if parsed.nonce != account.nonce:
+        raise InvalidStateError("nonce is not valid")
 
     if account.pending_wallet_address is None:
         raise InvalidStateError("no wallet change is pending")
