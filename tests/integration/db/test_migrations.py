@@ -94,7 +94,7 @@ def test_head_migration_expands_accounts_table(
         "created_at",
         "updated_at",
     }.issubset(columns)
-    assert columns["wallet_address"]["nullable"] is True
+    assert columns["wallet_address"]["nullable"] is False
     assert columns["display_name"]["nullable"] is False
     assert columns["token_version"]["nullable"] is False
 

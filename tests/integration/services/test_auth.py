@@ -562,33 +562,6 @@ async def test_resolve_actor_does_not_overwrite_a_concurrent_touch(
     assert await stored_last_used_at(account_id) == touched_at
 
 
-async def test_resolve_actor_api_key_path_requires_account_wallet(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    stored_last_used_at: LastUsedAtReader,
-) -> None:
-    settings = _auth_settings()
-    async with db_session_factory.begin() as session:
-        account = Account(display_name="Walletless")
-        session.add(account)
-        await session.flush()
-        account_id = account.id
-    raw_key = await _create_api_key(
-        db_session_factory,
-        account_id=account_id,
-        settings=settings,
-    )
-
-    async with db_session_factory() as session:
-        with pytest.raises(UnauthenticatedError, match="account wallet address is required"):
-            await resolve_actor(
-                session=session,
-                settings=settings,
-                authorization=f"Bearer {raw_key}",
-            )
-
-    assert await stored_last_used_at(account_id) is None
-
-
 async def test_resolve_actor_api_key_path_revoked_key_raises_unauthenticated(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -662,3 +635,19 @@ async def test_resolve_jwt_actor_with_api_key_raises_permission_denied(
             )
 
     assert await stored_last_used_at(account_id) is None
+
+
+async def test_resolve_jwt_actor_refuses_an_unknown_api_key_without_a_query(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = _auth_settings()
+
+    async with db_session_factory() as session:
+        with pytest.raises(PermissionDeniedError, match="jwt authentication required"):
+            await resolve_jwt_actor(
+                session=session,
+                settings=settings,
+                authorization=f"Bearer {settings.api_key_prefix}unknown",
+            )
+
+        assert not session.in_transaction()
