@@ -58,7 +58,7 @@ async def handle_request_validation_error(
 
 
 async def handle_database_error(request: Request, exc: DBAPIError) -> Response:
-    driver_error = exc.orig.__cause__ if exc.orig else None
+    driver_error = exc.driver_exception
     if not isinstance(driver_error, QueryCanceledError | LockNotAvailableError):
         # Not a statement or lock timeout, so it is left to the catch-all 500.
         raise exc
