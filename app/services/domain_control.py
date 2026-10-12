@@ -8,6 +8,7 @@ host of the service, live; another account's record never matches.
 """
 
 import asyncio
+import logging
 from collections.abc import Collection
 from enum import StrEnum
 from secrets import token_urlsafe
@@ -17,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import ServiceHealthStatus
 from app.core.json_types import JsonObject
-from app.core.logging import get_logger
 from app.db.models import ProviderDomainToken
 from app.integrations.providers.dns import DnsLookupError, DnsResolver
 from app.integrations.providers.targets import (
@@ -26,7 +26,7 @@ from app.integrations.providers.targets import (
 )
 from app.services.service_health import ServiceHealthOutcome
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 RECORD_LABEL = "_agent-marketplace"
 # Hosts one check proves at once. A proof sends an A and an AAAA query together, then a

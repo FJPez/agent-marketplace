@@ -1,19 +1,13 @@
 import json
 import logging
 import uuid
-from collections.abc import Callable
 from datetime import datetime
 
 import pytest
+from tests.fixtures.logs import LoggedEntries
 
 from app.core.logging import (
-    DURATION_MS_FIELD,
-    METHOD_FIELD,
-    PATH_FIELD,
-    REQUEST_ID_FIELD,
-    STATUS_CODE_FIELD,
     bind_request_id,
-    build_log_context,
     configure_logging,
     reset_request_id,
     resolve_request_id,
@@ -21,23 +15,11 @@ from app.core.logging import (
 
 SECRET = "sk-live-4f9a7c"
 
-LoggedEntries = Callable[[], list[dict[str, object]]]
-
 
 @pytest.fixture
 def logger() -> logging.Logger:
     # Each test configures logging in its body: capsys swaps stdout after fixture setup.
     return logging.getLogger("app.tests")
-
-
-@pytest.fixture
-def logged_entries(capsys: pytest.CaptureFixture[str]) -> LoggedEntries:
-    """Read the JSON lines logged to stdout since the last read."""
-
-    def read() -> list[dict[str, object]]:
-        return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-
-    return read
 
 
 @pytest.mark.parametrize(
@@ -61,24 +43,6 @@ def test_resolve_request_id_generates_a_uuid_for_a_missing_or_invalid_value(
     assert str(uuid.UUID(generated)) == generated
 
 
-def test_build_log_context_uses_stable_request_fields() -> None:
-    context = build_log_context(
-        request_id="req-123",
-        method="GET",
-        path="/health",
-        status_code=200,
-        duration_ms=12,
-    )
-
-    assert context == {
-        REQUEST_ID_FIELD: "req-123",
-        METHOD_FIELD: "GET",
-        PATH_FIELD: "/health",
-        STATUS_CODE_FIELD: 200,
-        DURATION_MS_FIELD: 12,
-    }
-
-
 def test_configure_logging_writes_each_app_record_once_as_a_json_line(
     logger: logging.Logger,
     logged_entries: LoggedEntries,
@@ -99,7 +63,7 @@ def test_configure_logging_writes_each_app_record_once_as_a_json_line(
         "level": "INFO",
         "logger": "app.tests",
         "message": "line one\nline two",
-        REQUEST_ID_FIELD: "req-789",
+        "request_id": "req-789",
         "service_id": 7,
         "ratio": 0.5,
         "cached": True,
