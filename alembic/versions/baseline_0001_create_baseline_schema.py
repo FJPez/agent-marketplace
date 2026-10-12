@@ -26,7 +26,7 @@ def upgrade() -> None:
     op.create_table(
         "accounts",
         sa.Column("id", sa.BigInteger(), sa.Identity(always=True), nullable=False),
-        sa.Column("wallet_address", sa.String(length=42), nullable=True),
+        sa.Column("wallet_address", sa.String(length=42), nullable=False),
         sa.Column(
             "account_type", sa.String(length=10), server_default=sa.text("'human'"), nullable=False
         ),
