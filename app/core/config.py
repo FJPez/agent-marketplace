@@ -143,12 +143,6 @@ class Settings(BaseSettings):
         sources.append(file_secret_settings)
         return tuple(sources)
 
-    @field_validator("log_level", mode="before")
-    @classmethod
-    def normalize_log_level(cls, value: object) -> object:
-        # Accept `APP_LOG_LEVEL=info`: the Literal above lists only upper-case names.
-        return value.upper() if isinstance(value, str) else value
-
     @field_validator("provider_secret_encryption_keys", mode="before")
     @classmethod
     def split_provider_secret_encryption_keys(cls, value: object) -> object:
