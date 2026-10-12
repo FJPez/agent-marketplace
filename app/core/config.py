@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     db_application_name: str = "agent-marketplace-api"
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
+    max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
