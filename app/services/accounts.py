@@ -13,6 +13,14 @@ async def get_account(*, session: AsyncSession, account_id: int) -> Account:
     return account
 
 
+async def get_account_for_update(*, session: AsyncSession, account_id: int) -> Account:
+    """Load the account and lock its row until the transaction ends."""
+    account = await session.get(Account, account_id, with_for_update=True)
+    if account is None:
+        raise NotFoundError("account not found")
+    return account
+
+
 async def update_display_name(
     *,
     session: AsyncSession,
