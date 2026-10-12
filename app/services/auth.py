@@ -37,11 +37,10 @@ class AuthResult:
 
 
 def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
-    wallet_address = _require_wallet_address(account)
     access_token = create_jwt(
         secret_key=settings.jwt_secret_key,
         account_id=account.id,
-        wallet_address=wallet_address,
+        wallet_address=account.wallet_address,
         token_version=account.token_version,
         token_type=AuthTokenType.ACCESS,
         expires_in_seconds=settings.jwt_access_token_expiry,
@@ -49,7 +48,7 @@ def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
     refresh_token = create_jwt(
         secret_key=settings.jwt_secret_key,
         account_id=account.id,
-        wallet_address=wallet_address,
+        wallet_address=account.wallet_address,
         token_version=account.token_version,
         token_type=AuthTokenType.REFRESH,
         expires_in_seconds=settings.jwt_refresh_token_expiry,
@@ -152,7 +151,7 @@ async def refresh_access_token(
     return create_jwt(
         secret_key=settings.jwt_secret_key,
         account_id=account.id,
-        wallet_address=_require_wallet_address(account),
+        wallet_address=account.wallet_address,
         token_version=account.token_version,
         token_type=AuthTokenType.ACCESS,
         expires_in_seconds=settings.jwt_access_token_expiry,
@@ -183,22 +182,10 @@ async def resolve_jwt_actor(
     settings: Settings,
     authorization: str,
 ) -> ActorContext:
-    actor = await resolve_actor(
-        session=session,
-        settings=settings,
-        authorization=authorization,
-        touch_api_key=False,
-    )
-    if actor.auth_method != "jwt":
+    token = _extract_bearer_token(authorization)
+    if token.startswith(settings.api_key_prefix):
         raise PermissionDeniedError("jwt authentication required")
-    return actor
-
-
-def _require_wallet_address(account: Account) -> str:
-    if account.wallet_address is None:
-        msg = "account wallet address is required"
-        raise UnauthenticatedError(msg)
-    return account.wallet_address
+    return await _resolve_jwt_token_actor(session=session, settings=settings, token=token)
 
 
 def _extract_bearer_token(authorization: str) -> str:
@@ -270,7 +257,7 @@ async def _resolve_api_key_actor(
         is_admin=account.is_admin,
         account_type=account.account_type,
         auth_method="api_key",
-        wallet_address=_require_wallet_address(account),
+        wallet_address=account.wallet_address,
     )
     if touch_api_key:
         await _touch_api_key(session=session, settings=settings, api_key=api_key, now=now)
@@ -330,5 +317,5 @@ async def _resolve_jwt_token_actor(
         is_admin=account.is_admin,
         account_type=account.account_type,
         auth_method="jwt",
-        wallet_address=_require_wallet_address(account),
+        wallet_address=account.wallet_address,
     )
