@@ -2,15 +2,10 @@ import json
 import logging
 import re
 import sys
-from contextvars import ContextVar, Token
 from datetime import UTC, datetime
 from typing import Final
-from uuid import uuid4
 
-REQUEST_ID_HEADER: Final[str] = "X-Request-ID"
-
-_request_id_context: ContextVar[str | None] = ContextVar("request_id", default=None)
-REQUEST_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._:-]{1,128}")
+from app.core.request_id import current_request_id
 
 REDACTED: Final[str] = "[REDACTED]"
 # Header values that are credentials or spendable payment authorizations.
@@ -56,7 +51,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": redact(record.getMessage()),
         }
-        request_id = get_request_id()
+        request_id = current_request_id.get()
         if request_id is not None:
             entry["request_id"] = request_id
         for name, value in vars(record).items():
@@ -74,22 +69,3 @@ class JsonFormatter(logging.Formatter):
         if record.stack_info:
             entry["stack"] = redact(record.stack_info)
         return json.dumps(entry)
-
-
-def resolve_request_id(request_id: str | None) -> str:
-    """Return the client's X-Request-ID if it is safe to log and echo, else a new UUID."""
-    if request_id is not None and REQUEST_ID_PATTERN.fullmatch(request_id):
-        return request_id
-    return str(uuid4())
-
-
-def bind_request_id(request_id: str) -> Token[str | None]:
-    return _request_id_context.set(request_id)
-
-
-def reset_request_id(token: Token[str | None]) -> None:
-    _request_id_context.reset(token)
-
-
-def get_request_id() -> str | None:
-    return _request_id_context.get()
