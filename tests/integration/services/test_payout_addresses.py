@@ -285,7 +285,6 @@ def test_a_payout_proof_is_not_a_login_signature() -> None:
             build_service_settings(),
             message=login_message,
             signature=_sign(challenge, wallet),
-            expected_nonce=challenge.nonce,
             now=issued_at,
         )
 

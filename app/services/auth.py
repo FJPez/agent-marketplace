@@ -11,11 +11,9 @@ from app.core.config import Settings
 from app.core.errors import PermissionDeniedError, UnauthenticatedError
 from app.core.security import (
     AuthTokenType,
-    ParsedSiweMessage,
     checksum_address,
     create_jwt,
     decode_jwt,
-    decode_token,
     generate_nonce,
     hash_api_key,
     verify_siwe_signature,
@@ -103,7 +101,10 @@ async def verify_wallet(
     message: str,
     signature: str,
 ) -> AuthResult:
-    parsed = _parse_and_validate_message(settings=settings, message=message, signature=signature)
+    try:
+        parsed = verify_siwe_signature(settings, message=message, signature=signature)
+    except ValueError as exc:
+        raise UnauthenticatedError(str(exc)) from exc
     account = await session.scalar(
         select(Account).where(Account.wallet_address == parsed.address).with_for_update(),
     )
@@ -136,17 +137,17 @@ async def refresh_access_token(
     refresh_token: str,
 ) -> str:
     try:
-        payload = decode_token(
-            settings,
+        claims = decode_jwt(
             refresh_token,
-            expected_type=AuthTokenType.REFRESH.value,
+            secret_key=settings.jwt_secret_key.get_secret_value(),
+            expected_token_type=AuthTokenType.REFRESH,
         )
     except InvalidTokenError as exc:
         raise UnauthenticatedError("invalid token") from exc
-    account = await session.get(Account, int(payload.subject))
+    account = await session.get(Account, claims.account_id)
     if account is None:
         raise UnauthenticatedError("authenticated account does not exist")
-    if account.token_version != payload.token_version:
+    if account.token_version != claims.token_version:
         raise UnauthenticatedError("token version is not valid")
     return create_jwt(
         secret_key=settings.jwt_secret_key.get_secret_value(),
@@ -194,32 +195,6 @@ def _extract_bearer_token(authorization: str) -> str:
         msg = "Bearer token is required"
         raise UnauthenticatedError(msg)
     return token
-
-
-def _parse_and_validate_message(
-    *,
-    settings: Settings,
-    message: str,
-    signature: str,
-) -> ParsedSiweMessage:
-    try:
-        parsed = verify_siwe_signature(
-            settings,
-            message=message,
-            signature=signature,
-            expected_nonce=_extract_nonce(message),
-            now=datetime.now(UTC),
-        )
-    except ValueError as exc:
-        raise UnauthenticatedError(str(exc)) from exc
-    return parsed
-
-
-def _extract_nonce(message: str) -> str:
-    for line in message.splitlines():
-        if line.startswith("Nonce: "):
-            return line.removeprefix("Nonce: ")
-    raise UnauthenticatedError("nonce is not valid")
 
 
 def _nonce_is_active(account: Account, *, settings: Settings) -> bool:
