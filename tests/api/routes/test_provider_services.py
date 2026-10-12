@@ -195,7 +195,7 @@ async def test_provider_service_routes_require_bearer_token(
     assert response.json() == {
         "type": "/problems/unauthenticated",
         "status": 401,
-        "detail": "Authorization header is required",
+        "detail": "a valid bearer token is required",
     }
 
 

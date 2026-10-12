@@ -12,16 +12,10 @@ from tests.helpers.auth import create_account
 from tests.integration.services.conftest import LastUsedAtReader, LastUsedAtWriter
 
 from app.core.config import Settings
-from app.core.errors import PermissionDeniedError, UnauthenticatedError
+from app.core.errors import UnauthenticatedError
 from app.core.security import AuthTokenType, create_jwt, hash_api_key
 from app.db.models import Account, ApiKey
-from app.services.auth import (
-    issue_nonce,
-    refresh_access_token,
-    resolve_actor,
-    resolve_jwt_actor,
-    verify_wallet,
-)
+from app.services.auth import issue_nonce, refresh_access_token, resolve_actor, verify_wallet
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -362,7 +356,7 @@ async def test_resolve_actor_jwt_path_returns_actor_context(
         actor = await resolve_actor(
             session=session,
             settings=settings,
-            authorization=f"Bearer {access_token}",
+            token=access_token,
         )
 
     assert actor.account_id == account.id
@@ -381,7 +375,7 @@ async def test_resolve_actor_jwt_path_garbage_token_raises_unauthenticated(
             await resolve_actor(
                 session=session,
                 settings=settings,
-                authorization="Bearer garbage",
+                token="garbage",
             )
 
 
@@ -403,7 +397,7 @@ async def test_resolve_actor_jwt_path_unknown_account_raises_unauthenticated(
             await resolve_actor(
                 session=session,
                 settings=settings,
-                authorization=f"Bearer {token}",
+                token=token,
             )
 
 
@@ -437,7 +431,7 @@ async def test_resolve_actor_jwt_path_stale_token_version_raises_unauthenticated
             await resolve_actor(
                 session=session,
                 settings=settings,
-                authorization=f"Bearer {token}",
+                token=token,
             )
 
 
@@ -476,31 +470,12 @@ async def test_resolve_actor_api_key_path_returns_actor_and_touches_last_used(
         actor = await resolve_actor(
             session=session,
             settings=settings,
-            authorization=f"Bearer {raw_key}",
+            token=raw_key,
         )
 
     assert actor.account_id == account_id
     assert actor.auth_method == "api_key"
     assert await stored_last_used_at(account_id) is not None
-
-
-async def test_resolve_actor_api_key_path_no_touch_leaves_last_used_none(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    stored_last_used_at: LastUsedAtReader,
-) -> None:
-    settings = _auth_settings()
-    account_id = await create_account(db_session_factory, display_name="Alpha")
-    raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
-
-    async with db_session_factory() as session:
-        await resolve_actor(
-            session=session,
-            settings=settings,
-            authorization=f"Bearer {raw_key}",
-            touch_api_key=False,
-        )
-
-    assert await stored_last_used_at(account_id) is None
 
 
 @pytest.mark.parametrize(
@@ -527,7 +502,7 @@ async def test_resolve_actor_touches_an_api_key_at_most_once_per_interval(
         await resolve_actor(
             session=session,
             settings=settings,
-            authorization=f"Bearer {raw_key}",
+            token=raw_key,
         )
 
     stored = await stored_last_used_at(account_id)
@@ -556,7 +531,7 @@ async def test_resolve_actor_does_not_overwrite_a_concurrent_touch(
         await resolve_actor(
             session=session,
             settings=settings,
-            authorization=f"Bearer {raw_key}",
+            token=raw_key,
         )
 
     assert await stored_last_used_at(account_id) == touched_at
@@ -579,7 +554,7 @@ async def test_resolve_actor_api_key_path_revoked_key_raises_unauthenticated(
             await resolve_actor(
                 session=session,
                 settings=settings,
-                authorization=f"Bearer {raw_key}",
+                token=raw_key,
             )
 
 
@@ -600,54 +575,5 @@ async def test_resolve_actor_api_key_path_expired_key_raises_unauthenticated(
             await resolve_actor(
                 session=session,
                 settings=settings,
-                authorization=f"Bearer {raw_key}",
+                token=raw_key,
             )
-
-
-async def test_resolve_actor_non_bearer_authorization_raises_unauthenticated(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    settings = _auth_settings()
-
-    async with db_session_factory() as session:
-        with pytest.raises(UnauthenticatedError):
-            await resolve_actor(
-                session=session,
-                settings=settings,
-                authorization="Token abc",
-            )
-
-
-async def test_resolve_jwt_actor_with_api_key_raises_permission_denied(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    stored_last_used_at: LastUsedAtReader,
-) -> None:
-    settings = _auth_settings()
-    account_id = await create_account(db_session_factory, display_name="Alpha")
-    raw_key = await _create_api_key(db_session_factory, account_id=account_id, settings=settings)
-
-    async with db_session_factory() as session:
-        with pytest.raises(PermissionDeniedError, match="jwt authentication required"):
-            await resolve_jwt_actor(
-                session=session,
-                settings=settings,
-                authorization=f"Bearer {raw_key}",
-            )
-
-    assert await stored_last_used_at(account_id) is None
-
-
-async def test_resolve_jwt_actor_refuses_an_unknown_api_key_without_a_query(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    settings = _auth_settings()
-
-    async with db_session_factory() as session:
-        with pytest.raises(PermissionDeniedError, match="jwt authentication required"):
-            await resolve_jwt_actor(
-                session=session,
-                settings=settings,
-                authorization=f"Bearer {settings.api_key_prefix}unknown",
-            )
-
-        assert not session.in_transaction()

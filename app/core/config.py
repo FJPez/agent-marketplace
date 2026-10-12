@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     db_application_name: str = "agent-marketplace-api"
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
+    max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     # Payment terms stamped on every new price version (spec section 12). The
     # treasury is every paid listing's payTo; staging and prod refuse to start
