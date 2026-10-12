@@ -9,10 +9,11 @@ from app.core.resources import open_resources
 
 async def _open_connections(db_engine: AsyncEngine, application_name: str) -> int:
     async with db_engine.connect() as connection:
-        return await connection.scalar(
+        result = await connection.execute(
             text("SELECT count(*) FROM pg_stat_activity WHERE application_name = :name"),
             {"name": application_name},
         )
+        return result.scalar_one()
 
 
 async def test_closing_resources_closes_their_database_connections(
