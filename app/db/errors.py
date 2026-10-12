@@ -5,6 +5,4 @@ from sqlalchemy.exc import IntegrityError
 
 
 def is_unique_violation(exc: IntegrityError) -> bool:
-    # SQLAlchemy's asyncpg adapter chains the driver's own exception.
-    driver_error = exc.orig.__cause__ if exc.orig else None
-    return isinstance(driver_error, UniqueViolationError)
+    return isinstance(exc.driver_exception, UniqueViolationError)
