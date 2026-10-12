@@ -1,9 +1,11 @@
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import create_account
 
 from app.core.errors import InvalidInputError, NotFoundError
-from app.services.accounts import get_account, update_display_name
+from app.db.models import Account
+from app.services.accounts import get_account, get_account_for_update, update_display_name
 
 
 @pytest.mark.asyncio
@@ -31,6 +33,33 @@ async def test_get_account_raises_not_found_for_missing_id(
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError):
             await get_account(session=session, account_id=999_999)
+
+
+@pytest.mark.asyncio
+async def test_get_account_for_update_locks_the_row_until_the_transaction_ends(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    account_id = await create_account(db_session_factory)
+    lock_unless_taken = (
+        select(Account.id).where(Account.id == account_id).with_for_update(skip_locked=True)
+    )
+
+    async with db_session_factory() as holder, db_session_factory() as other:
+        account = await get_account_for_update(session=holder, account_id=account_id)
+        assert account.id == account_id
+        assert await other.scalar(lock_unless_taken) is None
+
+        await holder.rollback()
+        assert await other.scalar(lock_unless_taken) == account_id
+
+
+@pytest.mark.asyncio
+async def test_get_account_for_update_raises_not_found_for_missing_id(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with db_session_factory() as session:
+        with pytest.raises(NotFoundError):
+            await get_account_for_update(session=session, account_id=999_999)
 
 
 @pytest.mark.asyncio
