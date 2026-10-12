@@ -6,6 +6,7 @@ marketplace. The marketplace generates the secret, returns it once, and stores i
 only encrypted under `provider_secret_encryption_keys`.
 """
 
+import logging
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import token_urlsafe
@@ -17,10 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidStateError, NotFoundError
-from app.core.logging import get_logger
 from app.db.models import ProviderSigningSecret
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # A lost rotate response is retried within minutes; replaying longer would let a leaked
 # Idempotency-Key read the deployed secret.

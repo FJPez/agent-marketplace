@@ -6,15 +6,15 @@ returned so the proxy connects to one of them instead of resolving the host agai
 and a DNS answer that changes after validation cannot redirect the request.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network
 from urllib.parse import urlsplit
 
-from app.core.logging import get_logger
 from app.integrations.providers.dns import DnsLookupError, DnsResolver, IpAddress
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 _LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
 # Two or more labels, the last starting with a letter as every top-level domain does,

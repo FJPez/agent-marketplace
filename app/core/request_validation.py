@@ -15,6 +15,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import sys
 import time
 from dataclasses import dataclass
@@ -23,7 +24,6 @@ from typing import NamedTuple, Protocol
 
 from app.core.errors import InvalidInputError, UnavailableError
 from app.core.json_types import JsonObject
-from app.core.logging import get_logger
 from app.core.request_validation_worker import (
     ANSWER_HEADER,
     CHECK_SCHEMA,
@@ -34,7 +34,7 @@ from app.core.request_validation_worker import (
     VALIDATE_BODY,
 )
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 REQUEST_BODY_MAX_BYTES = 1024 * 1024
 # A worker whose size passes this after an answer exits, and the next call starts a fresh
