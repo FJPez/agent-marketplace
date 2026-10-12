@@ -58,7 +58,7 @@ def read_health_live() -> HealthResponse:
     summary="Read the readiness probe",
     description=(
         "Confirms the API is ready to serve traffic, including critical backing "
-        "dependencies such as the database and Redis-backed guardrails when configured."
+        "dependencies such as the database and Redis-backed rate limiting when configured."
     ),
     responses={
         200: {"description": "Application readiness check passed."},

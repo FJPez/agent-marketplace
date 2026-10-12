@@ -107,10 +107,10 @@ def test_rate_limited_request_carries_request_id_and_is_logged(
     app = create_app()
 
     with TestClient(app) as client:
-        # The global rate limit applies to any /v1 path before routing, so an unknown
-        # route still exhausts it without touching the database.
-        client.get("/v1/unknown-route")
-        response = client.get("/v1/unknown-route", headers={REQUEST_ID_HEADER: "request-429"})
+        # Without its query parameter the first request is counted, then refused as
+        # invalid before it touches the database.
+        client.get("/v1/auth/nonce")
+        response = client.get("/v1/auth/nonce", headers={REQUEST_ID_HEADER: "request-429"})
 
     assert response.status_code == 429
     assert response.headers["content-type"] == "application/problem+json"
@@ -119,7 +119,7 @@ def test_rate_limited_request_carries_request_id_and_is_logged(
     (entry,) = [entry for entry in logged_entries() if entry.get("request_id") == "request-429"]
     assert {
         "message": "request completed",
-        "path": "/v1/unknown-route",
+        "path": "/v1/auth/nonce",
         "status_code": 429,
     }.items() <= entry.items()
 

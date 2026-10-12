@@ -84,6 +84,13 @@ class InvalidStateError(ApplicationError):
     default_problem_type = "invalid_state"
 
 
+class RateLimitedError(ApplicationError):
+    """The caller has sent too many requests."""
+
+    status_code = 429
+    default_problem_type = "rate_limited"
+
+
 class UnavailableError(ApplicationError):
     """The server cannot handle the request now."""
 

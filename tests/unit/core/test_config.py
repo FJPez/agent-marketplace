@@ -87,6 +87,7 @@ def test_settings_use_default_values(
     assert settings.api_key_prefix == "amp_"
     assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
+    assert settings.max_request_body_bytes == 1024 * 1024
     assert settings.log_level == "INFO"
     assert settings.treasury_address is None
     assert settings.payment_network == "eip155:84532"
@@ -309,9 +310,10 @@ def test_settings_ignore_retired_payment_variables(
             id="idle-in-transaction-timeout-zero",
         ),
         pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
+        pytest.param({"APP_MAX_REQUEST_BODY_BYTES": "0"}, id="body-limit-zero"),
     ],
 )
-def test_settings_reject_timeouts_of_zero_and_a_negative_touch_interval(
+def test_settings_reject_limits_of_zero_and_a_negative_touch_interval(
     env_overrides: dict[str, str],
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
