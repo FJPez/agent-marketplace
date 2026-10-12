@@ -1,15 +1,15 @@
 from datetime import UTC, datetime, timedelta
 
-import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.security import (
-    TokenPayload,
-    decode_token,
-    encode_token,
+    AuthTokenType,
+    TokenClaims,
+    create_jwt,
+    decode_jwt,
     generate_api_key,
     hash_api_key,
     normalize_wallet_address,
@@ -33,23 +33,26 @@ def test_normalize_wallet_address_returns_checksum_address() -> None:
     assert normalized == signer.address
 
 
-def test_encode_and_decode_token_round_trip() -> None:
-    settings = _settings()
-    expires_at = datetime.now(UTC) + timedelta(minutes=15)
-    payload = TokenPayload(
-        subject="12",
-        wallet_address="0x1234567890123456789012345678901234567890",
+def test_create_and_decode_jwt_round_trip() -> None:
+    secret_key = _settings().jwt_secret_key.get_secret_value()
+    wallet_address = "0x1234567890123456789012345678901234567890"
+
+    token = create_jwt(
+        secret_key=secret_key,
+        account_id=12,
+        wallet_address=wallet_address,
         token_version=3,
-        token_type="access",
-        expires_at=expires_at,
+        token_type=AuthTokenType.ACCESS,
+        expires_in_seconds=900,
     )
+    claims = decode_jwt(token, secret_key=secret_key, expected_token_type=AuthTokenType.ACCESS)
 
-    token = encode_token(settings, payload)
-    decoded = decode_token(settings, token, expected_type="access")
-
-    assert decoded.subject == "12"
-    assert decoded.token_version == 3
-    assert decoded.token_type == "access"
+    assert claims == TokenClaims(
+        account_id=12,
+        wallet_address=wallet_address,
+        token_version=3,
+        token_type=AuthTokenType.ACCESS,
+    )
 
 
 def test_parse_siwe_message_extracts_expected_fields() -> None:
@@ -103,42 +106,11 @@ def test_verify_siwe_signature_accepts_valid_message() -> None:
         settings,
         message=message,
         signature=signed.signature.to_0x_hex(),
-        expected_nonce="abc123",
         now=issued_at + timedelta(seconds=1),
     )
 
     assert parsed.address == signer.address
-
-
-def test_verify_siwe_signature_rejects_wrong_nonce() -> None:
-    settings = _settings()
-    signer = Account.create()
-    issued_at = datetime.now(UTC).replace(microsecond=0)
-    message = "\n".join(
-        [
-            "testserver wants you to sign in with your Ethereum account:",
-            signer.address,
-            "",
-            "URI: http://testserver",
-            "Version: 1",
-            "Chain ID: 1",
-            "Nonce: abc123",
-            f"Issued At: {issued_at.isoformat().replace('+00:00', 'Z')}",
-        ],
-    )
-    signed = Account.sign_message(
-        signable_message=encode_defunct(text=message),
-        private_key=signer.key,
-    )
-
-    with pytest.raises(ValueError, match="nonce is not valid"):
-        verify_siwe_signature(
-            settings,
-            message=message,
-            signature=signed.signature.to_0x_hex(),
-            expected_nonce="wrong",
-            now=issued_at + timedelta(seconds=1),
-        )
+    assert parsed.nonce == "abc123"
 
 
 def test_generate_api_key_returns_prefixed_plaintext_and_hash() -> None:
