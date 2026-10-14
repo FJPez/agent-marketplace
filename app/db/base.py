@@ -17,9 +17,5 @@ class Base(DeclarativeBase):
 
 
 def utc_now() -> datetime:
-    """Return the current time with its UTC zone, for Python-side column defaults.
-
-    A bare datetime.now() is naive: PostgreSQL still stores the right instant, but
-    the ORM keeps the naive value in memory, which API responses then reject.
-    """
+    """The current time with its zone; a naive datetime.now() fails response validation."""
     return datetime.now(UTC)

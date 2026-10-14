@@ -237,11 +237,7 @@ async def _ensure_paid_price(
     settings: Settings,
     endpoint: ServiceEndpoint,
 ) -> ListingPrice:
-    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT on the current payment terms.
-
-    A new version is added when the amount or any term differs. Without a treasury
-    the service refuses to build one (InvalidStateError).
-    """
+    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT on the current payment terms."""
     if endpoint.current_price_id is not None:
         current = await session.get(ListingPrice, endpoint.current_price_id)
         if (

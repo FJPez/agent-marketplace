@@ -6,12 +6,7 @@ from app.schemas.common import Id, Timestamp
 
 
 class ListingPriceRequest(BaseModel):
-    """A provider's price for a paid endpoint.
-
-    `amount` is in atomic units of the marketplace's payment asset (for USDC,
-    1,000,000 is 1 USDC). The marketplace adds the asset, network, pay_to,
-    validity window and fee from its settings when it stores the price version.
-    """
+    """A paid endpoint's price, in atomic units of the payment asset (1 USDC = 1,000,000)."""
 
     model_config = ConfigDict(
         extra="forbid",
