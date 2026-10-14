@@ -3,16 +3,20 @@
 from fastapi import Request
 
 from app.api.deps.auth import OptionalActor
+from app.api.deps.settings import SettingsDep
 from app.core.errors import RateLimitedError
 from app.core.lifespan import get_resources
 
 GLOBAL_SCOPE = "global"
 
 
-async def enforce_rate_limit(request: Request, actor: OptionalActor) -> None:
-    resources = get_resources(request.app)
-    limit = resources.settings.api_rate_limit
-    backend = resources.rate_limits_backend
+async def enforce_rate_limit(
+    request: Request,
+    actor: OptionalActor,
+    settings: SettingsDep,
+) -> None:
+    limit = settings.api_rate_limit
+    backend = get_resources(request.app).rate_limits_backend
 
     if actor is None:
         client_host = request.client.host if request.client is not None else "unknown"
