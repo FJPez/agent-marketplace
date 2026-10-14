@@ -216,9 +216,8 @@ async def publish_provider_service(
     status_code=status.HTTP_201_CREATED,
     summary="Create a provider endpoint",
     description=(
-        "Creates a new endpoint under an owned provider service. A paid endpoint's "
-        "`price.amount` is in atomic units of the marketplace's payment asset (for USDC, "
-        "1000000 is 1 USDC) and becomes its first price version."
+        "Creates a new endpoint under an owned provider service. Prices are in atomic units "
+        "of the payment asset."
     ),
     responses={
         201: {"description": "Endpoint created successfully."},
@@ -278,13 +277,7 @@ async def create_provider_endpoint(
     "/endpoints/{endpoint_id}",
     response_model=EndpointResponse,
     summary="Update a provider endpoint",
-    description=(
-        "Updates an owned provider endpoint. A new `price.amount` creates a new immutable "
-        "price version in the marketplace's current asset and network; earlier versions are "
-        "kept. Resending the current amount after the asset or network changed also creates "
-        "a version, so it must meet the current minimum price and, on a suspended service, is "
-        "refused like any other change; omit `price` to leave it untouched."
-    ),
+    description="Updates an owned provider endpoint. A changed price becomes a new price version.",
     responses={
         200: {"description": "Endpoint updated successfully."},
         404: {"description": "The requested endpoint does not exist or is not owned by the actor."},
