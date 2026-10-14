@@ -56,7 +56,11 @@ def test_public_endpoint_pricing_shows_the_invoke_url_and_no_price_for_free_endp
     endpoint = _build_endpoint(key="translate", access_mode=AccessMode.FREE)
     endpoint.id = 7
 
-    result = PublicEndpointPricing.from_model(endpoint, service_slug="translation-service")
+    result = PublicEndpointPricing.from_model(
+        endpoint,
+        service_slug="translation-service",
+        pay_to=None,
+    )
 
     assert result.model_dump() == {
         "endpoint_id": 7,

@@ -10,7 +10,7 @@ from tests.fixtures.domain import (
     create_service_record,
     read_price_versions,
 )
-from tests.fixtures.settings import TEST_PRICE_TERMS, TEST_TREASURY_ADDRESS
+from tests.fixtures.settings import TEST_PRICE_TERMS
 
 from app.core.enums import AccessMode
 from app.db.errors import unique_violation_constraint
@@ -80,8 +80,6 @@ async def test_price_version_stores_its_terms_and_loads_as_the_current_price(
     assert endpoint.current_price.amount == 2**64 + 1
     assert endpoint.current_price.asset == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     assert endpoint.current_price.network == "eip155:84532"
-    assert endpoint.current_price.pay_to == TEST_TREASURY_ADDRESS
-    assert endpoint.current_price.max_timeout_seconds == 120
     assert endpoint.current_price.fee_bps == 1_000
     assert endpoint.current_price.created_at is not None
 
@@ -112,7 +110,6 @@ async def test_free_endpoint_cannot_have_a_current_price(
     [
         ("version", 0, "ck_listing_prices_positive_version"),
         ("amount", 0, "ck_listing_prices_positive_amount"),
-        ("max_timeout_seconds", 0, "ck_listing_prices_positive_max_timeout_seconds"),
         ("fee_bps", -1, "ck_listing_prices_fee_bps_range"),
         ("fee_bps", 10_001, "ck_listing_prices_fee_bps_range"),
     ],
@@ -141,10 +138,7 @@ async def test_price_versions_cannot_be_updated(
     with pytest.raises(DBAPIError, match="listing_prices rows are immutable"):
         async with db_session_factory.begin() as session:
             await session.execute(
-                update(ListingPrice).values(
-                    amount=1,
-                    pay_to="0x3333333333333333333333333333333333333333",
-                ),
+                update(ListingPrice).values(amount=1, fee_bps=0),
             )
 
     assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (

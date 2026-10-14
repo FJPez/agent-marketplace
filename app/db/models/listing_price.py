@@ -32,7 +32,6 @@ class ListingPrice(Base):
         UniqueConstraint("endpoint_id", "id", name="uq_listing_prices_endpoint_id_id"),
         CheckConstraint("version > 0", name="positive_version"),
         CheckConstraint("amount > 0", name="positive_amount"),
-        CheckConstraint("max_timeout_seconds > 0", name="positive_max_timeout_seconds"),
         CheckConstraint("fee_bps BETWEEN 0 AND 10000", name="fee_bps_range"),
     )
 
@@ -51,8 +50,7 @@ class ListingPrice(Base):
     asset: Mapped[str] = mapped_column(String(42))
     # A CAIP-2 chain id such as eip155:84532: at most 8 + 1 + 32 characters.
     network: Mapped[str] = mapped_column(String(41))
-    pay_to: Mapped[str] = mapped_column(String(42))
-    max_timeout_seconds: Mapped[int] = mapped_column(Integer)
+    # The platform's cut in basis points, fixed when the provider set this price.
     fee_bps: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

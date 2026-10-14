@@ -225,12 +225,11 @@ async def _insert_current_listing_price(db_engine: AsyncEngine, *, endpoint_id: 
                 """
                 WITH price AS (
                     INSERT INTO listing_prices (
-                        endpoint_id, version, amount, asset, network, pay_to,
-                        max_timeout_seconds, fee_bps
+                        endpoint_id, version, amount, asset, network, fee_bps
                     )
                     VALUES (
                         :endpoint_id, 1, 10000, '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-                        'eip155:84532', '0x1111111111111111111111111111111111111111', 120, 1000
+                        'eip155:84532', 1000
                     )
                     RETURNING id
                 )

@@ -25,8 +25,8 @@ from app.schemas.service import EndpointUpdateRequest
 from app.services import discovery, listings, moderation, provider_endpoints
 from app.services.listings import InvokableListing, ListingPriceTerms, ListingUpstream
 
-# The treasury before a rotation: price versions keep the pay_to they were stamped with.
-RETIRED_TREASURY_ADDRESS = "0x2222222222222222222222222222222222222222"
+# A network the settings no longer name: a version keeps the network it was created on.
+RETIRED_NETWORK = "eip155:8453"
 REQUEST_SCHEMA: JsonObject = {
     "type": "object",
     "properties": {"text": {"type": "string"}},
@@ -139,13 +139,12 @@ async def test_a_paid_listing_loads_its_current_price_version_as_stored(
 ) -> None:
     seeded = await _seed_listing(db_session_factory, access_mode=AccessMode.PAID)
     await create_listing_price_record(db_session_factory, endpoint_id=seeded.endpoint_id)
-    # Stamped with a treasury the settings no longer name: loaded as it is.
     current_price_id = await create_listing_price_record(
         db_session_factory,
         endpoint_id=seeded.endpoint_id,
         amount=40_000,
         version=2,
-        pay_to=RETIRED_TREASURY_ADDRESS,
+        network=RETIRED_NETWORK,
     )
 
     listing = await _load(db_session_factory)
@@ -155,9 +154,7 @@ async def test_a_paid_listing_loads_its_current_price_version_as_stored(
         version=2,
         amount=40_000,
         asset="0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        network="eip155:84532",
-        pay_to=RETIRED_TREASURY_ADDRESS,
-        max_timeout_seconds=120,
+        network=RETIRED_NETWORK,
         fee_bps=1_000,
     )
 
@@ -336,7 +333,7 @@ async def test_every_endpoint_discovery_lists_can_be_loaded(
 
     async with db_session_factory() as session:
         service = await discovery.get_service(session=session, service_ref="translator")
-        listed = PublicServicePricingResponse.from_model(service).endpoints
+        listed = PublicServicePricingResponse.from_model(service, pay_to=None).endpoints
 
     assert sorted(endpoint.key for endpoint in listed) == ["summarize", "translate"]
     for endpoint in listed:
