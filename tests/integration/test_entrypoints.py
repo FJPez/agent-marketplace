@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 
-import httpx
+import httpx2
 from tests.fixtures.settings import PROJECT_ROOT
 from tests.integration.failing_app import PAYMENT_SECRET
 
@@ -18,7 +18,7 @@ def _json_lines(output: str) -> list[dict[str, object]]:
     return [json.loads(line) for line in output.splitlines() if line.startswith("{")]
 
 
-def _serve_one_request(app: str, path: str, *options: str) -> tuple[httpx.Response, str, str]:
+def _serve_one_request(app: str, path: str, *options: str) -> tuple[httpx2.Response, str, str]:
     """Start uvicorn on `app`, send one GET for `path`, stop it; return the output too."""
     # uvicorn serves on a socket bound here, so the request waits in its backlog.
     with socket.create_server(("127.0.0.1", 0)) as server:
@@ -32,7 +32,7 @@ def _serve_one_request(app: str, path: str, *options: str) -> tuple[httpx.Respon
             text=True,
         )
         try:
-            response = httpx.get(
+            response = httpx2.get(
                 f"http://127.0.0.1:{server.getsockname()[1]}{path}",
                 headers={"X-Request-ID": REQUEST_ID},
                 timeout=30,

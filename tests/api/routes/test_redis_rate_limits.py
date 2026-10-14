@@ -4,7 +4,7 @@ import os
 from typing import TYPE_CHECKING
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 
 from app.core.config import get_settings
 from app.main import create_app
