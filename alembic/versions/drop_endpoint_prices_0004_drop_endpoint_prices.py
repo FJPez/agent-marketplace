@@ -18,9 +18,7 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # A USD-cent price has no asset, network or treasury pay_to, so it cannot become
-    # a price version. Refuse instead of silently unpricing paid endpoints; nothing is
-    # deployed, so only a local database can hold such rows (see the README).
+    # A cent price cannot become a price version, so refuse rather than unprice endpoints.
     op.execute(
         """
         DO $$

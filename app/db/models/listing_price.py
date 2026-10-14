@@ -18,27 +18,17 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.db.types import AtomicAmount
 
-# Named once: the provider editing service reads a violation of this key as a
-# concurrent price change.
+# The editing service reads a violation of this key as a concurrent price change.
 LISTING_PRICE_VERSION_CONSTRAINT = "uq_listing_prices_endpoint_id_version"
 
 
 class ListingPrice(Base):
-    """One immutable price version of a paid listing (a service endpoint).
-
-    A price change inserts a new version; `ServiceEndpoint.current_price_id` points
-    at the version on sale. The payment terms (asset, network, pay_to, validity
-    window, fee) are copied from the settings when the version is created, so a
-    purchase is always checked against the terms it was offered. The database
-    refuses to update a version (trigger `listing_prices_immutable`, created by
-    migration listing_prices_0003).
-    """
+    """One price version of a paid endpoint; a database trigger refuses any update."""
 
     __tablename__ = "listing_prices"
     __table_args__ = (
         UniqueConstraint("endpoint_id", "version", name=LISTING_PRICE_VERSION_CONSTRAINT),
-        # The target of ServiceEndpoint's current-price key, which scopes the
-        # pointer to the endpoint's own versions.
+        # The target of ServiceEndpoint's composite current-price key.
         UniqueConstraint("endpoint_id", "id", name="uq_listing_prices_endpoint_id_id"),
         CheckConstraint("version > 0", name="positive_version"),
         CheckConstraint("amount > 0", name="positive_amount"),

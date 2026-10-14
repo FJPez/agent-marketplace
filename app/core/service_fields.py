@@ -20,8 +20,7 @@ ENDPOINT_TIMEOUT_MAX_SECONDS = 30
 DEFAULT_RESPONSE_CONTENT_TYPE = "application/json"
 UPSTREAM_PATH_MAX_LENGTH = 2000
 HTTP_METHOD_MAX_LENGTH = 16
-# An RFC 6838 type/subtype (each at most 127 characters) without parameters; a
-# wildcard such as text/* is not a concrete response type.
+# An RFC 6838 type/subtype, without parameters or wildcards.
 MEDIA_TYPE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
 )

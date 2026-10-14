@@ -59,10 +59,7 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("endpoint_id", "id", name="uq_listing_prices_endpoint_id_id"),
     )
-    # Versions are immutable: revisions, and later purchases, pin them by id, so a
-    # price change inserts a new version. Deletes stay allowed for the endpoint
-    # cascade. Autogenerate does not compare triggers, so only this migration
-    # knows about them.
+    # Versions are immutable; deletes stay allowed for the endpoint cascade.
     op.execute(
         """
         CREATE FUNCTION reject_listing_price_update() RETURNS trigger
