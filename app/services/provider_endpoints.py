@@ -124,7 +124,7 @@ async def update_endpoint(
         resulting_amount = None if changes.price is None else changes.price.amount
     else:
         resulting_amount = current_amount
-    # Resending the current amount re-stamps it when the payment terms have changed.
+    # Resending the current amount re-stamps it after an asset or network change.
     price_changed = resulting_amount != current_amount or (
         price_supplied
         and current_price is not None
@@ -303,25 +303,17 @@ def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
         raise InvalidStateError(
             "paid prices are unavailable until APP_TREASURY_ADDRESS is configured",
         )
-    return ListingPrice(amount=amount, **_current_payment_terms(settings))
-
-
-def is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
-    """Whether `price` has the terms a version created now would get; the amount is ignored."""
-    return all(
-        getattr(price, term) == value for term, value in _current_payment_terms(settings).items()
+    return ListingPrice(
+        amount=amount,
+        asset=settings.payment_asset,
+        network=settings.payment_network,
+        fee_bps=settings.platform_fee_bps,
     )
 
 
-def _current_payment_terms(settings: Settings) -> dict[str, str | int | None]:
-    """The payment terms a new price version copies from the settings."""
-    return {
-        "asset": settings.payment_asset,
-        "network": settings.payment_network,
-        "pay_to": settings.treasury_address,
-        "max_timeout_seconds": settings.payment_max_timeout_seconds,
-        "fee_bps": settings.platform_fee_bps,
-    }
+def is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
+    """Whether `price` is in the asset and on the network that payments use now."""
+    return price.asset == settings.payment_asset and price.network == settings.payment_network
 
 
 async def put_price_on_sale(

@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.deps.database import SessionDep
+from app.api.deps.settings import SettingsDep
 from app.schemas.discovery import (
     PublicServiceDetail,
     PublicServiceListItem,
@@ -77,7 +78,8 @@ async def get_service_schema(
     description=(
         "Returns the public price catalogue of a service: for each enabled endpoint its id, "
         "invoke URL and, for a paid endpoint, the current price version with its amount in "
-        "atomic units of the asset, the asset, the network and the pay_to address."
+        "atomic units of the asset, the asset and the network, and the treasury address "
+        "payments go to now."
     ),
     responses={
         200: {"description": "Public service pricing returned successfully."},
@@ -88,6 +90,7 @@ async def get_service_schema(
 async def get_service_pricing(
     service_id_or_slug: PublicServiceRef,
     session: SessionDep,
+    settings: SettingsDep,
 ) -> PublicServicePricingResponse:
     found = await discovery.get_service(session=session, service_ref=service_id_or_slug)
-    return PublicServicePricingResponse.from_model(found)
+    return PublicServicePricingResponse.from_model(found, pay_to=settings.treasury_address)

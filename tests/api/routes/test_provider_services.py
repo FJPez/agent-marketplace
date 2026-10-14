@@ -13,7 +13,6 @@ from tests.fixtures.domain import (
     create_trusted_provider_records,
     create_upstream_record,
 )
-from tests.fixtures.settings import TEST_TREASURY_ADDRESS
 from tests.helpers.auth import auth_headers_for_account_id
 from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, TEST_UPSTREAM_HOST, FakeResolver
 
@@ -178,8 +177,6 @@ async def test_create_paid_endpoint_returns_its_first_price_version(
         "amount": 15_000,
         "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         "network": "eip155:84532",
-        "pay_to": TEST_TREASURY_ADDRESS,
-        "max_timeout_seconds": 120,
         "fee_bps": 1_000,
     }
 
