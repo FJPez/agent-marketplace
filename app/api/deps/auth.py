@@ -1,5 +1,6 @@
 """Authentication dependencies; they form a chain, so the actor is resolved once per request."""
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends
@@ -10,6 +11,8 @@ from app.api.deps.settings import SettingsDep
 from app.core.actor import ActorContext
 from app.core.errors import PermissionDeniedError, UnauthenticatedError
 from app.services.auth import resolve_actor
+
+logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer(
     auto_error=False,
@@ -33,7 +36,9 @@ async def get_optional_actor(
                 settings=settings,
                 token=credentials.credentials,
             )
-        except UnauthenticatedError:
+        except UnauthenticatedError as exc:
+            # The reason only, never any part of the token.
+            logger.info("authentication failed", extra={"reason": str(exc)})
             return None
 
 
@@ -42,7 +47,10 @@ OptionalActor = Annotated[ActorContext | None, Depends(get_optional_actor)]
 
 async def get_current_actor(actor: OptionalActor) -> ActorContext:
     if actor is None:
-        raise UnauthenticatedError("a valid bearer token is required")
+        raise UnauthenticatedError(
+            "a valid bearer token is required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return actor
 
 
