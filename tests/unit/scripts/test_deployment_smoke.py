@@ -1,4 +1,4 @@
-import httpx
+import httpx2
 import pytest
 from scripts.deployment_smoke import (
     SmokeCheckError,
@@ -8,20 +8,20 @@ from scripts.deployment_smoke import (
 
 
 def test_run_smoke_checks_accepts_expected_responses() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/health/live":
-            return httpx.Response(200, json={"status": "ok"})
+            return httpx2.Response(200, json={"status": "ok"})
         if request.url.path == "/health/ready":
-            return httpx.Response(200, json={"status": "ok"})
+            return httpx2.Response(200, json={"status": "ok"})
         if request.url.path == "/v1/auth/nonce":
             assert request.url.params["address"] == "0x0000000000000000000000000000000000000001"
-            return httpx.Response(200, json={"nonce": "nonce-123"})
+            return httpx2.Response(200, json={"nonce": "nonce-123"})
         if request.url.path == "/v1/services":
-            return httpx.Response(200, json=[])
-        return httpx.Response(404, json={"detail": "not found"})
+            return httpx2.Response(200, json=[])
+        return httpx2.Response(404, json={"detail": "not found"})
 
-    with httpx.Client(
-        transport=httpx.MockTransport(handler),
+    with httpx2.Client(
+        transport=httpx2.MockTransport(handler),
         base_url="https://example.com",
     ) as client:
         results = run_smoke_checks(client)
@@ -30,20 +30,20 @@ def test_run_smoke_checks_accepts_expected_responses() -> None:
 
 
 def test_run_smoke_checks_rejects_invalid_public_db_route_payload() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         if request.url.path == "/health/live":
-            return httpx.Response(200, json={"status": "ok"})
+            return httpx2.Response(200, json={"status": "ok"})
         if request.url.path == "/health/ready":
-            return httpx.Response(200, json={"status": "ok"})
+            return httpx2.Response(200, json={"status": "ok"})
         if request.url.path == "/v1/auth/nonce":
-            return httpx.Response(200, json={"nonce": "nonce-123"})
+            return httpx2.Response(200, json={"nonce": "nonce-123"})
         if request.url.path == "/v1/services":
-            return httpx.Response(200, json={"status": "ok"})
-        return httpx.Response(404, json={"detail": "not found"})
+            return httpx2.Response(200, json={"status": "ok"})
+        return httpx2.Response(404, json={"detail": "not found"})
 
     with (
-        httpx.Client(
-            transport=httpx.MockTransport(handler),
+        httpx2.Client(
+            transport=httpx2.MockTransport(handler),
             base_url="https://example.com",
         ) as client,
         pytest.raises(SmokeCheckError, match="expected a JSON array"),

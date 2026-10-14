@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable
 
 import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_account, create_account
 
