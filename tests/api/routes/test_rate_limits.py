@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import auth_headers_for_account, create_account
 
