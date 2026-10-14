@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from tests.fixtures.logs import LoggedEntries
 from tests.fixtures.settings import SettingsEnvFactory
 
-import app.core.resources as resources_module
+from app.api.deps.rate_limit import get_rate_limits_backend
 from app.core.logging import configure_logging
 from app.core.request_id import REQUEST_ID_HEADER
 from app.main import create_app
@@ -131,15 +131,10 @@ class _UnavailableRateLimitsBackend:
 
 
 def test_rate_limit_store_outage_renders_internal_error_problem(
-    monkeypatch: pytest.MonkeyPatch,
     logged_entries: LoggedEntries,
 ) -> None:
-    monkeypatch.setattr(
-        resources_module,
-        "create_rate_limits_backend",
-        lambda settings: _UnavailableRateLimitsBackend(),
-    )
     app = create_app()
+    app.dependency_overrides[get_rate_limits_backend] = _UnavailableRateLimitsBackend
 
     with TestClient(app) as client:
         response = client.get("/v1/services", headers={REQUEST_ID_HEADER: "request-500"})
