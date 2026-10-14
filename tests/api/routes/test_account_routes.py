@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 
 
 def _build_siwe_message(*, address: str, nonce: str, issued_at: datetime) -> str:
