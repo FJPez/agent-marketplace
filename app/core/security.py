@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING
 import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from eth_utils import is_address, to_checksum_address
 from jwt import InvalidTokenError
+
+from app.core.evm import normalize_wallet_address
 
 if TYPE_CHECKING:
     from app.core.config import Settings
@@ -46,13 +47,6 @@ class ApiKeyMaterial:
     plaintext: str
     key_prefix: str
     key_hash: str
-
-
-def normalize_wallet_address(wallet_address: str) -> str:
-    if not is_address(wallet_address):
-        msg = "invalid wallet address"
-        raise ValueError(msg)
-    return to_checksum_address(wallet_address)
 
 
 def create_jwt(
