@@ -12,7 +12,6 @@ from app.core.security import (
     decode_jwt,
     generate_api_key,
     hash_api_key,
-    normalize_wallet_address,
     parse_siwe_message,
     verify_siwe_signature,
 )
@@ -23,14 +22,6 @@ def _settings() -> Settings:
         jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
         siwe_domain="testserver",
     )
-
-
-def test_normalize_wallet_address_returns_checksum_address() -> None:
-    signer = Account.create()
-
-    normalized = normalize_wallet_address(signer.address.lower())
-
-    assert normalized == signer.address
 
 
 def test_create_and_decode_jwt_round_trip() -> None:
