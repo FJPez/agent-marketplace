@@ -6,7 +6,7 @@ import sys
 from json import JSONDecodeError
 from typing import TYPE_CHECKING
 
-import httpx
+import httpx2
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -24,7 +24,7 @@ def _normalize_base_url(base_url: str) -> str:
 
 
 def _request_json(
-    client: httpx.Client,
+    client: httpx2.Client,
     *,
     path: str,
     check_name: str,
@@ -34,20 +34,20 @@ def _request_json(
         response = client.get(path, params=params)
         response.raise_for_status()
         return response.json()
-    except httpx.HTTPStatusError as exc:
+    except httpx2.HTTPStatusError as exc:
         detail = exc.response.text.strip()
         msg = f"{check_name} check failed with status {exc.response.status_code}"
         if detail:
             msg = f"{msg}: {detail}"
         raise SmokeCheckError(msg) from exc
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         raise SmokeCheckError(f"{check_name} check failed: {exc}") from exc
     except JSONDecodeError as exc:
         raise SmokeCheckError(f"{check_name} check failed: response was not valid JSON") from exc
 
 
 def run_smoke_checks(
-    client: httpx.Client,
+    client: httpx2.Client,
     *,
     wallet_address: str = DEFAULT_NONCE_ADDRESS,
     public_db_route: str = DEFAULT_PUBLIC_DB_ROUTE,
@@ -128,7 +128,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        with httpx.Client(base_url=args.base_url, timeout=args.timeout) as client:
+        with httpx2.Client(base_url=args.base_url, timeout=args.timeout) as client:
             results = run_smoke_checks(
                 client,
                 wallet_address=args.wallet_address,

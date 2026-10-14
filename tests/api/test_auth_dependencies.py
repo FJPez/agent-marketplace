@@ -2,7 +2,7 @@ from collections.abc import Awaitable, Callable, Iterator
 
 import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient
+from httpx2 import AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.logs import LoggedEntries
