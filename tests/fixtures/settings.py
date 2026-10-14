@@ -17,12 +17,10 @@ TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
 TEST_TREASURY_ADDRESS = "0x1111111111111111111111111111111111111111"
-# The terms a price version gets under the default settings and the test treasury.
+# The terms a price version gets under the default settings.
 TEST_PRICE_TERMS = {
     "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     "network": "eip155:84532",
-    "pay_to": TEST_TREASURY_ADDRESS,
-    "max_timeout_seconds": 120,
     "fee_bps": 1_000,
 }
 # coredis rejects this URL as soon as a client is built from it (the port is out of range).

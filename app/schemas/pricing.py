@@ -27,7 +27,5 @@ class ListingPriceResponse(BaseModel):
     amount: int
     asset: str
     network: str
-    pay_to: str
-    max_timeout_seconds: int
     fee_bps: int
     created_at: Timestamp

@@ -94,7 +94,6 @@ def test_settings_use_default_values(
     assert settings.payment_asset == "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     assert settings.min_price_amount == 10_000
     assert settings.platform_fee_bps == 1_000
-    assert settings.payment_max_timeout_seconds == 120
 
 
 def test_settings_reject_an_unknown_log_level(
@@ -383,16 +382,6 @@ def test_settings_checksum_the_treasury_address(
             "platform_fee_bps",
             id="fee-above-100-percent",
         ),
-        pytest.param(
-            {"APP_PAYMENT_MAX_TIMEOUT_SECONDS": "0"},
-            "payment_max_timeout_seconds",
-            id="max-timeout-zero",
-        ),
-        pytest.param(
-            {"APP_PAYMENT_MAX_TIMEOUT_SECONDS": "3601"},
-            "payment_max_timeout_seconds",
-            id="max-timeout-over-one-hour",
-        ),
     ],
 )
 def test_settings_reject_invalid_payment_terms(
@@ -406,15 +395,10 @@ def test_settings_reject_invalid_payment_terms(
         Settings()
 
 
-def test_settings_accept_payment_terms_at_their_upper_bounds(
+def test_settings_accept_a_network_reference_of_32_digits(
     settings_env_factory: SettingsEnvFactory,
 ) -> None:
     network = "eip155:1" + "0" * 31
-    settings_env_factory(
-        env={"APP_PAYMENT_NETWORK": network, "APP_PAYMENT_MAX_TIMEOUT_SECONDS": "3600"},
-    )
+    settings_env_factory(env={"APP_PAYMENT_NETWORK": network})
 
-    settings = Settings()
-
-    assert settings.payment_network == network
-    assert settings.payment_max_timeout_seconds == 3600
+    assert Settings().payment_network == network
