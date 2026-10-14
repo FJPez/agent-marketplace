@@ -5,11 +5,13 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from tests.fixtures.logs import LoggedEntries
 from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_account, create_account
 
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
 from app.core.lifespan import get_resources
+from app.core.logging import configure_logging
 
 HeadersForAccount = Callable[..., Awaitable[dict[str, str]]]
 
@@ -112,11 +114,35 @@ async def test_a_protected_route_answers_401_without_a_valid_bearer_token(
     )
 
     assert response.status_code == 401
+    assert response.headers["www-authenticate"] == "Bearer"
     assert response.json() == {
         "type": "/problems/unauthenticated",
         "status": 401,
         "detail": "a valid bearer token is required",
     }
+
+
+@pytest.mark.parametrize(
+    ("token", "reason"),
+    [
+        pytest.param("not-a-token", "invalid access token", id="jwt"),
+        pytest.param("amp_not-a-key", "invalid api key", id="api_key"),
+    ],
+)
+async def test_a_refused_token_is_logged_with_its_reason_and_without_the_token(
+    async_client: AsyncClient,
+    logged_entries: LoggedEntries,
+    token: str,
+    reason: str,
+) -> None:
+    configure_logging("INFO")
+
+    await async_client.get("/v1/services", headers={"Authorization": f"Bearer {token}"})
+
+    entries = logged_entries()
+    (failure,) = [entry for entry in entries if entry["message"] == "authentication failed"]
+    assert {"logger": "app.api.deps.auth", "reason": reason}.items() <= failure.items()
+    assert all(token not in str(entry) for entry in entries)
 
 
 async def test_a_public_route_ignores_an_invalid_token(async_client: AsyncClient) -> None:
