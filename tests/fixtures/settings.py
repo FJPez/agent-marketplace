@@ -20,8 +20,7 @@ TEST_SIWE_DOMAIN = "testserver"
 TEST_TREASURY_ADDRESS = "0x1111111111111111111111111111111111111111"
 # A Fernet key for encrypting provider signing secrets in tests only.
 TEST_PROVIDER_SECRET_ENCRYPTION_KEY = "hSHxHDOnrub2nJUV4ELrhQ8qKrhEFxJZrSwoqseKlZI="
-# The payment terms a price version is stamped with under the Settings defaults and
-# the test treasury.
+# The terms a price version gets under the default settings and the test treasury.
 TEST_PRICE_TERMS = {
     "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     "network": "eip155:84532",
@@ -37,11 +36,7 @@ UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 
 
 def build_service_settings() -> Settings:
-    """Settings for calling services directly.
-
-    The env is always test, whatever APP_ENV says, and the treasury is passed explicitly
-    rather than left to the session-wide APP_TREASURY_ADDRESS.
-    """
+    """Settings for calling services directly: always the test env, with the test treasury."""
     return Settings(
         env=AppEnv.TEST,
         jwt_secret_key=SecretStr(TEST_JWT_SECRET_KEY),

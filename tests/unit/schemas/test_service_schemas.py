@@ -26,8 +26,7 @@ VALID_ENDPOINT_CREATE = {
     "response_schema": {"type": "object"},
     "timeout_seconds": 30,
 }
-# The endpoint request models, each with a payload that is valid without the field
-# under test.
+# Each endpoint request model, with a payload valid without the field under test.
 ENDPOINT_REQUESTS = [
     (EndpointCreateRequest, VALID_ENDPOINT_CREATE),
     (EndpointUpdateRequest, {}),
