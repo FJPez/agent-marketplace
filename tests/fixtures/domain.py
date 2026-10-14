@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import pytest
 from sqlalchemy import select
-from tests.fixtures.settings import TEST_PRICE_TERMS, TEST_TREASURY_ADDRESS
+from tests.fixtures.settings import TEST_PRICE_TERMS
 from tests.helpers.auth import create_account
 from tests.helpers.dns import TEST_DOMAIN_TOKEN, TEST_UPSTREAM_BASE_URL
 
@@ -303,15 +303,15 @@ async def create_listing_price_record(
     endpoint_id: int,
     amount: int = 250_000,
     version: int = 1,
-    pay_to: str = TEST_TREASURY_ADDRESS,
+    network: str = "eip155:84532",
 ) -> int:
-    """Store a price version on the test payment terms, or another `pay_to`, as current."""
+    """Store a price version on the test payment terms, or another network, as current."""
     async with db_session_factory.begin() as session:
         price = ListingPrice(
             endpoint_id=endpoint_id,
             version=version,
             amount=amount,
-            **{**TEST_PRICE_TERMS, "pay_to": pay_to},
+            **{**TEST_PRICE_TERMS, "network": network},
         )
         session.add(price)
         # The get autoflushes the pending version, which assigns its id.

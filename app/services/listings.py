@@ -34,8 +34,6 @@ class ListingPriceTerms:
     amount: int
     asset: str
     network: str
-    pay_to: str
-    max_timeout_seconds: int
     fee_bps: int
 
 
@@ -52,9 +50,8 @@ class InvokableListing:
     service_id: int
     provider_account_id: int
     upstream: ListingUpstream
-    # None for a free listing. A paid listing's version is returned as stored, even when
-    # the marketplace's payment settings have changed since it was created (see
-    # provider_endpoints.is_on_current_terms): the caller decides what to do then.
+    # None for a free listing. Returned as stored, even after an asset or network change
+    # (see provider_endpoints.is_on_current_terms): the caller decides what to do then.
     price: ListingPriceTerms | None
     timeout_seconds: int
     supports_idempotency: bool
@@ -112,8 +109,6 @@ async def load_invokable_listing(
             ListingPrice.amount,
             ListingPrice.asset,
             ListingPrice.network,
-            ListingPrice.pay_to,
-            ListingPrice.max_timeout_seconds,
             ListingPrice.fee_bps,
         )
         .join(Service, Service.id == ServiceEndpoint.service_id)
@@ -149,8 +144,6 @@ async def load_invokable_listing(
                 amount=row.amount,
                 asset=row.asset,
                 network=row.network,
-                pay_to=row.pay_to,
-                max_timeout_seconds=row.max_timeout_seconds,
                 fee_bps=row.fee_bps,
             )
         return InvokableListing(

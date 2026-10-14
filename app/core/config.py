@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     api_rate_limit: str = "120/minute"
     max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
-    # Payment terms stamped on every new price version; the treasury is its pay_to.
+    # Every paid listing's pay_to, read when a payment is requested.
     treasury_address: PaymentAddress | None = None
     # CAIP-2 allows a chain reference of at most 32 characters.
     payment_network: str = Field(default="eip155:84532", pattern=r"^eip155:[1-9][0-9]{0,31}$")
@@ -74,8 +74,6 @@ class Settings(BaseSettings):
     # In atomic units of payment_asset: 10000 is 0.01 USDC.
     min_price_amount: int = Field(default=10_000, gt=0)
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
-    # The validity window of a payment (x402 maxTimeoutSeconds): at most one hour.
-    payment_max_timeout_seconds: int = Field(default=120, gt=0, le=3600)
     # Fernet keys that encrypt provider signing secrets at rest, comma-separated. The
     # first encrypts and every key decrypts, so a new key goes first and a retired one
     # stays listed while a stored secret may still be encrypted with it. Staging and

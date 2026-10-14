@@ -133,8 +133,8 @@ docker compose exec -T postgres psql -U postgres -c "CREATE DATABASE agent_marke
 uv run alembic upgrade head
 ```
 
-To reload the demo data, set `APP_TREASURY_ADDRESS` (the paid demo endpoint's
-`pay_to`, in `.env` or the environment), export `PROVIDER_PRIVATE_KEY` (the
+To reload the demo data, set `APP_TREASURY_ADDRESS` (where paid demo calls are
+paid to, in `.env` or the environment), export `PROVIDER_PRIVATE_KEY` (the
 demo provider's wallet key), and set `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (see
 [Signing Secret Encryption Keys](#signing-secret-encryption-keys)); the demo
 provider needs a signing secret before its listings can be invoked, and the seed
@@ -216,16 +216,17 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   call starts a fresh one. On Linux a worker can never pass 512 MiB of address space
   (macOS does not enforce that limit), so each API process needs room for
   `APP_REQUEST_VALIDATION_WORKERS` times 512 MiB.
-- Each new price version records the payment terms current when it is created:
-  the treasury `APP_TREASURY_ADDRESS` as `pay_to` (no default; without it no
-  paid price can be set), `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base
-  Sepolia), `APP_PAYMENT_ASSET` (default Base Sepolia USDC,
-  `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), `APP_PAYMENT_MAX_TIMEOUT_SECONDS`
-  (default 120, at most 3600) and `APP_PLATFORM_FEE_BPS` (default 1000, 10%).
-  Prices are in atomic units of the asset (1 USDC = 1,000,000) and must be at
-  least `APP_MIN_PRICE_AMOUNT` (default 10000, 0.01 USDC). Changing a setting
-  affects only price versions created afterwards; a provider moves a listing onto
-  the current terms by resending its price, which creates a new version.
+- Each new price version records its asset, `APP_PAYMENT_ASSET` (default Base
+  Sepolia USDC, `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), its network,
+  `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base Sepolia), and the platform
+  fee, `APP_PLATFORM_FEE_BPS` (default 1000, 10%). Prices are in atomic units of
+  the asset (1 USDC = 1,000,000) and must be at least `APP_MIN_PRICE_AMOUNT`
+  (default 10000, 0.01 USDC). A fee change applies to prices set afterwards.
+  After an asset or network change, a provider moves a listing onto it by
+  resending its price, which creates a new version.
+- Payments go to the treasury, `APP_TREASURY_ADDRESS`, in force when they are
+  requested, so changing it takes effect at once. It has no default, and without
+  it no paid price can be set.
 - Provider signing secrets are stored encrypted with the Fernet keys in
   `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (comma-separated; no default; without one no
   signing secret can be issued). The first key encrypts and every listed key

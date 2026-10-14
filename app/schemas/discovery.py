@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 from app.core.enums import AccessMode
 from app.core.json_types import to_json_object
@@ -42,15 +42,14 @@ class PublicEndpointSchema(BaseModel):
 
 
 class PublicListingPrice(BaseModel):
-    """The public terms of a price version: what a paid call to the listing costs."""
-
-    model_config = ConfigDict(from_attributes=True)
+    """What a paid call to the listing costs, and where the payment goes."""
 
     version: int
     amount: int
     asset: str
     network: str
-    pay_to: str
+    # The treasury in force now, not one recorded on the version.
+    pay_to: str | None
 
 
 class PublicEndpointPricing(BaseModel):
@@ -62,7 +61,10 @@ class PublicEndpointPricing(BaseModel):
     price: PublicListingPrice | None
 
     @classmethod
-    def from_model(cls, endpoint: ServiceEndpoint, *, service_slug: str) -> Self:
+    def from_model(
+        cls, endpoint: ServiceEndpoint, *, service_slug: str, pay_to: str | None
+    ) -> Self:
+        price = endpoint.current_price
         return cls(
             endpoint_id=endpoint.id,
             key=endpoint.key,
@@ -70,8 +72,14 @@ class PublicEndpointPricing(BaseModel):
             invoke_url=f"/v1/invoke/{service_slug}/{endpoint.key}",
             price=(
                 None
-                if endpoint.current_price is None
-                else PublicListingPrice.model_validate(endpoint.current_price)
+                if price is None
+                else PublicListingPrice(
+                    version=price.version,
+                    amount=price.amount,
+                    asset=price.asset,
+                    network=price.network,
+                    pay_to=pay_to,
+                )
             ),
         )
 
@@ -136,12 +144,12 @@ class PublicServicePricingResponse(BaseModel):
     endpoints: list[PublicEndpointPricing]
 
     @classmethod
-    def from_model(cls, service: Service) -> Self:
+    def from_model(cls, service: Service, *, pay_to: str | None) -> Self:
         return cls(
             id=service.id,
             slug=service.slug,
             endpoints=[
-                PublicEndpointPricing.from_model(endpoint, service_slug=service.slug)
+                PublicEndpointPricing.from_model(endpoint, service_slug=service.slug, pay_to=pay_to)
                 for endpoint in service.endpoints
                 if endpoint.is_enabled
             ],

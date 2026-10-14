@@ -26,8 +26,6 @@ def upgrade() -> None:
         sa.Column("amount", sa.Numeric(precision=78, scale=0), nullable=False),
         sa.Column("asset", sa.String(length=42), nullable=False),
         sa.Column("network", sa.String(length=41), nullable=False),
-        sa.Column("pay_to", sa.String(length=42), nullable=False),
-        sa.Column("max_timeout_seconds", sa.Integer(), nullable=False),
         sa.Column("fee_bps", sa.Integer(), nullable=False),
         sa.Column(
             "created_at",
@@ -39,10 +37,6 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "fee_bps BETWEEN 0 AND 10000",
             name=op.f("ck_listing_prices_fee_bps_range"),
-        ),
-        sa.CheckConstraint(
-            "max_timeout_seconds > 0",
-            name=op.f("ck_listing_prices_positive_max_timeout_seconds"),
         ),
         sa.CheckConstraint("version > 0", name=op.f("ck_listing_prices_positive_version")),
         sa.ForeignKeyConstraint(
