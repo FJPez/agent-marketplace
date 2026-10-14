@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 
-from starlette.responses import JSONResponse
+from fastapi.responses import JSONResponse
 
 from app.core.json_types import JsonValue
 

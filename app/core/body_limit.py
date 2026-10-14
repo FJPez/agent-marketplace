@@ -1,8 +1,7 @@
 """Refuse a request body over the size limit before it is held in memory."""
 
-from fastapi import status
-from starlette.datastructures import Headers
-from starlette.exceptions import HTTPException
+from fastapi import HTTPException, status
+from fastapi.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.problems import ProblemResponse
