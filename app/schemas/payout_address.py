@@ -3,10 +3,11 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, StringConstraints
 
+from app.core.evm import WalletAddress
 from app.core.json_types import JsonObject
 from app.core.security import EVM_SIGNATURE_PATTERN
 from app.db.models import PayoutAddress
-from app.schemas.common import Timestamp, WalletAddress
+from app.schemas.common import Timestamp
 
 
 class PayoutAddressChallengeRequest(BaseModel):

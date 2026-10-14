@@ -12,13 +12,13 @@ import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_keys.constants import SECPK1_N
-from eth_utils import is_checksum_address, is_checksum_formatted_address, to_checksum_address
 from jwt import InvalidTokenError
+
+from app.core.evm import checksum_address
 
 if TYPE_CHECKING:
     from app.core.config import Settings
 
-_EVM_ADDRESS_SHAPE = re.compile(r"0x[0-9a-fA-F]{40}")
 # A 65-byte secp256k1 signature (r, s, v) in hex, as eth_signTypedData_v4 returns it.
 EVM_SIGNATURE_PATTERN = r"^0x[0-9a-fA-F]{130}$"
 
@@ -52,24 +52,6 @@ class ApiKeyMaterial:
     plaintext: str
     key_prefix: str
     key_hash: str
-
-
-def checksum_address(value: str) -> str:
-    """Return the EIP-55 form of an EVM address.
-
-    The value must be a lowercase `0x` followed by exactly 40 hex digits: no
-    surrounding whitespace, no missing or uppercase prefix, no wrong length. An
-    all-lowercase or all-uppercase address carries no checksum and is accepted. A
-    mixed-case one must already be correctly checksummed: a wrong checksum means a
-    mistyped address, which would sign in, or be paid, as someone else.
-    """
-    if not _EVM_ADDRESS_SHAPE.fullmatch(value):
-        msg = "invalid EVM address"
-        raise ValueError(msg)
-    if is_checksum_formatted_address(value) and not is_checksum_address(value):
-        msg = "address has an invalid EIP-55 checksum"
-        raise ValueError(msg)
-    return to_checksum_address(value)
 
 
 def canonical_signature(value: str) -> str:

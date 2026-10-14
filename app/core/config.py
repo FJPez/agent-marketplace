@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
-from pydantic import AfterValidator, Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -14,28 +14,11 @@ from pydantic_settings import (
 )
 
 from app.core.enums import AppEnv
-from app.core.security import checksum_address
+from app.core.evm import PaymentAddress
 
 _LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
 _DEFAULT_SIWE_DOMAIN = "testserver"
-_ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
-
-
-def _reject_zero_address(value: str) -> str:
-    # A common placeholder: payments to it would fail at settlement, not at startup.
-    if value == _ZERO_ADDRESS:
-        msg = "address must not be the zero address"
-        raise ValueError(msg)
-    return value
-
-
-# A payment address (the treasury, the asset contract) in its EIP-55 form.
-EvmAddress = Annotated[
-    str,
-    AfterValidator(checksum_address),
-    AfterValidator(_reject_zero_address),
-]
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -83,11 +66,11 @@ class Settings(BaseSettings):
     max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     # Payment terms stamped on every new price version; the treasury is its pay_to.
-    treasury_address: EvmAddress | None = None
+    treasury_address: PaymentAddress | None = None
     # CAIP-2 allows a chain reference of at most 32 characters.
     payment_network: str = Field(default="eip155:84532", pattern=r"^eip155:[1-9][0-9]{0,31}$")
     # USDC on Base Sepolia: https://developers.circle.com/stablecoins/usdc-contract-addresses
-    payment_asset: EvmAddress = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    payment_asset: PaymentAddress = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     # In atomic units of payment_asset: 10000 is 0.01 USDC.
     min_price_amount: int = Field(default=10_000, gt=0)
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)

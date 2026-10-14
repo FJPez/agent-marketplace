@@ -3,6 +3,7 @@ from fastapi import APIRouter, Response, status
 from app.api.deps.auth import CurrentJwtActor
 from app.api.deps.database import SessionDep
 from app.api.deps.settings import SettingsDep
+from app.core.evm import WalletAddress
 from app.schemas.account import AccountResponse
 from app.schemas.auth import (
     ApiKeyCreateRequest,
@@ -14,7 +15,6 @@ from app.schemas.auth import (
     AuthVerifyRequest,
     AuthVerifyResponse,
 )
-from app.schemas.common import WalletAddress
 from app.services import api_keys, auth
 
 router = APIRouter(prefix="/auth", tags=["auth"])

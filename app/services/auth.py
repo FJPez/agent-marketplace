@@ -9,9 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.actor import ActorContext
 from app.core.config import Settings
 from app.core.errors import UnauthenticatedError
+from app.core.evm import checksum_address
 from app.core.security import (
     AuthTokenType,
-    checksum_address,
     create_jwt,
     decode_jwt,
     generate_nonce,

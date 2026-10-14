@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
-from app.core.security import checksum_address, generate_nonce, verify_siwe_signature
+from app.core.evm import checksum_address
+from app.core.security import generate_nonce, verify_siwe_signature
 from app.db.errors import is_unique_violation
 from app.db.models import Account, WalletChangeLog
 from app.services.accounts import get_account_for_update

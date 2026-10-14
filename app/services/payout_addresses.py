@@ -24,8 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
+from app.core.evm import checksum_address
 from app.core.json_types import JsonObject
-from app.core.security import canonical_signature, checksum_address, generate_nonce
+from app.core.security import canonical_signature, generate_nonce
 from app.db.models import PayoutAddress, PayoutAddressChallenge
 
 # The database's time when the statement starts. Not now(): that is when the

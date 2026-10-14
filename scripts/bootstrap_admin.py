@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import normalize_database_url
-from app.core.security import checksum_address
+from app.core.evm import checksum_address
 from app.db.models import Account
 
 ADMIN_WALLET_ENV_VAR = "APP_BOOTSTRAP_ADMIN_WALLET"
