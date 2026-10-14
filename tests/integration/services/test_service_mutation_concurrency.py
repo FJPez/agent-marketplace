@@ -497,8 +497,7 @@ async def test_concurrent_price_edits_create_consecutive_versions(
     )
     await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
 
-    # The first edit pauses while holding the service row lock, so the second
-    # must wait for its commit and then number its version after it.
+    # The first edit pauses holding the service row lock; the second numbers its version after it.
     original_load_owned_endpoint = service_access.load_owned_endpoint
     first_edit_has_lock = asyncio.Event()
     release_first_edit = asyncio.Event()
@@ -594,13 +593,10 @@ async def test_price_version_race_without_the_service_lock_is_a_conflict(
                     endpoint_id=endpoint_id,
                     changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=20_000)),
                 )
-            # The service rolled back, like on a duplicate endpoint key, so the
-            # session is usable again and has nothing left to commit.
+            # The service rolled back, so the session is usable and has nothing to commit.
             await session.commit()
 
-    # A writer that skips the service row lock claims version 2 first; the edit
-    # reads version 1 as the latest, waits on the rival's uncommitted key, and
-    # must fail with a conflict once the rival commits.
+    # A writer that skips the service row lock takes version 2 before the edit can.
     async with db_session_factory() as rival:
         rival.add(
             ListingPrice(endpoint_id=endpoint_id, version=2, amount=40_000, **TEST_PRICE_TERMS)

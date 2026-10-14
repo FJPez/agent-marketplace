@@ -54,15 +54,12 @@ class ServiceEndpoint(Base):
             f"timeout_seconds BETWEEN 1 AND {ENDPOINT_TIMEOUT_MAX_SECONDS}",
             name="timeout_seconds_range",
         ),
-        # A paid endpoint may lack a price while its service is a draft (publish
-        # readiness requires one); a free endpoint never has one.
+        # A paid draft endpoint may lack a price; a free endpoint never has one.
         CheckConstraint(
             "access_mode = 'paid' OR current_price_id IS NULL",
             name="free_has_no_price",
         ),
-        # The current price is one of this endpoint's own versions. A null
-        # current_price_id skips the check (MATCH SIMPLE). use_alter:
-        # listing_prices also references service_endpoints.
+        # The current price must be one of this endpoint's own versions.
         ForeignKeyConstraint(
             ["id", "current_price_id"],
             ["listing_prices.endpoint_id", "listing_prices.id"],
@@ -118,9 +115,7 @@ class ServiceEndpoint(Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
-    # The composite key above also names `id`, so the join and its foreign key
-    # are spelled out. lazy="raise": a reader that forgot to eager-load the price
-    # fails loudly instead of attempting IO.
+    # lazy="raise": a reader that forgot to eager-load the price fails instead of doing IO.
     current_price: Mapped[ListingPrice | None] = relationship(
         primaryjoin="ServiceEndpoint.current_price_id == ListingPrice.id",
         foreign_keys=[current_price_id],

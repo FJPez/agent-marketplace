@@ -137,10 +137,7 @@ async def update_endpoint(
     if target_access_mode is AccessMode.FREE and changes.price is not None:
         raise InvalidInputError("free endpoints cannot have a price")
 
-    # Effective changes: supplied values that differ from the stored ones. They
-    # drive no-op detection, the mutability gate, and revision classification,
-    # so resending current values is not a change at all. The price lives in
-    # its own table and is never assigned by setattr, so it is tracked separately.
+    # Only supplied values that differ from the stored ones count as changes.
     supplied = changes.model_dump(exclude_unset=True, exclude={"price"})
     column_changes = {
         name: value for name, value in supplied.items() if value != getattr(endpoint, name)
@@ -156,10 +153,7 @@ async def update_endpoint(
         resulting_amount = None if changes.price is None else changes.price.amount
     else:
         resulting_amount = current_amount
-    # Resending the current amount moves the listing onto the payment terms in
-    # force when they have changed since its version was created. Without a
-    # treasury no version can be created, so the resend stays a no-op; omitting
-    # the price never re-stamps it.
+    # Resending the current amount re-stamps it when the payment terms have changed.
     price_changed = resulting_amount != current_amount or (
         price_supplied
         and current_price is not None
@@ -344,11 +338,7 @@ async def _ensure_endpoint_update_allowed(
 
 
 def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
-    """Check a provider's amount and build its price version on the current terms.
-
-    The version is not added to the session: `put_price_on_sale` numbers it and
-    attaches it to its endpoint once every other check has passed.
-    """
+    """Check the amount and build a version on the current terms; `put_price_on_sale` stores it."""
     if amount < settings.min_price_amount:
         raise InvalidInputError(
             f"price amount must be at least {settings.min_price_amount} atomic units "
@@ -373,11 +363,7 @@ class PriceTerms(Protocol):
 
 
 def is_on_current_terms(price: PriceTerms, *, settings: Settings) -> bool:
-    """Whether `price` carries the payment terms a version created now would.
-
-    The amount is not compared. Without a treasury no version can be created, so
-    no version is on the current terms.
-    """
+    """Whether `price` has the terms a version created now would get; the amount is ignored."""
     return all(
         getattr(price, term) == value for term, value in _current_payment_terms(settings).items()
     )
@@ -400,13 +386,8 @@ async def put_price_on_sale(
     endpoint: ServiceEndpoint,
     price: ListingPrice,
 ) -> None:
-    """Store `price` as the endpoint's next version and make it the current price.
-
-    The editing services hold the service row lock, so max + 1 is normally free;
-    the unique (endpoint_id, version) key turns a writer without it (the demo
-    seed) into a conflict instead of a silently reused version number. On any
-    integrity error it rolls back the caller's whole transaction before raising.
-    """
+    """Store `price` as the endpoint's next version and make it the current price."""
+    # Callers hold the service row lock; the unique key catches a writer that does not.
     latest_version = await session.scalar(
         select(func.max(ListingPrice.version)).where(ListingPrice.endpoint_id == endpoint.id),
     )
