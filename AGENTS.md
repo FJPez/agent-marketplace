@@ -138,7 +138,7 @@ Layer responsibilities:
 - Alembic
 - PostgreSQL
 - pytest
-- httpx
+- httpx2
 - Ruff
 - ty
 
