@@ -233,8 +233,7 @@ class EndpointUpdateRequest(BaseModel):
     ``price`` are clearable and accept an explicit null. Every other field is
     non-clearable: sending an explicit null is a client error rather than a
     request to unset the value. A new ``price`` amount creates a new immutable
-    price version, and so does resending the current amount after the
-    marketplace's asset or network changed; omit ``price`` to leave it untouched.
+    price version.
     """
 
     model_config = ConfigDict(

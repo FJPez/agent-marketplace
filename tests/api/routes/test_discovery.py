@@ -145,7 +145,9 @@ async def test_get_service_pricing_returns_the_public_price_catalogue(
     response = await async_client.get(f"/v1/services/{service_id}/pricing")
 
     assert response.status_code == 200
-    assert {endpoint["key"]: endpoint for endpoint in response.json()["endpoints"]} == {
+    body = response.json()
+    assert body["pay_to"] == TEST_TREASURY_ADDRESS
+    assert {endpoint["key"]: endpoint for endpoint in body["endpoints"]} == {
         "ping": {
             "endpoint_id": free_endpoint_id,
             "key": "ping",
@@ -163,7 +165,6 @@ async def test_get_service_pricing_returns_the_public_price_catalogue(
                 "amount": 25_000,
                 "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
                 "network": "eip155:84532",
-                "pay_to": TEST_TREASURY_ADDRESS,
             },
         },
     }

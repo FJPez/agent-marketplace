@@ -228,7 +228,7 @@ async def _ensure_paid_price(
     settings: Settings,
     endpoint: ServiceEndpoint,
 ) -> ListingPrice:
-    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT on the current payment terms."""
+    """Keep the paid endpoint on sale at PAID_ENDPOINT_AMOUNT in the current asset and network."""
     if endpoint.current_price_id is not None:
         current = await session.get(ListingPrice, endpoint.current_price_id)
         if (
