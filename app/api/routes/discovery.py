@@ -76,10 +76,8 @@ async def get_service_schema(
     response_model=PublicServicePricingResponse,
     summary="Get public service pricing",
     description=(
-        "Returns the public price catalogue of a service: for each enabled endpoint its id, "
-        "invoke URL and, for a paid endpoint, the current price version with its amount in "
-        "atomic units of the asset, the asset and the network, and the treasury address "
-        "payments go to now."
+        "Returns the current price of each enabled endpoint on a service, and the treasury "
+        "it is paid to."
     ),
     responses={
         200: {"description": "Public service pricing returned successfully."},
