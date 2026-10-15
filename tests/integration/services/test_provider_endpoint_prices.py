@@ -249,10 +249,27 @@ async def test_price_edit_creates_a_new_version_and_keeps_the_old_one(
     )
 
 
-async def test_price_edit_repeating_the_current_amount_is_a_no_op(
+@pytest.mark.parametrize(
+    "setting_changes",
+    [
+        {},
+        {"payment_network": "eip155:8453"},
+        {"payment_asset": "0x3333333333333333333333333333333333333333"},
+        {"treasury_address": "0x2222222222222222222222222222222222222222"},
+        {"platform_fee_bps": 250},
+        {"treasury_address": None},
+    ],
+    ids=["unchanged", "network", "asset", "treasury", "fee", "no_treasury"],
+)
+async def test_resending_the_current_amount_is_a_no_op(
     db_session_factory: async_sessionmaker[AsyncSession],
+    setting_changes: dict[str, object],
 ) -> None:
-    account_id, endpoint_id = await _create_endpoint(db_session_factory, price_amount=250_000)
+    account_id, endpoint_id = await _create_endpoint(
+        db_session_factory,
+        lifecycle=ServiceLifecycle.ACTIVE,
+        price_amount=250_000,
+    )
     async with db_session_factory() as session:
         seeded = await session.get(ServiceEndpoint, endpoint_id)
         assert seeded is not None
@@ -263,82 +280,13 @@ async def test_price_edit_repeating_the_current_amount_is_a_no_op(
         account_id=account_id,
         endpoint_id=endpoint_id,
         changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=250_000)),
+        settings=build_service_settings().model_copy(update=setting_changes),
     )
 
     async with db_session_factory() as session:
         persisted = await session.get(ServiceEndpoint, endpoint_id)
     assert persisted is not None
     assert persisted.updated_at == seeded_updated_at
-    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
-        1,
-        [(1, 250_000)],
-    )
-
-
-@pytest.mark.parametrize(
-    ("setting", "term", "value"),
-    [
-        ("payment_network", "network", "eip155:8453"),
-        ("payment_asset", "asset", "0x3333333333333333333333333333333333333333"),
-    ],
-    ids=["network", "asset"],
-)
-async def test_resending_the_price_moves_it_onto_a_changed_asset_or_network(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    setting: str,
-    term: str,
-    value: str | int,
-) -> None:
-    account_id, endpoint_id = await _create_endpoint(
-        db_session_factory,
-        lifecycle=ServiceLifecycle.ACTIVE,
-        price_amount=250_000,
-    )
-
-    updated = await _update(
-        db_session_factory,
-        account_id=account_id,
-        endpoint_id=endpoint_id,
-        changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=250_000)),
-        settings=build_service_settings().model_copy(update={setting: value}),
-    )
-
-    assert updated.current_price is not None
-    assert getattr(updated.current_price, term) == value
-    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
-        2,
-        [(1, 250_000), (2, 250_000)],
-    )
-    assert await _revision_count(db_session_factory, endpoint_id) == 2
-
-
-@pytest.mark.parametrize(
-    ("setting", "value"),
-    [
-        ("treasury_address", "0x2222222222222222222222222222222222222222"),
-        ("platform_fee_bps", 250),
-    ],
-    ids=["treasury", "fee"],
-)
-async def test_resending_the_price_after_a_treasury_or_fee_change_keeps_its_version(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    setting: str,
-    value: str | int,
-) -> None:
-    account_id, endpoint_id = await _create_endpoint(
-        db_session_factory,
-        lifecycle=ServiceLifecycle.ACTIVE,
-        price_amount=250_000,
-    )
-
-    await _update(
-        db_session_factory,
-        account_id=account_id,
-        endpoint_id=endpoint_id,
-        changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=250_000)),
-        settings=build_service_settings().model_copy(update={setting: value}),
-    )
-
     assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
         1,
         [(1, 250_000)],
@@ -346,45 +294,16 @@ async def test_resending_the_price_after_a_treasury_or_fee_change_keeps_its_vers
     assert await _revision_count(db_session_factory, endpoint_id) == 1
 
 
-async def test_resending_the_current_amount_without_a_treasury_is_a_no_op(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id, endpoint_id = await _create_endpoint(db_session_factory, price_amount=250_000)
-    async with db_session_factory() as session:
-        seeded = await session.get(ServiceEndpoint, endpoint_id)
-        assert seeded is not None
-        seeded_updated_at = seeded.updated_at
-
-    await _update(
-        db_session_factory,
-        account_id=account_id,
-        endpoint_id=endpoint_id,
-        changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=250_000)),
-        settings=build_service_settings().model_copy(update={"treasury_address": None}),
-    )
-
-    async with db_session_factory() as session:
-        persisted = await session.get(ServiceEndpoint, endpoint_id)
-    assert persisted is not None
-    assert persisted.updated_at == seeded_updated_at
-    assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
-        1,
-        [(1, 250_000)],
-    )
-
-
 async def test_omitting_the_price_keeps_the_current_version(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     account_id, endpoint_id = await _create_endpoint(db_session_factory, price_amount=250_000)
 
-    # Even when the payment terms have changed since the version was created.
     await _update(
         db_session_factory,
         account_id=account_id,
         endpoint_id=endpoint_id,
         changes=EndpointUpdateRequest(timeout_seconds=20),
-        settings=build_service_settings().model_copy(update={"platform_fee_bps": 250}),
     )
 
     assert await read_price_versions(db_session_factory, endpoint_id=endpoint_id) == (
