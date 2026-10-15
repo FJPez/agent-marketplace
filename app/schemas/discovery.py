@@ -1,6 +1,6 @@
 from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.core.enums import AccessMode
 from app.core.json_types import to_json_object
@@ -42,14 +42,14 @@ class PublicEndpointSchema(BaseModel):
 
 
 class PublicListingPrice(BaseModel):
-    """What a paid call to the listing costs, and where the payment goes."""
+    """What a paid call to the listing costs."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     version: int
     amount: int
     asset: str
     network: str
-    # The treasury in force now, not one recorded on the version.
-    pay_to: str | None
 
 
 class PublicEndpointPricing(BaseModel):
@@ -61,10 +61,7 @@ class PublicEndpointPricing(BaseModel):
     price: PublicListingPrice | None
 
     @classmethod
-    def from_model(
-        cls, endpoint: ServiceEndpoint, *, service_slug: str, pay_to: str | None
-    ) -> Self:
-        price = endpoint.current_price
+    def from_model(cls, endpoint: ServiceEndpoint, *, service_slug: str) -> Self:
         return cls(
             endpoint_id=endpoint.id,
             key=endpoint.key,
@@ -72,14 +69,8 @@ class PublicEndpointPricing(BaseModel):
             invoke_url=f"/v1/invoke/{service_slug}/{endpoint.key}",
             price=(
                 None
-                if price is None
-                else PublicListingPrice(
-                    version=price.version,
-                    amount=price.amount,
-                    asset=price.asset,
-                    network=price.network,
-                    pay_to=pay_to,
-                )
+                if endpoint.current_price is None
+                else PublicListingPrice.model_validate(endpoint.current_price)
             ),
         )
 
@@ -141,6 +132,8 @@ class PublicServiceSchemaResponse(BaseModel):
 class PublicServicePricingResponse(BaseModel):
     id: int
     slug: Slug
+    # The treasury every paid call is paid to now; None until one is configured.
+    pay_to: str | None
     endpoints: list[PublicEndpointPricing]
 
     @classmethod
@@ -148,8 +141,9 @@ class PublicServicePricingResponse(BaseModel):
         return cls(
             id=service.id,
             slug=service.slug,
+            pay_to=pay_to,
             endpoints=[
-                PublicEndpointPricing.from_model(endpoint, service_slug=service.slug, pay_to=pay_to)
+                PublicEndpointPricing.from_model(endpoint, service_slug=service.slug)
                 for endpoint in service.endpoints
                 if endpoint.is_enabled
             ],

@@ -153,13 +153,7 @@ async def update_endpoint(
         resulting_amount = None if changes.price is None else changes.price.amount
     else:
         resulting_amount = current_amount
-    # Resending the current amount re-stamps it after an asset or network change.
-    price_changed = resulting_amount != current_amount or (
-        price_supplied
-        and current_price is not None
-        and settings.treasury_address is not None
-        and not is_on_current_terms(current_price, settings=settings)
-    )
+    price_changed = resulting_amount != current_amount
 
     effective_changes: dict[str, object] = dict(column_changes)
     if price_changed:
