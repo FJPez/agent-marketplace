@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as main_module
 from app.core.config import AppEnv, Settings
 from app.core.rate_limits_backend import MemoryRateLimitsBackend, RedisRateLimitsBackend
 from app.core.resources import Resources
@@ -59,8 +58,7 @@ def test_create_app_applies_runtime_resource_settings(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        main_module,
-        "get_settings",
+        "app.main.get_settings",
         lambda: Settings(
             jwt_secret_key="test-secret-key-with-32-bytes-123",
             db_pool_size=7,
@@ -87,8 +85,7 @@ def test_create_app_opens_redis_client_and_rate_limit_backend_when_configured(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        main_module,
-        "get_settings",
+        "app.main.get_settings",
         lambda: Settings(
             jwt_secret_key="test-secret-key-with-32-bytes-123",
             redis_url="redis://localhost:6379/0",

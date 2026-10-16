@@ -7,8 +7,11 @@ from tests.fixtures.domain import create_provider_account_record, create_service
 
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.db.models import ServiceHealthCheck
-from app.services import service_health
-from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHealthOutcome
+from app.services.service_health import (
+    PUBLISH_READINESS_CHECK_NAME,
+    ServiceHealthOutcome,
+    record_check,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -30,7 +33,7 @@ async def test_record_check_is_invisible_to_other_sessions_until_caller_commits(
 ) -> None:
     recording_session = db_session_factory()
     try:
-        await service_health.record_check(
+        await record_check(
             session=recording_session,
             service_id=service_id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
@@ -62,7 +65,7 @@ async def test_record_check_row_is_durable_once_the_caller_commits(
     checked_at = datetime(2026, 9, 10, 12, 30, tzinfo=UTC)
 
     async with db_session_factory() as session:
-        await service_health.record_check(
+        await record_check(
             session=session,
             service_id=service_id,
             check_name=PUBLISH_READINESS_CHECK_NAME,

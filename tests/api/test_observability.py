@@ -1,11 +1,10 @@
-import uuid
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from tests.fixtures.logs import LoggedEntries
 from tests.fixtures.settings import SettingsEnvFactory
 
-import app.core.resources as resources_module
 from app.core.logging import configure_logging
 from app.core.request_id import REQUEST_ID_HEADER
 from app.main import create_app
@@ -22,9 +21,7 @@ def test_health_generates_request_id_when_header_is_absent(client: TestClient) -
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert (
-        str(uuid.UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
-    )
+    assert str(UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
 
 
 @pytest.mark.parametrize(
@@ -41,7 +38,7 @@ def test_invalid_request_id_is_replaced_by_a_generated_one(
     response = client.get("/health", headers={REQUEST_ID_HEADER: request_id})
 
     generated = response.headers[REQUEST_ID_HEADER]
-    assert str(uuid.UUID(generated)) == generated
+    assert str(UUID(generated)) == generated
     (entry,) = logged_entries()
     assert entry["request_id"] == generated
 
@@ -135,8 +132,7 @@ def test_rate_limit_store_outage_renders_internal_error_problem(
     logged_entries: LoggedEntries,
 ) -> None:
     monkeypatch.setattr(
-        resources_module,
-        "create_rate_limits_backend",
+        "app.core.resources.create_rate_limits_backend",
         lambda settings: _UnavailableRateLimitsBackend(),
     )
     app = create_app()
