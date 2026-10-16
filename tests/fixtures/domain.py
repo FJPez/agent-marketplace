@@ -25,7 +25,7 @@ from app.db.models import (
     ServiceRevision,
     ServiceTag,
 )
-from app.services import provider_signing_secrets
+from app.services.provider_signing_secrets import issue_signing_secret
 from app.services.service_health import PUBLISH_READINESS_CHECK_NAME
 
 if TYPE_CHECKING:
@@ -368,7 +368,7 @@ async def create_signing_secret_record(
 ) -> str:
     """Issue the account's signing secret, as a provider does; return the plaintext."""
     async with db_session_factory() as session:
-        _, secret = await provider_signing_secrets.issue_signing_secret(
+        _, secret = await issue_signing_secret(
             session=session,
             settings=get_settings(),
             account_id=account_id,
