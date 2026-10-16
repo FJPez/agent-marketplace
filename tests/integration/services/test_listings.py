@@ -22,8 +22,15 @@ from app.core.json_types import JsonObject
 from app.db.models import ServiceEndpoint
 from app.schemas.discovery import PublicServicePricingResponse
 from app.schemas.service import EndpointUpdateRequest
-from app.services import discovery, listings, moderation, provider_endpoints
-from app.services.listings import InvokableListing, ListingPriceTerms, ListingUpstream
+from app.services.discovery import get_service
+from app.services.listings import (
+    InvokableListing,
+    ListingPriceTerms,
+    ListingUpstream,
+    load_invokable_listing,
+)
+from app.services.moderation import restore_service, suspend_service
+from app.services.provider_endpoints import is_on_current_terms, update_endpoint
 
 # A network the settings no longer name: a version keeps the network it was created on.
 RETIRED_NETWORK = "eip155:8453"
@@ -103,7 +110,7 @@ async def _load(
     endpoint_key: str = "translate",
 ) -> InvokableListing:
     async with db_session_factory() as session:
-        return await listings.load_invokable_listing(
+        return await load_invokable_listing(
             session=session,
             service_slug=service_slug,
             endpoint_key=endpoint_key,
@@ -213,7 +220,7 @@ async def test_a_suspension_hides_the_listing_until_it_is_restored(
     admin_account_id = await create_admin_account_record(db_session_factory)
 
     async with db_session_factory() as session:
-        await moderation.suspend_service(
+        await suspend_service(
             session=session,
             service_id=seeded.service_id,
             actor_account_id=admin_account_id,
@@ -223,7 +230,7 @@ async def test_a_suspension_hides_the_listing_until_it_is_restored(
         await _load(db_session_factory)
 
     async with db_session_factory() as session:
-        await moderation.restore_service(
+        await restore_service(
             session=session,
             service_id=seeded.service_id,
             actor_account_id=admin_account_id,
@@ -245,7 +252,7 @@ async def test_a_loaded_price_can_be_checked_against_the_current_terms(
     listing = await _load(db_session_factory)
 
     assert listing.price is not None
-    assert provider_endpoints.is_on_current_terms(listing.price, settings=build_service_settings())
+    assert is_on_current_terms(listing.price, settings=build_service_settings())
 
 
 async def test_a_session_with_an_open_transaction_is_refused_without_side_effects(
@@ -265,7 +272,7 @@ async def test_a_session_with_an_open_transaction_is_refused_without_side_effect
         assert session.in_transaction()
 
         with pytest.raises(RuntimeError, match="no transaction open"):
-            await listings.load_invokable_listing(
+            await load_invokable_listing(
                 session=session,
                 service_slug="translator",
                 endpoint_key="translate",
@@ -285,7 +292,7 @@ async def test_loading_ends_its_read_transaction(
     await _seed_listing(db_session_factory)
 
     async with db_session_factory() as session:
-        await listings.load_invokable_listing(
+        await load_invokable_listing(
             session=session,
             service_slug="translator",
             endpoint_key="translate",
@@ -293,7 +300,7 @@ async def test_loading_ends_its_read_transaction(
         assert not session.in_transaction()
 
         with pytest.raises(NotFoundError):
-            await listings.load_invokable_listing(
+            await load_invokable_listing(
                 session=session,
                 service_slug="translator",
                 endpoint_key="unknown",
@@ -322,7 +329,7 @@ async def test_every_endpoint_discovery_lists_can_be_loaded(
     async with db_session_factory() as session:
         # The one way an endpoint without an upstream could reach discovery.
         with pytest.raises(InvalidStateError):
-            await provider_endpoints.update_endpoint(
+            await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
                 validation_pool=INLINE_REQUEST_VALIDATION_POOL,
@@ -332,7 +339,7 @@ async def test_every_endpoint_discovery_lists_can_be_loaded(
             )
 
     async with db_session_factory() as session:
-        service = await discovery.get_service(session=session, service_ref="translator")
+        service = await get_service(session=session, service_ref="translator")
         listed = PublicServicePricingResponse.from_model(service, pay_to=None).endpoints
 
     assert sorted(endpoint.key for endpoint in listed) == ["summarize", "translate"]

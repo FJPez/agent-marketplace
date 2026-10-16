@@ -13,12 +13,12 @@ The worker compiles each schema once and keeps VALIDATOR_CACHE_SIZE of them; no 
 process holds a compiled schema.
 """
 
-import contextlib
 import json
 import math
 import resource
 import struct
 import sys
+from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
 from typing import BinaryIO
@@ -79,7 +79,7 @@ def main() -> None:
     recycle_bytes = int(sys.argv[1])
     if sys.platform == "linux":
         # A lower limit already set bounds the worker more tightly.
-        with contextlib.suppress(ValueError):
+        with suppress(ValueError):
             resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT_BYTES, MEMORY_LIMIT_BYTES))
     requests, answers = sys.stdin.buffer, sys.stdout.buffer
     _answer(answers)  # ready
