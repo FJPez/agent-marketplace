@@ -14,7 +14,7 @@ GLOBAL_SCOPE = "global"
 
 
 def get_rate_limits_backend(request: Request) -> RateLimitsBackend:
-    return get_resources(request.app).rate_limits_backend
+    return get_resources(request).rate_limits_backend
 
 
 RateLimitsBackendDep = Annotated[RateLimitsBackend, Depends(get_rate_limits_backend)]

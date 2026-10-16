@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 
 import pytest
+from asgi_lifespan import LifespanManager
 from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.helpers.auth import auth_headers_for_account, create_account
@@ -20,8 +21,8 @@ async def rate_limited_client(
     get_settings.cache_clear()
 
     app = create_app()
-    async with app.router.lifespan_context(app):
-        transport = ASGITransport(app=app)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as client:
             yield client
 

@@ -1,6 +1,7 @@
 import logging
 
 import pytest
+from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx2 import ASGITransport, AsyncClient
@@ -77,8 +78,10 @@ async def test_a_lock_timeout_while_authenticating_answers_503(
     app = create_app()
 
     async with (
-        app.router.lifespan_context(app),
-        AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client,
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
         db_session_factory() as lock_holder,
     ):
         # Recording the key's first use needs this row, so authentication waits on the lock.
