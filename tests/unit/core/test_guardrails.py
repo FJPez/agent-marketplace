@@ -5,7 +5,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import pytest
-from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import Response
@@ -55,15 +54,14 @@ def _build_request(
     async def receive() -> dict[str, Any]:
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    app = FastAPI()
-    app.state.resources = replace(resources, rate_limits_backend=backend)
     scope = {
         "type": "http",
         "method": "GET",
         "path": path,
         "headers": headers or [],
         "client": ("127.0.0.1", 12345),
-        "app": app,
+        # The lifespan state the server copies into every request.
+        "state": {"resources": replace(resources, rate_limits_backend=backend)},
     }
     return Request(scope, receive)
 

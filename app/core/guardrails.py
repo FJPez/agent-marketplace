@@ -24,7 +24,7 @@ async def protect(request: Request, call_next: RequestHandler) -> Response:
     """Apply the global rate limit to /v1 requests, keyed by account or client address."""
     if not request.url.path.startswith(_V1_PATH_PREFIX):
         return await call_next(request)
-    resources = get_resources(request.app)
+    resources = get_resources(request)
     api_rate_limit = resources.settings.api_rate_limit
     backend = resources.rate_limits_backend
     key = await _resolve_owner_key(request, resources)

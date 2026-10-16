@@ -13,6 +13,7 @@ import coredis
 import pytest
 from alembic import command
 from alembic.config import Config
+from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx2 import ASGITransport, AsyncClient
@@ -213,8 +214,8 @@ async def async_client(
     app: FastAPI,
     clean_database: None,
 ) -> AsyncIterator[AsyncClient]:
-    async with app.router.lifespan_context(app):
-        transport = ASGITransport(app=app)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
         async with AsyncClient(
             transport=transport,
             base_url="http://testserver",
