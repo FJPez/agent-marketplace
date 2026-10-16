@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.actor import ActorContext
 from app.core.config import Settings
 from app.core.errors import UnauthenticatedError
-from app.core.evm import normalize_wallet_address
+from app.core.evm import checksum_address
 from app.core.security import (
     AuthTokenType,
     create_jwt,
@@ -55,7 +55,7 @@ def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
 
 
 async def issue_nonce(*, session: AsyncSession, settings: Settings, wallet_address: str) -> str:
-    normalized_wallet = normalize_wallet_address(wallet_address)
+    normalized_wallet = checksum_address(wallet_address)
     account = await session.scalar(
         select(Account).where(Account.wallet_address == normalized_wallet),
     )

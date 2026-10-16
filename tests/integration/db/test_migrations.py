@@ -15,6 +15,8 @@ DOMAIN_TABLES = {
     "api_keys",
     "listing_prices",
     "moderation_actions",
+    "payout_address_challenges",
+    "payout_addresses",
     "provider_signing_secrets",
     "provider_upstreams",
     "service_endpoints",
@@ -250,6 +252,29 @@ async def _insert_signing_secret(db_engine: AsyncEngine, *, service_id: int) -> 
         )
 
 
+async def _insert_payout_address_and_challenge(db_engine: AsyncEngine, *, service_id: int) -> None:
+    async with db_engine.begin() as connection:
+        for statement in (
+            """
+            INSERT INTO payout_address_challenges (
+                account_id, network, address, nonce, expires_at
+            )
+            SELECT provider_account_id, 'eip155:84532',
+                '0x1111111111111111111111111111111111111111', 'nonce', now()
+            FROM services WHERE id = :service_id
+            """,
+            """
+            INSERT INTO payout_addresses (
+                account_id, network, address, nonce, signature, verified_at, effective_at
+            )
+            SELECT provider_account_id, 'eip155:84532',
+                '0x1111111111111111111111111111111111111111', 'nonce', '0x', now(), now()
+            FROM services WHERE id = :service_id
+            """,
+        ):
+            await connection.execute(text(statement), {"service_id": service_id})
+
+
 async def _insert_health_check(db_engine: AsyncEngine, *, service_id: int) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
@@ -426,6 +451,7 @@ def test_migrations_downgrade_cleanly_with_catalogue_rows(
     asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
     asyncio.run(_insert_upstream(engine, endpoint_id=endpoint_id))
     asyncio.run(_insert_signing_secret(engine, service_id=service_id))
+    asyncio.run(_insert_payout_address_and_challenge(engine, service_id=service_id))
 
     try:
         command.downgrade(config, "base")

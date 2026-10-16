@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
-from app.core.evm import normalize_wallet_address
+from app.core.evm import checksum_address
 from app.core.security import generate_nonce, verify_siwe_signature
 from app.db.errors import is_unique_violation
 from app.db.models import Account, WalletChangeLog
@@ -29,7 +29,7 @@ async def initiate_wallet_change(
     wallet_address: str,
 ) -> WalletChangeChallenge:
     try:
-        normalized_wallet_address = normalize_wallet_address(wallet_address)
+        normalized_wallet_address = checksum_address(wallet_address)
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
     now = datetime.now(UTC)

@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
     # The Fernet key that encrypts provider signing secrets at rest.
     provider_secret_encryption_key: SecretStr = SecretStr("")
+    # How long a provider has to sign a payout address challenge.
+    payout_address_challenge_seconds: int = Field(default=300, gt=0)
+    # How long payouts are held after every payout address proof, even one of the
+    # address already in use. It covers a change the owner notices and answers by
+    # proving its own address again, which restarts the hold. It does not stop an
+    # account takeover: see the payout address notes in README.md.
+    payout_address_hold_seconds: int = Field(default=86_400, gt=0)
     # Request bodies are validated in this many worker processes, each validation within
     # this deadline (app/core/request_validation.py). A caller also waits at most the
     # deadline for a free worker. A worker starts at about 25 MiB and is replaced once it
