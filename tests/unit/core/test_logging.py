@@ -1,4 +1,4 @@
-import uuid
+from uuid import UUID
 
 from app.core.logging import (
     DURATION_MS_FIELD,
@@ -26,8 +26,8 @@ def test_resolve_request_id_generates_uuid_when_header_missing_or_blank() -> Non
     blank_request_id = resolve_request_id("   ")
 
     assert missing_request_id != blank_request_id
-    assert str(uuid.UUID(missing_request_id)) == missing_request_id
-    assert str(uuid.UUID(blank_request_id)) == blank_request_id
+    assert str(UUID(missing_request_id)) == missing_request_id
+    assert str(UUID(blank_request_id)) == blank_request_id
 
 
 def test_build_log_context_uses_stable_request_fields() -> None:

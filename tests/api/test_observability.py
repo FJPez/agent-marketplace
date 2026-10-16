@@ -1,12 +1,11 @@
 import logging
-import uuid
 from dataclasses import dataclass
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from tests.fixtures.settings import SettingsEnvFactory
 
-import app.main as main_module
 from app.core.logging import (
     DURATION_MS_FIELD,
     METHOD_FIELD,
@@ -79,9 +78,7 @@ def test_health_generates_request_id_when_header_is_absent(client: TestClient) -
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert (
-        str(uuid.UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
-    )
+    assert str(UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
 
 
 def test_health_logs_request_context(
@@ -175,8 +172,7 @@ def test_rate_limit_store_outage_renders_internal_error_problem(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(
-        main_module,
-        "create_rate_limits_backend",
+        "app.main.create_rate_limits_backend",
         lambda settings: _UnavailableRateLimitsBackend(),
     )
     app = create_app()
