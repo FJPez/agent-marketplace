@@ -22,7 +22,6 @@ def create_app() -> FastAPI:
             rate_limits_backend=rate_limits_backend,
         ),
     )
-    install_observability(app)
     install_exception_handlers(app)
     install_guardrails(
         app,
@@ -31,6 +30,8 @@ def create_app() -> FastAPI:
             rate_limits_backend=rate_limits_backend,
         ),
     )
+    # Installed last so it runs outermost and also logs and tags guardrails responses.
+    install_observability(app)
     app.include_router(api_router)
     return app
 

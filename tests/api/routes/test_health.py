@@ -69,4 +69,9 @@ def test_health_ready_route_returns_service_unavailable_without_redis_when_confi
         response = client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "redis unavailable"}
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.json() == {
+        "type": "/problems/unavailable",
+        "status": 503,
+        "detail": "redis unavailable",
+    }
