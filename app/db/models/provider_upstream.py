@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 
 class ProviderUpstream(Base):
     __tablename__ = "provider_upstreams"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(config) = 'object'",
+            name="config_json_object",
+        ),
+    )
 
     endpoint_id: Mapped[int] = mapped_column(
         BigInteger,

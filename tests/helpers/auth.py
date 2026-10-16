@@ -39,7 +39,6 @@ async def auth_headers_for_account(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     account_id: int,
-    idempotency_key: str | None = None,
 ) -> dict[str, str]:
     async with db_session_factory() as session:
         account = await session.get(Account, account_id)
@@ -54,16 +53,12 @@ async def auth_headers_for_account(
         token_type=AuthTokenType.ACCESS,
         expires_in_seconds=get_settings().jwt_access_token_expiry,
     )
-    headers = {"Authorization": f"Bearer {token}"}
-    if idempotency_key is not None:
-        headers["Idempotency-Key"] = idempotency_key
-    return headers
+    return {"Authorization": f"Bearer {token}"}
 
 
 def auth_headers_for_account_id(
     account_id: int,
     *,
-    idempotency_key: str | None = None,
     token_version: int = 1,
 ) -> dict[str, str]:
     settings = get_settings()
@@ -75,7 +70,4 @@ def auth_headers_for_account_id(
         token_type=AuthTokenType.ACCESS,
         expires_in_seconds=settings.jwt_access_token_expiry,
     )
-    headers = {"Authorization": f"Bearer {token}"}
-    if idempotency_key is not None:
-        headers["Idempotency-Key"] = idempotency_key
-    return headers
+    return {"Authorization": f"Bearer {token}"}

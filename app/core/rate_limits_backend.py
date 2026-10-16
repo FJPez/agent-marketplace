@@ -18,13 +18,6 @@ def build_client_rate_limit_key(request: Request) -> str:
     return f"client:{client_host}"
 
 
-def build_actor_rate_limit_key(request: Request) -> str:
-    cached_key = getattr(request.state, "rate_limit_owner_key", None)
-    if isinstance(cached_key, str):
-        return cached_key
-    return build_client_rate_limit_key(request)
-
-
 @lru_cache
 def _parse_limit(limit_value: str) -> RateLimitItem:
     return parse(limit_value)

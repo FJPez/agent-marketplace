@@ -2,28 +2,23 @@
 
 Agent Marketplace is a backend platform for publishing callable endpoints,
 discovering them, and charging for access to them through a central service.
-The primary use case is simple paid endpoint exposure: a provider can publish a
-service, attach pricing to an endpoint, and let consumers pay to invoke it.
+Providers publish services with free or paid endpoints; consumers, including
+autonomous agents, discover them over the HTTP API.
 
-The platform is designed for both autonomous agents and human users. Agents can
-integrate directly through the HTTP API for discovery, quoting, and invocation,
-while human operators can manage services, payouts, and moderation through the
-same authenticated workflows.
+## Status
+
+The invocation and payment layer is being rebuilt from scratch around x402 v2.
+Until it lands, the API covers identity, provider authoring, publishing,
+moderation and discovery, and there is no invoke endpoint.
 
 ## Overview
 
 Core capabilities:
 
-- wallet-based authentication and API keys
+- wallet-based authentication (SIWE) and API keys
 - provider service authoring and publish control
 - public discovery, schemas, and pricing lookups
-- quote generation and invoke-time request binding
-- free and paid invocation with x402-compatible payment handling
-- moderation, earnings, ledger, and payout reporting
-
-The detailed route contract lives in
-[docs/api-reference.md](docs/api-reference.md) and
-[docs/api-reference.pdf](docs/api-reference.pdf).
+- moderation for administrators
 
 ## Quick Start
 
@@ -44,61 +39,36 @@ Useful verification commands:
 make format
 make lint
 make typecheck
-TEST_REDIS_URL=redis://localhost:6379/0 make test
+TEST_REDIS_URL=redis://localhost:6379/15 make test
 ```
 
-## Agent Integration
+The tests flush the Redis database named by `TEST_REDIS_URL`, so point it at a
+database you use for nothing else.
 
-If you want to wire an agent into the platform, start with
-[docs/agent-setup.md](docs/agent-setup.md). It covers:
+## Resetting a Local Database
 
-- SIWE-style wallet authentication
-- public discovery, schema, and pricing lookups
-- quote creation for paid endpoints
-- authenticated invocation with idempotency headers
-- the `402 Payment Required` retry pattern for paid flows
-
-Runnable companion scripts live in [examples/](examples/) and are summarized in
-[examples/README.md](examples/README.md).
-
-## Demo Paths
-
-For a local-safe walkthrough that does not require funded wallets or a live
-facilitator:
+The migration history was squashed into a single baseline on 2026-09-26. A
+database created before then cannot be upgraded; drop and recreate it:
 
 ```bash
-make demo-upstream
-make demo-api
-uv run python examples/provider_publish.py
-uv run python examples/minimal_consumer.py
+docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"
+docker compose exec -T postgres psql -U postgres -c "CREATE DATABASE agent_marketplace"
+uv run alembic upgrade head
 ```
 
-For the full paid x402 and payout path, use
-[docs/demo-setup.md](docs/demo-setup.md), then run:
+## Admin Bootstrap
+
+`scripts/bootstrap_admin.py` makes the wallet in `APP_BOOTSTRAP_ADMIN_WALLET` an
+administrator, creating its account if needed. Railway runs it before every
+deploy, so set `APP_BOOTSTRAP_ADMIN_WALLET` there alongside `APP_DATABASE_URL`.
+The script reads both variables from the environment, not from `.env`.
 
 ```bash
-make demo-client
-make demo-provider
+APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace APP_BOOTSTRAP_ADMIN_WALLET=0xYourAdminWallet make bootstrap-admin
 ```
-
-## Documentation
-
-- [Documentation index](docs/README.md)
-- [API reference source](docs/api-reference.md)
-- [Agent setup guide](docs/agent-setup.md)
-- [Full demo setup](docs/demo-setup.md)
-- [Railway deployment guide](docs/deployment/railway.md)
-- [Example scripts](examples/)
-- [Contributor planning pack](codex-agent-plan/README.md)
-
-The current runtime and integration docs live under `docs/`. The
-`codex-agent-plan/` folder is retained as contributor planning context and
-historical branch-handoff material.
 
 ## Environment Notes
 
 - The local quick start assumes PostgreSQL and Redis are running.
-- Paid x402 flows require Base Sepolia wallets, x402 facilitator credentials,
-  and `APP_TREASURY_PRIVATE_KEY`.
-- Railway deploys also require the treasury private key because the predeploy
-  bootstrap marks that wallet as an admin account.
+- Staging and production require a non-local `APP_DATABASE_URL`,
+  `APP_REDIS_URL` and an explicit `APP_SIWE_DOMAIN`.
