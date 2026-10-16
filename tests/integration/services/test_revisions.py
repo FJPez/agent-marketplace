@@ -7,7 +7,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.enums import AccessMode
 from app.db.models import Account, Service, ServiceEndpoint, ServiceRevision
-from app.services import revisions
+from app.services.revisions import create_revision
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -57,8 +57,8 @@ async def test_create_revision_persists_snapshot_and_updates_current_token(
         set_committed_value(endpoint, "price", None)
         set_committed_value(service, "endpoints", [endpoint])
 
-        first_revision = await revisions.create_revision(session=session, service=service)
-        second_revision = await revisions.create_revision(session=session, service=service)
+        first_revision = await create_revision(session=session, service=service)
+        second_revision = await create_revision(session=session, service=service)
 
         await session.flush()
 
