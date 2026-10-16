@@ -21,7 +21,11 @@ from app.db.models import (
     ServiceTag,
 )
 from app.db.session import create_engine, create_session_factory
-from app.services import provider_endpoints
+from app.services.provider_endpoints import (
+    build_price_version,
+    is_on_current_terms,
+    put_price_on_sale,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -232,12 +236,12 @@ async def _ensure_paid_price(
         if (
             current is not None
             and current.amount == PAID_ENDPOINT_AMOUNT
-            and provider_endpoints.is_on_current_terms(current, settings=settings)
+            and is_on_current_terms(current, settings=settings)
         ):
             return current
 
-    price = provider_endpoints.build_price_version(settings=settings, amount=PAID_ENDPOINT_AMOUNT)
-    await provider_endpoints.put_price_on_sale(session=session, endpoint=endpoint, price=price)
+    price = build_price_version(settings=settings, amount=PAID_ENDPOINT_AMOUNT)
+    await put_price_on_sale(session=session, endpoint=endpoint, price=price)
     return price
 
 

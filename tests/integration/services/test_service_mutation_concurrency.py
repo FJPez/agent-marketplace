@@ -23,7 +23,20 @@ from app.core.errors import ConflictError, InvalidStateError
 from app.db.models import ListingPrice, ModerationAction, Service, ServiceEndpoint, ServiceRevision
 from app.schemas.pricing import ListingPriceRequest
 from app.schemas.service import EndpointUpdateRequest, EndpointUpstreamRequest
-from app.services import moderation, provider_endpoints, publishing, revisions, service_access
+from app.services.moderation import (
+    ModerationActionType,
+    ModerationServiceState,
+    get_service_state,
+    suspend_service,
+)
+from app.services.provider_endpoints import update_endpoint, upsert_upstream
+from app.services.publishing import publish_service
+from app.services.revisions import create_revision
+from app.services.service_access import (
+    load_owned_endpoint,
+    load_owned_service_for_update,
+    lock_owned_service_by_endpoint,
+)
 
 # Bounded wait proving the concurrent mutation is still blocked on publish's
 # row lock rather than racing ahead of publish's single commit.
@@ -113,7 +126,6 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
         service_id=service_id,
     )
 
-    original_create_revision = revisions.create_revision
     first_revision_created = asyncio.Event()
     release_first_revision = asyncio.Event()
     create_revision_calls = 0
@@ -124,18 +136,21 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
         service: Service,
     ) -> ServiceRevision:
         nonlocal create_revision_calls
-        revision = await original_create_revision(session=session, service=service)
+        revision = await create_revision(session=session, service=service)
         create_revision_calls += 1
         if create_revision_calls == 1:
             first_revision_created.set()
             await release_first_revision.wait()
         return revision
 
-    monkeypatch.setattr(revisions, "create_revision", delayed_create_revision)
+    monkeypatch.setattr(
+        "app.services.provider_endpoints.create_revision",
+        delayed_create_revision,
+    )
 
     async def update_timeout(timeout_seconds: int) -> None:
         async with db_session_factory() as session:
-            await provider_endpoints.update_endpoint(
+            await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
                 account_id=provider_account_id,
@@ -196,8 +211,6 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
     publish_has_lock = asyncio.Event()
     mutation_lookup_started = asyncio.Event()
     release_publish = asyncio.Event()
-    original_load_owned_service_for_update = service_access.load_owned_service_for_update
-    original_lock_owned_service_by_endpoint = service_access.lock_owned_service_by_endpoint
 
     async def delayed_load_owned_service_for_update(
         *,
@@ -205,7 +218,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
         account_id: int,
         service_id: int,
     ) -> Service:
-        service = await original_load_owned_service_for_update(
+        service = await load_owned_service_for_update(
             session=session,
             account_id=account_id,
             service_id=service_id,
@@ -221,26 +234,24 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
         endpoint_id: int,
     ) -> int:
         mutation_lookup_started.set()
-        return await original_lock_owned_service_by_endpoint(
+        return await lock_owned_service_by_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
         )
 
     monkeypatch.setattr(
-        service_access,
-        "load_owned_service_for_update",
+        "app.services.publishing.load_owned_service_for_update",
         delayed_load_owned_service_for_update,
     )
     monkeypatch.setattr(
-        service_access,
-        "lock_owned_service_by_endpoint",
+        "app.services.provider_endpoints.lock_owned_service_by_endpoint",
         signalling_lock_owned_service_by_endpoint,
     )
 
     async def publish() -> None:
         async with db_session_factory() as session:
-            await publishing.publish_service(
+            await publish_service(
                 session=session,
                 resolver=dns_resolver,
                 account_id=provider_account_id,
@@ -253,7 +264,7 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
             # Publish holds the service row lock, so this waits for publish's
             # single commit and then finds an already-active service.
             with pytest.raises(InvalidStateError, match="service is not mutable outside draft"):
-                await provider_endpoints.upsert_upstream(
+                await upsert_upstream(
                     session=session,
                     account_id=provider_account_id,
                     endpoint_id=endpoint_id,
@@ -305,10 +316,8 @@ async def test_publish_holds_its_lock_until_the_single_commit(
     # Publish pauses between recording its readiness verdict and flipping the
     # lifecycle - the window in which it used to have already committed and
     # released the service row lock.
-    original_create_revision = revisions.create_revision
     publish_reached_revision = asyncio.Event()
     release_publish = asyncio.Event()
-    original_lock_owned_service_by_endpoint = service_access.lock_owned_service_by_endpoint
     mutation_lock_started = asyncio.Event()
 
     async def delayed_create_revision(
@@ -318,7 +327,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
     ) -> ServiceRevision:
         publish_reached_revision.set()
         await release_publish.wait()
-        return await original_create_revision(session=session, service=service)
+        return await create_revision(session=session, service=service)
 
     async def signalling_lock_owned_service_by_endpoint(
         *,
@@ -327,22 +336,21 @@ async def test_publish_holds_its_lock_until_the_single_commit(
         endpoint_id: int,
     ) -> int:
         mutation_lock_started.set()
-        return await original_lock_owned_service_by_endpoint(
+        return await lock_owned_service_by_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
         )
 
-    monkeypatch.setattr(revisions, "create_revision", delayed_create_revision)
+    monkeypatch.setattr("app.services.publishing.create_revision", delayed_create_revision)
     monkeypatch.setattr(
-        service_access,
-        "lock_owned_service_by_endpoint",
+        "app.services.provider_endpoints.lock_owned_service_by_endpoint",
         signalling_lock_owned_service_by_endpoint,
     )
 
     async def publish() -> None:
         async with db_session_factory() as session:
-            await publishing.publish_service(
+            await publish_service(
                 session=session,
                 resolver=dns_resolver,
                 account_id=provider_account_id,
@@ -351,7 +359,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
 
     async def mutate_timeout() -> None:
         async with db_session_factory() as session:
-            await provider_endpoints.update_endpoint(
+            await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
                 account_id=provider_account_id,
@@ -400,7 +408,6 @@ async def test_concurrent_suspends_serialise_on_the_service_row_lock(
 
     # The first suspend pauses after reading the moderation state, holding the
     # service row lock across the window the second suspend has to survive.
-    original_get_service_state = moderation.get_service_state
     first_suspend_has_lock = asyncio.Event()
     release_first_suspend = asyncio.Event()
     state_reads = 0
@@ -409,20 +416,20 @@ async def test_concurrent_suspends_serialise_on_the_service_row_lock(
         *,
         session: AsyncSession,
         service_id: int,
-    ) -> moderation.ModerationServiceState:
+    ) -> ModerationServiceState:
         nonlocal state_reads
-        state = await original_get_service_state(session=session, service_id=service_id)
+        state = await get_service_state(session=session, service_id=service_id)
         state_reads += 1
         if state_reads == 1:
             first_suspend_has_lock.set()
             await release_first_suspend.wait()
         return state
 
-    monkeypatch.setattr(moderation, "get_service_state", delayed_get_service_state)
+    monkeypatch.setattr("app.services.moderation.get_service_state", delayed_get_service_state)
 
     async def suspend(reason: str) -> None:
         async with db_session_factory() as session:
-            await moderation.suspend_service(
+            await suspend_service(
                 session=session,
                 service_id=service_id,
                 actor_account_id=admin_account_id,
@@ -435,7 +442,7 @@ async def test_concurrent_suspends_serialise_on_the_service_row_lock(
                 InvalidStateError,
                 match=f"cannot suspend service {service_id} from suspended",
             ):
-                await moderation.suspend_service(
+                await suspend_service(
                     session=session,
                     service_id=service_id,
                     actor_account_id=admin_account_id,
@@ -470,7 +477,7 @@ async def test_concurrent_suspends_serialise_on_the_service_row_lock(
         )
 
     assert action_count == 1
-    assert persisted_actions[0].action == moderation.ModerationActionType.SUSPEND.value
+    assert persisted_actions[0].action == ModerationActionType.SUSPEND.value
     assert persisted_actions[0].reason == "first"
 
 
@@ -494,7 +501,6 @@ async def test_concurrent_price_edits_create_consecutive_versions(
     await create_listing_price_record(db_session_factory, endpoint_id=endpoint_id)
 
     # The first edit pauses holding the service row lock; the second numbers its version after it.
-    original_load_owned_endpoint = service_access.load_owned_endpoint
     first_edit_has_lock = asyncio.Event()
     release_first_edit = asyncio.Event()
     loads = 0
@@ -506,7 +512,7 @@ async def test_concurrent_price_edits_create_consecutive_versions(
         endpoint_id: int,
     ) -> ServiceEndpoint:
         nonlocal loads
-        endpoint = await original_load_owned_endpoint(
+        endpoint = await load_owned_endpoint(
             session=session,
             account_id=account_id,
             endpoint_id=endpoint_id,
@@ -517,11 +523,14 @@ async def test_concurrent_price_edits_create_consecutive_versions(
             await release_first_edit.wait()
         return endpoint
 
-    monkeypatch.setattr(service_access, "load_owned_endpoint", delayed_load_owned_endpoint)
+    monkeypatch.setattr(
+        "app.services.provider_endpoints.load_owned_endpoint",
+        delayed_load_owned_endpoint,
+    )
 
     async def edit_price(amount: int) -> None:
         async with db_session_factory() as session:
-            await provider_endpoints.update_endpoint(
+            await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
                 account_id=provider_account_id,
@@ -580,7 +589,7 @@ async def test_price_version_race_without_the_service_lock_is_a_conflict(
     async def edit_price() -> None:
         async with db_session_factory() as session:
             with pytest.raises(ConflictError, match="price changed concurrently"):
-                await provider_endpoints.update_endpoint(
+                await update_endpoint(
                     session=session,
                     settings=build_service_settings(),
                     account_id=provider_account_id,
