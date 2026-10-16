@@ -4,8 +4,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
-import coredis
-from coredis.client.basic import Redis
+from coredis import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
@@ -31,7 +30,7 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
 
         redis_client = None
         if settings.redis_url:
-            redis_client = coredis.Redis.from_url(settings.redis_url, decode_responses=True)
+            redis_client = Redis.from_url(settings.redis_url, decode_responses=True)
             stack.callback(redis_client.connection_pool.disconnect)
 
         yield Resources(
