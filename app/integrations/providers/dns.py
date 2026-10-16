@@ -4,11 +4,11 @@ from collections.abc import Sequence
 from ipaddress import IPv4Address
 from typing import Protocol
 
-import dns.asyncresolver
-import dns.exception
-import dns.resolver
+from dns.asyncresolver import Resolver
+from dns.exception import DNSException
 from dns.rdata import Rdata
 from dns.rdtypes.txtbase import TXTBase
+from dns.resolver import NXDOMAIN
 
 
 class DnsLookupError(Exception):
@@ -28,7 +28,7 @@ class DnsResolver(Protocol):
 class DnsPythonResolver:
     """Resolves with dnspython, queried directly (no hosts file or search list)."""
 
-    def __init__(self, resolver: dns.asyncresolver.Resolver) -> None:
+    def __init__(self, resolver: Resolver) -> None:
         self._resolver = resolver
 
     async def resolve_ipv4(self, host: str) -> list[IPv4Address]:
@@ -44,9 +44,14 @@ class DnsPythonResolver:
 
     async def _query(self, name: str, record_type: str) -> Sequence[Rdata]:
         try:
-            answer = await self._resolver.resolve(name, record_type, search=False)
-        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+            answer = await self._resolver.resolve(
+                name,
+                record_type,
+                search=False,
+                raise_on_no_answer=False,
+            )
+        except NXDOMAIN:
             return ()
-        except dns.exception.DNSException as exc:
+        except DNSException as exc:
             raise DnsLookupError(f"DNS lookup for {name} failed") from exc
         return tuple(answer)

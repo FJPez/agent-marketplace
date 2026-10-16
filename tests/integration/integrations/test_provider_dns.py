@@ -4,12 +4,11 @@ import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from ipaddress import IPv4Address
 
-import dns.asyncresolver
-import dns.message
-import dns.rcode
-import dns.rdatatype
-import dns.rrset
 import pytest
+from dns.asyncresolver import Resolver
+from dns.message import from_wire, make_response
+from dns.rcode import NXDOMAIN, SERVFAIL
+from dns.rrset import from_text_list
 
 from app.integrations.providers.dns import DnsLookupError, DnsPythonResolver
 
@@ -34,20 +33,20 @@ class StubDnsServer(asyncio.DatagramProtocol):
         self.transport = transport
 
     def datagram_received(self, data: bytes, addr: tuple[str | int, int]) -> None:
-        query = dns.message.from_wire(data)
+        query = from_wire(data)
         question = query.question[0]
         name = question.name.to_text()
         if name in self.silent:
             return
-        response = dns.message.make_response(query)
-        record_type = dns.rdatatype.to_text(question.rdtype)
+        response = make_response(query)
+        record_type = question.rdtype.name
         values = [value for kind, value in self.records.get(name, ()) if kind == record_type]
         if name in self.failing:
-            response.set_rcode(dns.rcode.SERVFAIL)
+            response.set_rcode(SERVFAIL)
         elif name not in self.records:
-            response.set_rcode(dns.rcode.NXDOMAIN)
+            response.set_rcode(NXDOMAIN)
         elif values:
-            response.answer.append(dns.rrset.from_text_list(name, 60, "IN", record_type, values))
+            response.answer.append(from_text_list(name, 60, "IN", record_type, values))
         assert self.transport is not None
         self.transport.sendto(response.to_wire(), addr)
 
@@ -72,7 +71,7 @@ async def resolver() -> AsyncIterator[DnsPythonResolver]:
     )
     loop = asyncio.get_running_loop()
     transport, _ = await loop.create_datagram_endpoint(lambda: server, local_addr=("127.0.0.1", 0))
-    stub = dns.asyncresolver.Resolver(configure=False)
+    stub = Resolver(configure=False)
     stub.nameservers = ["127.0.0.1"]
     stub.port = transport.get_extra_info("sockname")[1]
     stub.lifetime = 0.5
