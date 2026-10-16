@@ -13,8 +13,17 @@ from tests.fixtures.domain import (
 
 from app.core.errors import InvalidStateError, NotFoundError
 from app.db.models import ModerationAction, Service
-from app.services import moderation
-from app.services.moderation import ModerationServiceState, ServiceUnavailableError
+from app.services.moderation import (
+    ModerationServiceState,
+    ServiceUnavailableError,
+    delist_service,
+    ensure_service_publishable,
+    get_service_state,
+    is_clear,
+    list_actions,
+    restore_service,
+    suspend_service,
+)
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -23,18 +32,18 @@ type ModerationMutation = Callable[..., Awaitable[ModerationAction]]
 MISSING_SERVICE_ID = 999_999
 
 ALLOWED_TRANSITIONS = [
-    ([], moderation.suspend_service, "suspend"),
-    ([], moderation.delist_service, "delist"),
-    (["suspend"], moderation.restore_service, "restore"),
-    (["suspend"], moderation.delist_service, "delist"),
-    (["delist"], moderation.restore_service, "restore"),
-    (["delist"], moderation.suspend_service, "suspend"),
+    ([], suspend_service, "suspend"),
+    ([], delist_service, "delist"),
+    (["suspend"], restore_service, "restore"),
+    (["suspend"], delist_service, "delist"),
+    (["delist"], restore_service, "restore"),
+    (["delist"], suspend_service, "suspend"),
 ]
 
 REJECTED_TRANSITIONS = [
-    ([], moderation.restore_service, "cannot restore service {service_id} from clear"),
-    (["suspend"], moderation.suspend_service, "cannot suspend service {service_id} from suspended"),
-    (["delist"], moderation.delist_service, "cannot delist service {service_id} from delisted"),
+    ([], restore_service, "cannot restore service {service_id} from clear"),
+    (["suspend"], suspend_service, "cannot suspend service {service_id} from suspended"),
+    (["delist"], delist_service, "cannot delist service {service_id} from delisted"),
 ]
 
 DERIVED_STATES = [
@@ -135,7 +144,7 @@ async def test_suspending_a_missing_service_raises_not_found_and_records_nothing
 
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError) as error:
-            await moderation.suspend_service(
+            await suspend_service(
                 session=session,
                 service_id=MISSING_SERVICE_ID,
                 actor_account_id=admin_account_id,
@@ -171,13 +180,11 @@ async def test_the_moderation_state_follows_the_latest_action(
         )
 
     async with db_session_factory() as session:
-        state = await moderation.get_service_state(session=session, service_id=service_id)
-        is_clear = await session.scalar(
-            select(moderation.is_clear()).where(Service.id == service_id),
-        )
+        state = await get_service_state(session=session, service_id=service_id)
+        clear = await session.scalar(select(is_clear()).where(Service.id == service_id))
 
     assert state is expected_state
-    assert is_clear is (expected_state is ModerationServiceState.CLEAR)
+    assert clear is (expected_state is ModerationServiceState.CLEAR)
 
 
 async def test_a_delisted_service_may_still_publish(
@@ -196,7 +203,7 @@ async def test_a_delisted_service_may_still_publish(
     )
 
     async with db_session_factory() as session:
-        await moderation.ensure_service_publishable(session=session, service_id=service_id)
+        await ensure_service_publishable(session=session, service_id=service_id)
 
 
 async def test_a_suspended_service_may_not_publish(
@@ -216,7 +223,7 @@ async def test_a_suspended_service_may_not_publish(
 
     async with db_session_factory() as session:
         with pytest.raises(ServiceUnavailableError) as error:
-            await moderation.ensure_service_publishable(session=session, service_id=service_id)
+            await ensure_service_publishable(session=session, service_id=service_id)
 
     assert error.value.service_id == service_id
     assert error.value.state is ModerationServiceState.SUSPENDED
@@ -249,7 +256,7 @@ async def test_list_actions_returns_the_service_history_oldest_first(
     )
 
     async with db_session_factory() as session:
-        actions = await moderation.list_actions(session=session, service_id=service_id)
+        actions = await list_actions(session=session, service_id=service_id)
 
     assert [action.action for action in actions] == ["suspend", "restore", "delist"]
     assert {action.service_id for action in actions} == {service_id}

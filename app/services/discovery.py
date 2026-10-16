@@ -9,7 +9,7 @@ from app.core.errors import NotFoundError
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
 from app.schemas.service_ref import PublicServiceRef
-from app.services import moderation
+from app.services.moderation import is_clear
 
 
 async def list_services(*, session: AsyncSession) -> list[Service]:
@@ -19,7 +19,7 @@ async def list_services(*, session: AsyncSession) -> list[Service]:
         .options(selectinload(Service.tags))
         .where(
             Service.lifecycle == ServiceLifecycle.ACTIVE,
-            moderation.is_clear(),
+            is_clear(),
             Service.endpoints.any(ServiceEndpoint.is_enabled.is_(True)),
         )
         .order_by(desc(Service.created_at), desc(Service.id))
@@ -37,7 +37,7 @@ async def get_service(*, session: AsyncSession, service_ref: PublicServiceRef) -
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.current_price),
         )
         # Suspended and delisted services stay indistinguishable from missing ones.
-        .where(Service.lifecycle == ServiceLifecycle.ACTIVE, moderation.is_clear())
+        .where(Service.lifecycle == ServiceLifecycle.ACTIVE, is_clear())
     )
     if isinstance(service_ref, int):
         statement = statement.where(Service.id == service_ref)

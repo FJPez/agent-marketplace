@@ -22,8 +22,8 @@ from app.core.errors import InvalidInputError, InvalidStateError
 from app.db.models import ListingPrice, ServiceEndpoint, ServiceRevision
 from app.schemas.pricing import ListingPriceRequest
 from app.schemas.service import EndpointCreateRequest, EndpointUpdateRequest
-from app.services import publishing
 from app.services.provider_endpoints import create_endpoint, update_endpoint
+from app.services.publishing import publish_service
 
 
 def _create_request(*, access_mode: AccessMode, amount: int | None) -> EndpointCreateRequest:
@@ -526,7 +526,7 @@ async def test_price_change_on_a_published_service_revises_and_keeps_the_old_rev
         service_id = endpoint.service_id
         first_price_id = endpoint.current_price_id
     async with db_session_factory() as session:
-        await publishing.publish_service(
+        await publish_service(
             session=session,
             resolver=dns_resolver,
             account_id=account_id,

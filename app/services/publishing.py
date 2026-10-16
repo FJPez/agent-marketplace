@@ -10,10 +10,16 @@ from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
 from app.db.models import ProviderSigningSecret, Service
 from app.integrations.providers.dns import DnsResolver
-from app.services import domain_control, moderation, revisions, service_access, service_health
-from app.services.moderation import ServiceUnavailableError
+from app.services.domain_control import check_domain_control, get_verification_record
+from app.services.moderation import ServiceUnavailableError, ensure_service_publishable
 from app.services.publish_readiness import validate_service_for_publish
-from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHealthOutcome
+from app.services.revisions import create_revision
+from app.services.service_access import load_owned_service, load_owned_service_for_update
+from app.services.service_health import (
+    PUBLISH_READINESS_CHECK_NAME,
+    ServiceHealthOutcome,
+    record_check,
+)
 
 
 async def publish_service(
@@ -24,21 +30,17 @@ async def publish_service(
     service_id: int,
 ) -> Service:
     # The domain proof queries DNS, so it runs before the lock with no transaction open.
-    unlocked = await service_access.load_owned_service(
+    unlocked = await load_owned_service(
         session=session,
         account_id=account_id,
         service_id=service_id,
     )
     hosts = _upstream_hosts(unlocked)
-    record = await domain_control.get_verification_record(session=session, account_id=account_id)
+    record = await get_verification_record(session=session, account_id=account_id)
     await session.rollback()
-    domain_problems = await domain_control.check_domain_control(
-        resolver=resolver,
-        record=record,
-        hosts=hosts,
-    )
+    domain_problems = await check_domain_control(resolver=resolver, record=record, hosts=hosts)
 
-    service = await service_access.load_owned_service_for_update(
+    service = await load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -49,7 +51,7 @@ async def publish_service(
         raise InvalidStateError("service is not publishable outside draft")
 
     try:
-        await moderation.ensure_service_publishable(session=session, service_id=service.id)
+        await ensure_service_publishable(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         raise InvalidStateError(f"service is {exc.state.value}") from exc
 
@@ -68,7 +70,7 @@ async def publish_service(
         if domain_problems:
             raise InvalidInputError("; ".join(domain_problems))
     except InvalidInputError as exc:
-        await service_health.record_check(
+        await record_check(
             session=session,
             service_id=service.id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
@@ -84,7 +86,7 @@ async def publish_service(
         await session.commit()
         raise
 
-    await service_health.record_check(
+    await record_check(
         session=session,
         service_id=service.id,
         check_name=PUBLISH_READINESS_CHECK_NAME,
@@ -101,7 +103,7 @@ async def publish_service(
     )
 
     if service.current_revision_id is None or service.current_change_token is None:
-        await revisions.create_revision(session=session, service=service)
+        await create_revision(session=session, service=service)
     service.lifecycle = ServiceLifecycle.ACTIVE
     service.updated_at = now
     await session.commit()

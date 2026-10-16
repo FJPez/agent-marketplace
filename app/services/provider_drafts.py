@@ -16,7 +16,7 @@ from app.schemas.service import (
     ServiceTagsUpdateRequest,
     ServiceUpdateRequest,
 )
-from app.services import service_access
+from app.services.service_access import load_owned_service, load_owned_service_for_update
 
 
 async def create_service(
@@ -63,7 +63,7 @@ async def list_services(*, session: AsyncSession, account_id: int) -> list[Servi
 
 
 async def get_service(*, session: AsyncSession, account_id: int, service_id: int) -> Service:
-    return await service_access.load_owned_service(
+    return await load_owned_service(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -77,7 +77,7 @@ async def update_service(
     service_id: int,
     changes: ServiceUpdateRequest,
 ) -> Service:
-    service = await service_access.load_owned_service_for_update(
+    service = await load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -111,7 +111,7 @@ async def replace_tags(
     service_id: int,
     request: ServiceTagsUpdateRequest,
 ) -> Service:
-    service = await service_access.load_owned_service_for_update(
+    service = await load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,

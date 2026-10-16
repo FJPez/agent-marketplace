@@ -1,4 +1,4 @@
-import uuid
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,9 +22,7 @@ def test_health_generates_request_id_when_header_is_absent(client: TestClient) -
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert (
-        str(uuid.UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
-    )
+    assert str(UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
 
 
 @pytest.mark.parametrize(
@@ -41,7 +39,7 @@ def test_invalid_request_id_is_replaced_by_a_generated_one(
     response = client.get("/health", headers={REQUEST_ID_HEADER: request_id})
 
     generated = response.headers[REQUEST_ID_HEADER]
-    assert str(uuid.UUID(generated)) == generated
+    assert str(UUID(generated)) == generated
     (entry,) = logged_entries()
     assert entry["request_id"] == generated
 
