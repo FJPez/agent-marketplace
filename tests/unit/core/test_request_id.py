@@ -1,4 +1,4 @@
-import uuid
+from uuid import UUID
 
 import pytest
 
@@ -23,4 +23,4 @@ def test_resolve_request_id_generates_a_uuid_for_a_missing_or_invalid_value(
 ) -> None:
     generated = resolve_request_id(request_id)
 
-    assert str(uuid.UUID(generated)) == generated
+    assert str(UUID(generated)) == generated

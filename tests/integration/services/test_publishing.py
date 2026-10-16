@@ -21,7 +21,8 @@ from tests.helpers.dns import (
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
 from app.db.models import ProviderUpstream, Service, ServiceHealthCheck, ServiceRevision
-from app.services import domain_control, publishing
+from app.services.domain_control import RECORD_LABEL, get_verification_record
+from app.services.publishing import publish_service
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -58,7 +59,7 @@ async def _publish(
     service_id: int,
 ) -> Service:
     async with db_session_factory() as session:
-        return await publishing.publish_service(
+        return await publish_service(
             session=session,
             resolver=resolver,
             account_id=account_id,
@@ -281,7 +282,7 @@ async def test_publish_without_a_signing_secret_fails_and_stays_draft(
     )
     # The provider proves its domain with its own record, but has no signing secret.
     async with db_session_factory() as session:
-        record = await domain_control.get_verification_record(
+        record = await get_verification_record(
             session=session,
             account_id=provider_account_id,
         )
@@ -341,7 +342,7 @@ async def test_publish_fails_when_a_disabled_endpoints_host_is_unproven(
     assert service is not None
     assert service.lifecycle is ServiceLifecycle.DRAFT
     assert [check.summary for check in checks] == [
-        f"{OTHER_HOST} must carry the TXT record {domain_control.RECORD_LABEL}.{OTHER_HOST}",
+        f"{OTHER_HOST} must carry the TXT record {RECORD_LABEL}.{OTHER_HOST}",
     ]
 
 
@@ -358,7 +359,7 @@ async def test_publish_holds_no_transaction_open_during_the_domain_check(
 
     async with db_session_factory() as session:
         watching = TransactionWatchingResolver(dns_resolver, session)
-        await publishing.publish_service(
+        await publish_service(
             session=session,
             resolver=watching,
             account_id=provider_account_id,

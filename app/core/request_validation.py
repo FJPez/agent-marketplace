@@ -12,12 +12,12 @@ must compile it afresh at least half the validation deadline for the body.
 """
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
 import sys
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Protocol
@@ -196,7 +196,7 @@ class ProcessRequestValidationPool:
         self._free.put_nowait(None)
         processes = tuple(self._processes)
         for process in processes:
-            with contextlib.suppress(ProcessLookupError):
+            with suppress(ProcessLookupError):
                 process.kill()
         await asyncio.gather(*(_reap(process) for process in processes))
 
@@ -284,7 +284,7 @@ class ProcessRequestValidationPool:
             raise _cannot_start(repr(exc), started) from exc
         self._processes.add(process)
         if self._closed:  # close() began while the worker started, and may have missed it
-            with contextlib.suppress(ProcessLookupError):
+            with suppress(ProcessLookupError):
                 process.kill()
             await _reap(process)
             raise _closing()
@@ -331,7 +331,7 @@ class ProcessRequestValidationPool:
                 # An acknowledgement with text would shift every later answer by one.
                 if read != _EMPTY:
                     raise _MalformedAnswerError
-                with contextlib.suppress(asyncio.IncompleteReadError):
+                with suppress(asyncio.IncompleteReadError):
                     answer = await _read_answer(worker.answers)
                     # The outcome decides; text that disagrees with it is a broken worker.
                     if not _is_well_formed(kind, answer):
@@ -427,7 +427,7 @@ def _cannot_start(cause: str, started: float) -> UnavailableError:
 
 async def _reap(process: asyncio.subprocess.Process) -> None:
     """Wait a bounded time for a killed worker to exit, and the event loop to reap it."""
-    with contextlib.suppress(TimeoutError):
+    with suppress(TimeoutError):
         await asyncio.wait_for(process.wait(), WORKER_EXIT_TIMEOUT_SECONDS)
 
 
@@ -444,7 +444,7 @@ def _is_well_formed(kind: int, answer: _Answer) -> bool:
 def _discard(slot: _Slot) -> None:
     """Kill the worker in `slot`, if there is one; the event loop reaps it."""
     if slot.worker is not None:
-        with contextlib.suppress(ProcessLookupError):
+        with suppress(ProcessLookupError):
             slot.worker.process.kill()
         slot.worker = None
 

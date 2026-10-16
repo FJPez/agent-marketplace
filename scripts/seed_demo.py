@@ -21,7 +21,12 @@ from app.db.models import (
     ServiceTag,
 )
 from app.db.session import create_engine, create_session_factory
-from app.services import provider_endpoints, provider_signing_secrets
+from app.services.provider_endpoints import (
+    build_price_version,
+    is_on_current_terms,
+    put_price_on_sale,
+)
+from app.services.provider_signing_secrets import issue_signing_secret
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -233,12 +238,12 @@ async def _ensure_paid_price(
         if (
             current is not None
             and current.amount == PAID_ENDPOINT_AMOUNT
-            and provider_endpoints.is_on_current_terms(current, settings=settings)
+            and is_on_current_terms(current, settings=settings)
         ):
             return current
 
-    price = provider_endpoints.build_price_version(settings=settings, amount=PAID_ENDPOINT_AMOUNT)
-    await provider_endpoints.put_price_on_sale(session=session, endpoint=endpoint, price=price)
+    price = build_price_version(settings=settings, amount=PAID_ENDPOINT_AMOUNT)
+    await put_price_on_sale(session=session, endpoint=endpoint, price=price)
     return price
 
 
@@ -381,7 +386,7 @@ async def seed_demo_data() -> SeedResult:
         # The demo listings need a signing secret before they can load; each run issues
         # a fresh one, after the transaction above commits.
         async with session_factory() as session:
-            _, provider_signing_secret = await provider_signing_secrets.issue_signing_secret(
+            _, provider_signing_secret = await issue_signing_secret(
                 session=session,
                 settings=settings,
                 account_id=provider_account_id,

@@ -6,7 +6,7 @@ from tests.fixtures.settings import TEST_PROVIDER_SECRET_ENCRYPTION_KEY
 
 from app.core.errors import NotFoundError
 from app.db.models import ProviderSigningSecret
-from app.services import provider_signing_secrets
+from app.services.provider_signing_secrets import get_signing_secret
 
 
 async def _stored_secret(
@@ -49,7 +49,4 @@ async def test_the_status_of_an_account_without_a_secret_is_not_found(
 
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError, match="the account has no signing secret"):
-            await provider_signing_secrets.get_signing_secret(
-                session=session,
-                account_id=account_id,
-            )
+            await get_signing_secret(session=session, account_id=account_id)

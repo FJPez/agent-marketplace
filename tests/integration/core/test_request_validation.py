@@ -19,7 +19,6 @@ from typing import Protocol
 import pytest
 import uvloop
 
-import app.core.request_validation as request_validation
 from app.core.config import Settings
 from app.core.errors import InvalidInputError, UnavailableError
 from app.core.json_types import JsonObject
@@ -290,8 +289,7 @@ async def test_a_worker_that_ends_while_compiling_is_a_failed_compile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        request_validation,
-        "_WORKER_COMMAND",
+        "app.core.request_validation._WORKER_COMMAND",
         (sys.executable, "-c", MISBEHAVING_WORKER, "exit_after_reading"),
     )
 
@@ -345,8 +343,7 @@ async def test_a_malformed_answer_ends_the_worker_as_a_crash(
     misbehaviour: str,
 ) -> None:
     monkeypatch.setattr(
-        request_validation,
-        "_WORKER_COMMAND",
+        "app.core.request_validation._WORKER_COMMAND",
         (sys.executable, "-c", MISBEHAVING_WORKER, misbehaviour),
     )
     pool = open_pool(workers=1)
@@ -528,7 +525,10 @@ async def test_workers_that_cannot_start_make_the_pool_unavailable(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     # A worker that exits before it is ready, as one would that cannot import the app.
-    monkeypatch.setattr(request_validation, "_WORKER_COMMAND", (sys.executable, "-c", "pass"))
+    monkeypatch.setattr(
+        "app.core.request_validation._WORKER_COMMAND",
+        (sys.executable, "-c", "pass"),
+    )
     pool = open_pool()
 
     with pytest.raises(UnavailableError, match=f"^{re.escape(UNAVAILABLE)}$") as unavailable:
@@ -552,11 +552,10 @@ async def test_a_worker_that_does_not_start_in_time_is_not_retried(
     tmp_path: Path,
 ) -> None:
     starts = tmp_path / "starts"
-    monkeypatch.setattr(request_validation, "WORKER_START_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr("app.core.request_validation.WORKER_START_TIMEOUT_SECONDS", 0.2)
     # A worker that records its start, then never says it is ready.
     monkeypatch.setattr(
-        request_validation,
-        "_WORKER_COMMAND",
+        "app.core.request_validation._WORKER_COMMAND",
         (
             sys.executable,
             "-c",

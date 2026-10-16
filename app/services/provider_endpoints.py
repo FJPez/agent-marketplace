@@ -19,9 +19,14 @@ from app.schemas.service import (
     EndpointUpdateRequest,
     EndpointUpstreamRequest,
 )
-from app.services import moderation, revisions, service_access
-from app.services.moderation import ServiceUnavailableError
-from app.services.revisions import UpdateImpact
+from app.services.moderation import ServiceUnavailableError, ensure_service_publishable
+from app.services.revisions import UpdateImpact, classify_endpoint_update, create_revision
+from app.services.service_access import (
+    load_owned_endpoint,
+    load_owned_service,
+    lock_owned_service,
+    lock_owned_service_by_endpoint,
+)
 
 
 async def create_endpoint(
@@ -49,7 +54,7 @@ async def create_endpoint(
         not_found="service not found",
     )
     await check_request_schema_compiles(pool=validation_pool, schema=request.request_schema)
-    service = await service_access.lock_owned_service(
+    service = await lock_owned_service(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -110,12 +115,12 @@ async def update_endpoint(
             not_found="endpoint not found",
         )
         await check_request_schema_compiles(pool=validation_pool, schema=changes.request_schema)
-    await service_access.lock_owned_service_by_endpoint(
+    await lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
     )
-    endpoint = await service_access.load_owned_endpoint(
+    endpoint = await load_owned_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
@@ -155,7 +160,7 @@ async def update_endpoint(
     if not effective_changes:
         return endpoint
 
-    impact = revisions.classify_endpoint_update(effective_changes)
+    impact = classify_endpoint_update(effective_changes)
     await _ensure_endpoint_update_allowed(
         session=session,
         service=service,
@@ -198,12 +203,12 @@ async def update_endpoint(
         # The contract snapshot covers every endpoint and its price, so the full
         # graph is loaded here and only on the material path - the update itself
         # needs the target endpoint alone.
-        graph = await service_access.load_owned_service(
+        graph = await load_owned_service(
             session=session,
             account_id=account_id,
             service_id=service.id,
         )
-        await revisions.create_revision(session=session, service=graph)
+        await create_revision(session=session, service=graph)
 
     await session.commit()
     return endpoint
@@ -217,12 +222,12 @@ async def upsert_upstream(
     request: EndpointUpstreamRequest,
 ) -> None:
     base_url = str(request.base_url)
-    await service_access.lock_owned_service_by_endpoint(
+    await lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
     )
-    endpoint = await service_access.load_owned_endpoint(
+    endpoint = await load_owned_endpoint(
         session=session,
         account_id=account_id,
         endpoint_id=endpoint_id,
@@ -281,7 +286,7 @@ async def _ensure_endpoint_update_allowed(
     if service.lifecycle is ServiceLifecycle.DRAFT or impact is not UpdateImpact.MATERIAL:
         return
     try:
-        await moderation.ensure_service_publishable(session=session, service_id=service.id)
+        await ensure_service_publishable(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         raise InvalidStateError(f"service is {exc.state.value}") from exc
 

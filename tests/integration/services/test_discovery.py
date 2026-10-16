@@ -14,7 +14,7 @@ from tests.fixtures.domain import (
 from app.core.enums import ServiceLifecycle
 from app.core.errors import NotFoundError
 from app.db.models import Service
-from app.services import discovery
+from app.services.discovery import get_service, list_services
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -48,7 +48,7 @@ async def test_list_services_returns_only_active_services_with_enabled_endpoints
     )
 
     async with db_session_factory() as session:
-        services = await discovery.list_services(session=session)
+        services = await list_services(session=session)
 
     assert [service.slug for service in services] == ["listed-service"]
 
@@ -81,7 +81,7 @@ async def test_list_services_hides_moderated_services_until_restored(
     )
 
     async with db_session_factory() as session:
-        moderated_services = await discovery.list_services(session=session)
+        moderated_services = await list_services(session=session)
 
     await create_moderation_action_record(
         db_session_factory,
@@ -90,7 +90,7 @@ async def test_list_services_hides_moderated_services_until_restored(
     )
 
     async with db_session_factory() as session:
-        restored_services = await discovery.list_services(session=session)
+        restored_services = await list_services(session=session)
 
     assert moderated_services == []
     assert [service.slug for service in restored_services] == ["suspended-service"]
@@ -133,7 +133,7 @@ async def test_list_services_orders_by_creation_time_then_id(
         )
 
     async with db_session_factory() as session:
-        services = await discovery.list_services(session=session)
+        services = await list_services(session=session)
 
     assert [service.id for service in services] == [
         second_tied_service_id,
@@ -154,11 +154,11 @@ async def test_get_service_resolves_by_id_and_by_slug(
     await create_endpoint_record(db_session_factory, service_id=service_id)
 
     async with db_session_factory() as session:
-        by_id = await discovery.get_service(
+        by_id = await get_service(
             session=session,
             service_ref=service_id,
         )
-        by_slug = await discovery.get_service(
+        by_slug = await get_service(
             session=session,
             service_ref="resolvable-service",
         )
@@ -203,12 +203,12 @@ async def test_get_service_rejects_hidden_services(
     async with db_session_factory() as session:
         for hidden_service_id in (draft_service_id, disabled_service_id, suspended_service_id):
             with pytest.raises(NotFoundError):
-                await discovery.get_service(
+                await get_service(
                     session=session,
                     service_ref=hidden_service_id,
                 )
         with pytest.raises(NotFoundError):
-            await discovery.get_service(
+            await get_service(
                 session=session,
                 service_ref="never-created-service",
             )
@@ -227,11 +227,11 @@ async def test_discovery_reads_load_only_what_their_responses_render(
     await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
 
     async with db_session_factory() as session:
-        listed_service = (await discovery.list_services(session=session))[0]
+        listed_service = (await list_services(session=session))[0]
         listed_unloaded = inspect(listed_service).unloaded
 
     async with db_session_factory() as session:
-        detail_service = await discovery.get_service(
+        detail_service = await get_service(
             session=session,
             service_ref=service_id,
         )

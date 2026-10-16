@@ -15,7 +15,7 @@ from app.db.models import (
     Service,
     ServiceEndpoint,
 )
-from app.services import moderation
+from app.services.moderation import is_clear
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +118,7 @@ async def load_invokable_listing(
             Service.slug == service_slug,
             ServiceEndpoint.key == endpoint_key,
             Service.lifecycle == ServiceLifecycle.ACTIVE,
-            moderation.is_clear(),
+            is_clear(),
             ServiceEndpoint.is_enabled.is_(True),
             or_(
                 ServiceEndpoint.access_mode == AccessMode.FREE,
