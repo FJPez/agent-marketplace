@@ -2,7 +2,6 @@ from app.db.models.account import Account
 from app.db.models.api_key import ApiKey
 from app.db.models.listing_price import ListingPrice
 from app.db.models.moderation_action import ModerationAction
-from app.db.models.provider_domain_token import ProviderDomainToken
 from app.db.models.provider_signing_secret import ProviderSigningSecret
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -17,7 +16,6 @@ __all__ = [
     "ApiKey",
     "ListingPrice",
     "ModerationAction",
-    "ProviderDomainToken",
     "ProviderSigningSecret",
     "ProviderUpstream",
     "Service",

@@ -18,25 +18,17 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "provider_domain_tokens",
-        sa.Column("account_id", sa.BigInteger(), nullable=False),
-        sa.Column("token", sa.String(length=64), nullable=False),
+    # gen_random_uuid() is volatile, so every existing account gets its own token.
+    op.add_column(
+        "accounts",
         sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            "domain_token",
+            sa.Uuid(),
+            server_default=sa.text("gen_random_uuid()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(
-            ["account_id"],
-            ["accounts.id"],
-            name="fk_provider_domain_tokens_account_id_accounts",
-            ondelete="CASCADE",
-        ),
-        sa.PrimaryKeyConstraint("account_id", name=op.f("pk_provider_domain_tokens")),
     )
 
 
 def downgrade() -> None:
-    op.drop_table("provider_domain_tokens")
+    op.drop_column("accounts", "domain_token")

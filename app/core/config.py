@@ -1,14 +1,13 @@
 import os
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Literal
 from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
-    NoDecode,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
@@ -36,8 +35,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="APP_",
         extra="ignore",
-        # Several settings are secrets (keys, the JWT secret): a startup error names the
-        # setting and the rule it broke, never the value.
+        # A startup error names the setting, never its value: some settings are secrets.
         hide_input_in_errors=True,
     )
 
@@ -45,7 +43,7 @@ class Settings(BaseSettings):
     title: str = "Agent Marketplace Backend"
     debug: bool = False
     database_url: str = _DEFAULT_DATABASE_URL
-    jwt_secret_key: SecretStr = SecretStr("")
+    jwt_secret_key: str = ""
     jwt_access_token_expiry: int = 900
     jwt_refresh_token_expiry: int = 604800
     siwe_domain: str = _DEFAULT_SIWE_DOMAIN
@@ -74,13 +72,8 @@ class Settings(BaseSettings):
     # In atomic units of payment_asset: 10000 is 0.01 USDC.
     min_price_amount: int = Field(default=10_000, gt=0)
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
-    # Fernet keys that encrypt provider signing secrets at rest, comma-separated. The
-    # first encrypts and every key decrypts, so a new key goes first and a retired one
-    # stays listed while a stored secret may still be encrypted with it. Staging and
-    # prod refuse to start without one; elsewhere, without one no secret can be issued.
-    provider_secret_encryption_keys: Annotated[tuple[SecretStr, ...], NoDecode] = ()
-    # How long a rotated-out signing secret keeps signing beside its replacement.
-    provider_secret_grace_seconds: int = Field(default=86_400, gt=0)
+    # The Fernet key that encrypts provider signing secrets at rest.
+    provider_secret_encryption_key: SecretStr = SecretStr("")
     # Request bodies are validated in this many worker processes, each validation within
     # this deadline (app/core/request_validation.py). A caller also waits at most the
     # deadline for a free worker. A worker starts at about 25 MiB and is replaced once it
@@ -118,34 +111,18 @@ class Settings(BaseSettings):
         sources.append(file_secret_settings)
         return tuple(sources)
 
-    @field_validator("provider_secret_encryption_keys", mode="before")
-    @classmethod
-    def split_provider_secret_encryption_keys(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [key.strip() for key in value.split(",") if key.strip()]
-        return value
-
-    @field_validator("provider_secret_encryption_keys")
-    @classmethod
-    def check_provider_secret_encryption_keys(
-        cls,
-        keys: tuple[SecretStr, ...],
-    ) -> tuple[SecretStr, ...]:
-        for key in keys:
-            try:
-                Fernet(key.get_secret_value())
-            except ValueError:
-                # Raised afresh so no part of a key reaches the startup error.
-                msg = "provider_secret_encryption_keys must be Fernet keys"
-                raise ValueError(msg) from None
-        return keys
-
     @model_validator(mode="after")
     def validate_required_auth_settings(self) -> "Settings":
         self.database_url = normalize_database_url(self.database_url)
-        if not self.jwt_secret_key.get_secret_value():
+        if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
+        encryption_key = self.provider_secret_encryption_key.get_secret_value()
+        if not encryption_key:
+            msg = "provider_secret_encryption_key is required"
+            raise ValueError(msg)
+        # Raises ValueError for a malformed key.
+        Fernet(encryption_key)
         if self.env in {AppEnv.PROD, AppEnv.STAGING}:
             self._validate_deployment_settings()
         return self
@@ -178,9 +155,6 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if self.treasury_address is None:
             msg = "treasury_address must be set when env is staging or prod"
-            raise ValueError(msg)
-        if not self.provider_secret_encryption_keys:
-            msg = "provider_secret_encryption_keys must be set when env is staging or prod"
             raise ValueError(msg)
 
 

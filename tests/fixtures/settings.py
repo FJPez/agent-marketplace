@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
-from pydantic import SecretStr
 
 from app.core.config import Settings, get_settings
 from app.core.enums import AppEnv
@@ -37,7 +36,7 @@ def build_service_settings() -> Settings:
     """Settings for calling services directly: always the test env, with the test treasury."""
     return Settings(
         env=AppEnv.TEST,
-        jwt_secret_key=SecretStr(TEST_JWT_SECRET_KEY),
+        jwt_secret_key=TEST_JWT_SECRET_KEY,
         treasury_address=TEST_TREASURY_ADDRESS,
     )
 
@@ -59,16 +58,14 @@ def base_test_env() -> Generator[None, None, None]:
         "APP_SIWE_DOMAIN": os.environ.get("APP_SIWE_DOMAIN"),
         "APP_ENV_FILE": os.environ.get("APP_ENV_FILE"),
         "APP_TREASURY_ADDRESS": os.environ.get("APP_TREASURY_ADDRESS"),
-        "APP_PROVIDER_SECRET_ENCRYPTION_KEYS": os.environ.get(
-            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS",
-        ),
+        "APP_PROVIDER_SECRET_ENCRYPTION_KEY": os.environ.get("APP_PROVIDER_SECRET_ENCRYPTION_KEY"),
     }
 
     os.environ["APP_JWT_SECRET_KEY"] = TEST_JWT_SECRET_KEY
     os.environ["APP_SIWE_DOMAIN"] = TEST_SIWE_DOMAIN
     os.environ["APP_ENV_FILE"] = TEST_ENV_FILE
     os.environ["APP_TREASURY_ADDRESS"] = TEST_TREASURY_ADDRESS
-    os.environ["APP_PROVIDER_SECRET_ENCRYPTION_KEYS"] = TEST_PROVIDER_SECRET_ENCRYPTION_KEY
+    os.environ["APP_PROVIDER_SECRET_ENCRYPTION_KEY"] = TEST_PROVIDER_SECRET_ENCRYPTION_KEY
     get_settings.cache_clear()
 
     try:
@@ -100,7 +97,7 @@ def settings_env_factory(
             monkeypatch.setenv("APP_ENV_FILE", TEST_ENV_FILE)
             monkeypatch.setenv("APP_TREASURY_ADDRESS", TEST_TREASURY_ADDRESS)
             monkeypatch.setenv(
-                "APP_PROVIDER_SECRET_ENCRYPTION_KEYS",
+                "APP_PROVIDER_SECRET_ENCRYPTION_KEY",
                 TEST_PROVIDER_SECRET_ENCRYPTION_KEY,
             )
 
