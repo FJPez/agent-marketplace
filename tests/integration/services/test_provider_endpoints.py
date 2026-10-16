@@ -1,5 +1,3 @@
-from urllib.parse import urlsplit
-
 import pytest
 from pydantic import HttpUrl
 from sqlalchemy import func, select
@@ -13,13 +11,7 @@ from tests.fixtures.domain import (
     create_upstream_record,
 )
 from tests.fixtures.settings import build_service_settings
-from tests.helpers.dns import (
-    TEST_UPSTREAM_ADDRESS,
-    TEST_UPSTREAM_BASE_URL,
-    TEST_UPSTREAM_HOST,
-    FakeResolver,
-    TransactionWatchingResolver,
-)
+from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, TEST_UPSTREAM_HOST
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
@@ -32,7 +24,6 @@ from app.schemas.service import (
     EndpointUpstreamRequest,
 )
 from app.services.provider_endpoints import (
-    MAX_UPSTREAM_HOSTS_PER_SERVICE,
     create_endpoint,
     update_endpoint,
     upsert_upstream,
@@ -983,7 +974,6 @@ async def test_update_endpoint_suspended_service_allows_no_op_update(
 
 async def test_upsert_upstream_creates_row_for_draft_endpoint(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     service_id = await create_service_record(
@@ -1001,7 +991,6 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            resolver=dns_resolver,
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1022,7 +1011,6 @@ async def test_upsert_upstream_creates_row_for_draft_endpoint(
 
 async def test_upsert_upstream_replaces_existing_row_in_place(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     service_id = await create_service_record(
@@ -1036,7 +1024,6 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            resolver=dns_resolver,
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1054,7 +1041,6 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            resolver=dns_resolver,
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1082,7 +1068,6 @@ async def test_upsert_upstream_replaces_existing_row_in_place(
 
 async def test_upsert_upstream_ignores_identical_state_without_touching_updated_at(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     service_id = await create_service_record(
@@ -1108,7 +1093,6 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            resolver=dns_resolver,
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1127,7 +1111,6 @@ async def test_upsert_upstream_ignores_identical_state_without_touching_updated_
 
 async def test_upsert_upstream_identical_state_on_active_service_returns_normally(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     service_id = await create_service_record(
@@ -1149,7 +1132,6 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
     async with db_session_factory() as session:
         await upsert_upstream(
             session=session,
-            resolver=dns_resolver,
             account_id=account_id,
             endpoint_id=endpoint_id,
             request=EndpointUpstreamRequest(
@@ -1162,7 +1144,6 @@ async def test_upsert_upstream_identical_state_on_active_service_returns_normall
 
 async def test_upsert_upstream_rejects_active_service(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     service_id = await create_service_record(
@@ -1178,7 +1159,6 @@ async def test_upsert_upstream_rejects_active_service(
         with pytest.raises(InvalidStateError):
             await upsert_upstream(
                 session=session,
-                resolver=dns_resolver,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
@@ -1191,7 +1171,6 @@ async def test_upsert_upstream_rejects_active_service(
 
 async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
 
@@ -1199,7 +1178,6 @@ async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
         with pytest.raises(NotFoundError):
             await upsert_upstream(
                 session=session,
-                resolver=dns_resolver,
                 account_id=account_id,
                 endpoint_id=999_999,
                 request=EndpointUpstreamRequest(
@@ -1212,7 +1190,6 @@ async def test_upsert_upstream_raises_not_found_for_missing_endpoint(
 
 async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await create_provider_account_record(db_session_factory)
     other_account_id = await create_provider_account_record(db_session_factory)
@@ -1228,165 +1205,10 @@ async def test_upsert_upstream_raises_not_found_for_other_accounts_endpoint(
         with pytest.raises(NotFoundError):
             await upsert_upstream(
                 session=session,
-                resolver=dns_resolver,
                 account_id=account_id,
                 endpoint_id=endpoint_id,
                 request=EndpointUpstreamRequest(
                     base_url=HttpUrl(TEST_UPSTREAM_BASE_URL),
-                    path="/translate",
-                    http_method="POST",
-                ),
-            )
-
-
-async def test_upsert_upstream_rejects_a_host_resolving_to_a_private_address(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-    dns_resolver.addresses[TEST_UPSTREAM_HOST] = [TEST_UPSTREAM_ADDRESS, "10.0.0.1"]
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match="must resolve, and only to public addresses"):
-            await upsert_upstream(
-                session=session,
-                resolver=dns_resolver,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                request=EndpointUpstreamRequest(
-                    base_url=HttpUrl(f"https://{TEST_UPSTREAM_HOST}"),
-                    path="/translate",
-                    http_method="POST",
-                ),
-            )
-
-    async with db_session_factory() as session:
-        persisted = await session.get(ProviderUpstream, endpoint_id)
-
-    assert persisted is None
-
-
-async def test_upsert_upstream_resolves_the_host_with_no_transaction_open(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await create_service_record(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="service",
-        lifecycle=ServiceLifecycle.DRAFT,
-    )
-    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
-
-    async with db_session_factory() as session:
-        watching = TransactionWatchingResolver(dns_resolver, session)
-        await upsert_upstream(
-            session=session,
-            resolver=watching,
-            account_id=account_id,
-            endpoint_id=endpoint_id,
-            request=EndpointUpstreamRequest(
-                base_url=HttpUrl(f"https://{TEST_UPSTREAM_HOST}"),
-                path="/translate",
-                http_method="POST",
-            ),
-        )
-
-    async with db_session_factory() as session:
-        persisted = await session.get(ProviderUpstream, endpoint_id)
-
-    assert watching.in_transaction_during_lookups == [False]
-    assert persisted is not None
-
-
-async def test_upsert_upstream_caps_the_distinct_hosts_of_a_service(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-    service_id = await _create_draft_service(db_session_factory, provider_account_id=account_id)
-    hosts = [
-        f"api{number}.provider.example" for number in range(MAX_UPSTREAM_HOSTS_PER_SERVICE + 1)
-    ]
-    for host in hosts:
-        dns_resolver.addresses[host] = [TEST_UPSTREAM_ADDRESS]
-    # Every host but the last two is already stored, one per endpoint.
-    for number, host in enumerate(hosts[:-2]):
-        endpoint_id = await create_endpoint_record(
-            db_session_factory,
-            service_id=service_id,
-            key=f"stored-{number}",
-        )
-        await create_upstream_record(
-            db_session_factory,
-            endpoint_id=endpoint_id,
-            base_url=f"https://{host}/",
-        )
-    last_id = await create_endpoint_record(db_session_factory, service_id=service_id, key="last")
-    extra_id = await create_endpoint_record(db_session_factory, service_id=service_id, key="extra")
-
-    async def upsert(endpoint_id: int, host: str) -> None:
-        async with db_session_factory() as session:
-            await upsert_upstream(
-                session=session,
-                resolver=dns_resolver,
-                account_id=account_id,
-                endpoint_id=endpoint_id,
-                request=EndpointUpstreamRequest(
-                    base_url=HttpUrl(f"https://{host}"),
-                    path="/translate",
-                    http_method="POST",
-                ),
-            )
-
-    await upsert(last_id, hosts[-2])
-    with pytest.raises(
-        InvalidInputError,
-        match=(
-            f"a service's upstreams can name at most {MAX_UPSTREAM_HOSTS_PER_SERVICE} "
-            "distinct hosts; point this endpoint at one the service already uses"
-        ),
-    ):
-        await upsert(extra_id, hosts[-1])
-    await upsert(extra_id, hosts[0])
-    # The last endpoint's own host no longer counts once it moves, so it may move to a
-    # new host.
-    await upsert(last_id, hosts[-1])
-
-    async with db_session_factory() as session:
-        stored = await session.scalars(
-            select(ProviderUpstream.base_url)
-            .join(ServiceEndpoint)
-            .where(ServiceEndpoint.service_id == service_id),
-        )
-        stored_hosts = {urlsplit(base_url).hostname for base_url in stored}
-    assert len(stored_hosts) == MAX_UPSTREAM_HOSTS_PER_SERVICE
-    assert hosts[-2] not in stored_hosts
-
-
-async def test_upsert_upstream_validates_input_before_resolving_endpoint(
-    db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
-) -> None:
-    account_id = await create_provider_account_record(db_session_factory)
-
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await upsert_upstream(
-                session=session,
-                resolver=dns_resolver,
-                account_id=account_id,
-                endpoint_id=999_999,
-                request=EndpointUpstreamRequest(
-                    base_url=HttpUrl("https://127.0.0.1:9000"),
                     path="/translate",
                     http_method="POST",
                 ),

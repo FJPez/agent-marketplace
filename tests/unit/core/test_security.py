@@ -2,7 +2,6 @@ from datetime import UTC, datetime, timedelta
 
 from eth_account import Account
 from eth_account.messages import encode_defunct
-from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.security import (
@@ -19,13 +18,13 @@ from app.core.security import (
 
 def _settings() -> Settings:
     return Settings(
-        jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
+        jwt_secret_key="test-secret-key-with-32-bytes-123",
         siwe_domain="testserver",
     )
 
 
 def test_create_and_decode_jwt_round_trip() -> None:
-    secret_key = _settings().jwt_secret_key.get_secret_value()
+    secret_key = _settings().jwt_secret_key
     wallet_address = "0x1234567890123456789012345678901234567890"
 
     token = create_jwt(

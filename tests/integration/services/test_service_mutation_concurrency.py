@@ -255,7 +255,6 @@ async def test_publish_rejects_concurrent_draft_upstream_mutation_it_beat_to_the
             with pytest.raises(InvalidStateError, match="service is not mutable outside draft"):
                 await provider_endpoints.upsert_upstream(
                     session=session,
-                    resolver=dns_resolver,
                     account_id=provider_account_id,
                     endpoint_id=endpoint_id,
                     request=EndpointUpstreamRequest(

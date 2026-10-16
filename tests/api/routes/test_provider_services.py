@@ -14,7 +14,12 @@ from tests.fixtures.domain import (
     create_upstream_record,
 )
 from tests.helpers.auth import auth_headers_for_account_id
-from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, TEST_UPSTREAM_HOST, FakeResolver
+from tests.helpers.dns import (
+    TEST_DOMAIN_RECORD_NAME,
+    TEST_UPSTREAM_BASE_URL,
+    TEST_UPSTREAM_HOST,
+    FakeResolver,
+)
 
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.security import hash_api_key
@@ -721,10 +726,9 @@ async def test_put_endpoint_upstream_returns_no_content_and_keeps_it_hidden(
 
 
 @pytest.mark.asyncio
-async def test_put_endpoint_upstream_rejects_a_host_resolving_to_a_metadata_address(
+async def test_put_endpoint_upstream_rejects_an_ip_address_host(
     async_client: AsyncClient,
     db_session_factory: async_sessionmaker[AsyncSession],
-    dns_resolver: FakeResolver,
 ) -> None:
     account_id = await _create_provider_account(db_session_factory)
     service_id = await _seed_service(
@@ -737,24 +741,18 @@ async def test_put_endpoint_upstream_rejects_a_host_resolving_to_a_metadata_addr
         service_id=service_id,
     )
 
-    dns_resolver.addresses[TEST_UPSTREAM_HOST] = ["169.254.169.254"]
-
     response = await async_client.put(
         f"/v1/provider/endpoints/{endpoint_id}/upstream",
         headers=_auth_headers(account_id),
         json={
-            "base_url": f"https://{TEST_UPSTREAM_HOST}",
+            "base_url": "https://169.254.169.254",
             "path": "/translate",
             "http_method": "POST",
         },
     )
 
     assert response.status_code == 422
-    assert response.json() == {
-        "type": "/problems/invalid_input",
-        "status": 422,
-        "detail": f"upstream host {TEST_UPSTREAM_HOST} must resolve, and only to public addresses",
-    }
+    assert response.json()["errors"][0]["loc"] == ["body", "base_url"]
 
 
 @pytest.mark.asyncio
@@ -785,39 +783,6 @@ async def test_put_endpoint_upstream_rejects_slashless_path(
 
     assert response.status_code == 422
     assert response.json()["errors"][0]["loc"] == ["body", "path"]
-
-
-@pytest.mark.asyncio
-async def test_put_endpoint_upstream_rejects_the_retired_config_field(
-    async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    account_id = await _create_provider_account(db_session_factory)
-    service_id = await _seed_service(
-        db_session_factory,
-        provider_account_id=account_id,
-        slug="translation-service",
-    )
-    endpoint_id = await _seed_endpoint(
-        db_session_factory,
-        service_id=service_id,
-    )
-
-    # An old client still sends the per-endpoint config that held an HMAC secret.
-    response = await async_client.put(
-        f"/v1/provider/endpoints/{endpoint_id}/upstream",
-        headers=_auth_headers(account_id),
-        json={
-            "base_url": TEST_UPSTREAM_BASE_URL,
-            "path": "/translate",
-            "http_method": "POST",
-            "config": {"hmac_secret": "provider-chosen"},
-        },
-    )
-
-    assert response.status_code == 422
-    (error,) = response.json()["errors"]
-    assert (error["loc"], error["type"]) == (["body", "config"], "extra_forbidden")
 
 
 @pytest.mark.asyncio
@@ -1305,14 +1270,7 @@ async def test_publish_service_without_domain_proof_is_an_invalid_input_problem(
     assert response.json() == {
         "type": "/problems/invalid_input",
         "status": 422,
-        "detail": (
-            f"upstream hosts failed the domain-control check: {TEST_UPSTREAM_HOST} "
-            "(record_missing). record_missing: publish a TXT record at "
-            "_agent-marketplace.<host> with the value from POST "
-            "/v1/provider/domain-verification. DNS changes can take minutes to be visible, "
-            "longer after a failed check because resolvers cache the miss (negative "
-            "caching)."
-        ),
+        "detail": f"{TEST_UPSTREAM_HOST} must carry the TXT record {TEST_DOMAIN_RECORD_NAME}",
     }
 
 

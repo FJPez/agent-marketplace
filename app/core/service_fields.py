@@ -7,6 +7,8 @@ on the request schemas; constants are shared with the ORM column definitions.
 import re
 from urllib.parse import urlsplit
 
+from pydantic import HttpUrl
+
 TAG_TOKEN_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 SLUG_MAX_LENGTH = 255
@@ -24,6 +26,8 @@ HTTP_METHOD_MAX_LENGTH = 16
 MEDIA_TYPE_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$",
 )
+# Two or more labels, the last starting with a letter: no IP address and no localhost.
+DNS_NAME_PATTERN = re.compile(r"^(?:[a-z0-9-]{1,63}\.)+[a-z][a-z0-9-]{0,62}$")
 
 
 def normalize_slug(value: str) -> str:
@@ -67,6 +71,19 @@ def normalize_upstream_path(value: str) -> str:
         msg = "path must be path-only and must not include scheme, host, query, or fragment"
         raise ValueError(msg)
     return normalized_value
+
+
+def check_upstream_base_url(url: HttpUrl) -> HttpUrl:
+    if url.scheme != "https" or url.port != 443:
+        msg = "base_url must use https on port 443"
+        raise ValueError(msg)
+    if url.username or url.password or url.query or url.fragment:
+        msg = "base_url must not include credentials, a query or a fragment"
+        raise ValueError(msg)
+    if url.host is None or DNS_NAME_PATTERN.fullmatch(url.host) is None:
+        msg = "base_url must name a host such as api.example.com, not an IP address"
+        raise ValueError(msg)
+    return url
 
 
 def normalize_media_type(value: str) -> str:

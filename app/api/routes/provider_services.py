@@ -188,24 +188,12 @@ async def replace_provider_service_tags(
     response_model=ServiceResponse,
     summary="Publish a provider service",
     description=(
-        "Publishes an owned service once its endpoints, pricing, upstreams, and health "
-        "preconditions are satisfied, the provider has a signing secret, and every "
-        "upstream host resolves only to public addresses and carries the provider's "
-        "domain verification TXT record (see `POST /v1/provider/domain-verification`). "
-        "A new or changed record can take minutes to be visible, longer after a failed "
-        "check because resolvers cache the miss (negative caching). Each attempt records "
-        "its verdicts as health checks."
+        "Publishes an owned service once it is ready and its provider controls every upstream host."
     ),
     responses={
         200: {"description": "Service published successfully."},
         404: {"description": "The requested service does not exist or is not owned by the actor."},
-        409: {
-            "description": (
-                "`conflict`: the service's upstreams changed while publishing; publish "
-                "again. `invalid_state`: the service is not a draft (it is already "
-                "active, suspended or delisted), or moderation suspended it."
-            ),
-        },
+        409: {"description": "The service is not a draft, or its upstreams changed meanwhile."},
         422: {"description": "The service configuration is not publishable."},
     },
 )
@@ -337,10 +325,6 @@ async def update_provider_endpoint(
     description=(
         "Creates or replaces the hidden upstream configuration for an owned endpoint. "
         "Upstream details are stored privately and are never exposed on public discovery routes. "
-        "The base URL must use https on port 443 with no credentials, query string or "
-        "fragment, and name a DNS host that resolves only to public addresses. A "
-        "service's upstreams can name at most "
-        f"{provider_endpoints.MAX_UPSTREAM_HOSTS_PER_SERVICE} distinct hosts. "
         "The marketplace invokes upstreams by forwarding the invocation payload as a JSON "
         "request body and requires a JSON response, so the upstream must accept a "
         "body-bearing method (POST, PUT, or PATCH); GET-style APIs that read inputs from "
@@ -372,11 +356,9 @@ async def put_provider_endpoint_upstream(
     ],
     actor: CurrentActor,
     session: SessionDep,
-    resolver: DnsResolverDep,
 ) -> Response:
     await provider_endpoints.upsert_upstream(
         session=session,
-        resolver=resolver,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
         request=request,
