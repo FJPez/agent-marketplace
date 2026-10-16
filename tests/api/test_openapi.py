@@ -37,6 +37,17 @@ def test_openapi_documents_provider_service_creation(
     assert provider_spec["requestBody"]["content"]["application/json"]["examples"]
 
 
+def test_openapi_documents_the_bearer_scheme_on_v1_routes_only(
+    openapi_paths: dict[str, Any],
+) -> None:
+    bearer = [{"HTTPBearer": []}]
+
+    assert openapi_paths["/v1/provider/services"]["get"]["security"] == bearer
+    # The rate limit reads the token on every /v1 route, so public ones list it too.
+    assert openapi_paths["/v1/services"]["get"]["security"] == bearer
+    assert "security" not in openapi_paths["/health"]["get"]
+
+
 def test_openapi_no_longer_documents_retired_execution_routes(
     openapi_paths: dict[str, Any],
 ) -> None:

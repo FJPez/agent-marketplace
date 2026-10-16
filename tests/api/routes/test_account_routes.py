@@ -4,11 +4,6 @@ import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from httpx2 import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-from app.core.security import hash_api_key
-from app.db.models import ApiKey
 
 
 def _build_siwe_message(*, address: str, nonce: str, issued_at: datetime) -> str:
@@ -110,10 +105,7 @@ async def test_patch_account_me_rejects_explicit_null_display_name(
 
 
 @pytest.mark.asyncio
-async def test_account_me_rejects_api_key_bearer(
-    async_client: AsyncClient,
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
+async def test_account_me_rejects_api_key_bearer(async_client: AsyncClient) -> None:
     _, access_token = await _authenticate(async_client)
     create_response = await async_client.post(
         "/v1/auth/api-keys",
@@ -128,14 +120,17 @@ async def test_account_me_rejects_api_key_bearer(
     )
 
     assert response.status_code == 403
+    assert response.json()["detail"] == "jwt authentication required"
 
-    async with db_session_factory() as session:
-        api_key_record = await session.scalar(
-            select(ApiKey).where(ApiKey.key_hash == hash_api_key(api_key)),
-        )
 
-    assert api_key_record is not None
-    assert api_key_record.last_used_at is None
+@pytest.mark.asyncio
+async def test_account_me_answers_401_to_an_unknown_api_key(async_client: AsyncClient) -> None:
+    response = await async_client.get(
+        "/v1/account/me",
+        headers={"Authorization": "Bearer amp_unknown"},
+    )
+
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -188,7 +183,7 @@ async def test_wallet_change_routes_require_jwt_and_complete_rotation(
     assert stale_token_response.json() == {
         "type": "/problems/unauthenticated",
         "status": 401,
-        "detail": "access token is no longer valid",
+        "detail": "a valid bearer token is required",
     }
 
 
