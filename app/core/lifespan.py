@@ -4,7 +4,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import coredis
+from coredis import Redis
 
 from app.core.rate_limits_backend import RateLimitsBackend, create_rate_limits_backend
 from app.db.session import create_engine, create_session_factory
@@ -12,7 +12,6 @@ from app.db.session import create_engine, create_session_factory
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from coredis.client.basic import Redis
     from fastapi import FastAPI
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
     from starlette.types import Lifespan
@@ -49,7 +48,7 @@ async def _init_app_state(state: AppState) -> None:
 def create_redis_client(settings: Settings) -> Redis[str] | None:
     if not settings.redis_url:
         return None
-    return coredis.Redis.from_url(settings.redis_url, decode_responses=True)
+    return Redis.from_url(settings.redis_url, decode_responses=True)
 
 
 def create_lifespan(

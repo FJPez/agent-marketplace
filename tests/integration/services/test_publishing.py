@@ -11,7 +11,7 @@ from tests.fixtures.domain import (
 from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.db.models import Service, ServiceHealthCheck, ServiceRevision
-from app.services import publishing
+from app.services.publishing import publish_service
 
 pytestmark = [pytest.mark.asyncio]
 
@@ -64,7 +64,7 @@ async def test_publish_service_activates_service_with_revision_and_pass_check(
     )
 
     async with db_session_factory() as session:
-        published = await publishing.publish_service(
+        published = await publish_service(
             session=session,
             account_id=provider_account_id,
             service_id=service_id,
@@ -102,7 +102,7 @@ async def test_publish_service_rejects_second_publish_of_active_service(
     )
 
     async with db_session_factory() as session:
-        await publishing.publish_service(
+        await publish_service(
             session=session,
             account_id=provider_account_id,
             service_id=service_id,
@@ -110,7 +110,7 @@ async def test_publish_service_rejects_second_publish_of_active_service(
 
     async with db_session_factory() as session:
         with pytest.raises(InvalidStateError, match="service is not publishable outside draft"):
-            await publishing.publish_service(
+            await publish_service(
                 session=session,
                 account_id=provider_account_id,
                 service_id=service_id,
@@ -124,7 +124,7 @@ async def test_publish_service_rejects_unknown_service(
 
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError, match="service not found"):
-            await publishing.publish_service(
+            await publish_service(
                 session=session,
                 account_id=provider_account_id,
                 service_id=987654,
@@ -149,7 +149,7 @@ async def test_publish_service_persists_fail_check_and_leaves_service_in_draft(
 
     async with db_session_factory() as session:
         with pytest.raises(InvalidInputError, match="must define upstream before publish"):
-            await publishing.publish_service(
+            await publish_service(
                 session=session,
                 account_id=provider_account_id,
                 service_id=service_id,
@@ -191,7 +191,7 @@ async def test_publish_service_adds_pass_check_beside_earlier_failed_attempt(
 
     async with db_session_factory() as session:
         with pytest.raises(InvalidInputError):
-            await publishing.publish_service(
+            await publish_service(
                 session=session,
                 account_id=provider_account_id,
                 service_id=service_id,
@@ -200,7 +200,7 @@ async def test_publish_service_adds_pass_check_beside_earlier_failed_attempt(
     await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
 
     async with db_session_factory() as session:
-        await publishing.publish_service(
+        await publish_service(
             session=session,
             account_id=provider_account_id,
             service_id=service_id,
