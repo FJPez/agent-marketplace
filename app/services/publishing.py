@@ -7,10 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.enums import ServiceHealthStatus, ServiceLifecycle
 from app.core.errors import InvalidInputError, InvalidStateError
 from app.db.models.service import Service
-from app.services import moderation, revisions, service_access, service_health
-from app.services.moderation import ServiceUnavailableError
+from app.services.moderation import ServiceUnavailableError, ensure_service_publishable
 from app.services.publish_readiness import validate_service_for_publish
-from app.services.service_health import PUBLISH_READINESS_CHECK_NAME, ServiceHealthOutcome
+from app.services.revisions import create_revision
+from app.services.service_access import load_owned_service_for_update
+from app.services.service_health import (
+    PUBLISH_READINESS_CHECK_NAME,
+    ServiceHealthOutcome,
+    record_check,
+)
 
 
 async def publish_service(
@@ -19,7 +24,7 @@ async def publish_service(
     account_id: int,
     service_id: int,
 ) -> Service:
-    service = await service_access.load_owned_service_for_update(
+    service = await load_owned_service_for_update(
         session=session,
         account_id=account_id,
         service_id=service_id,
@@ -28,7 +33,7 @@ async def publish_service(
         raise InvalidStateError("service is not publishable outside draft")
 
     try:
-        await moderation.ensure_service_publishable(session=session, service_id=service.id)
+        await ensure_service_publishable(session=session, service_id=service.id)
     except ServiceUnavailableError as exc:
         raise InvalidStateError(f"service is {exc.state.value}") from exc
 
@@ -39,7 +44,7 @@ async def publish_service(
     try:
         validate_service_for_publish(service)
     except InvalidInputError as exc:
-        await service_health.record_check(
+        await record_check(
             session=session,
             service_id=service.id,
             check_name=PUBLISH_READINESS_CHECK_NAME,
@@ -55,7 +60,7 @@ async def publish_service(
         await session.commit()
         raise
 
-    await service_health.record_check(
+    await record_check(
         session=session,
         service_id=service.id,
         check_name=PUBLISH_READINESS_CHECK_NAME,
@@ -72,7 +77,7 @@ async def publish_service(
     )
 
     if service.current_revision_id is None or service.current_change_token is None:
-        await revisions.create_revision(session=session, service=service)
+        await create_revision(session=session, service=service)
     service.lifecycle = ServiceLifecycle.ACTIVE
     service.updated_at = now
     await session.commit()

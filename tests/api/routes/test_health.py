@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fixtures.settings import UNREACHABLE_DATABASE_URL, UNREACHABLE_REDIS_URL
 
-import app.main as main_module
 from app.core.config import Settings
 from app.main import create_app
 
@@ -59,7 +58,7 @@ def test_health_ready_route_returns_service_unavailable_when_a_dependency_is_unr
     detail: str,
 ) -> None:
     settings = db_settings.model_copy(update=overrides)
-    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr("app.main.get_settings", lambda: settings)
 
     with TestClient(create_app()) as client:
         response = client.get("/health/ready")

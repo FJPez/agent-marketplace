@@ -9,11 +9,11 @@ os.environ.setdefault("APP_JWT_SECRET_KEY", "test-secret-key-with-32-bytes-123")
 os.environ.setdefault("APP_SIWE_DOMAIN", "testserver")
 os.environ.setdefault("APP_ENV_FILE", ".env.test")
 
-import coredis
 import pytest
 from alembic import command
 from alembic.config import Config
 from asgi_lifespan import LifespanManager
+from coredis import Redis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from httpx2 import ASGITransport, AsyncClient
@@ -118,7 +118,7 @@ def db_settings(use_dedicated_test_database: None) -> Settings:
 
 
 async def _flush_redis_database(redis_url: str) -> None:
-    redis_client = coredis.Redis.from_url(redis_url, decode_responses=True)
+    redis_client = Redis.from_url(redis_url, decode_responses=True)
     try:
         await redis_client.flushdb()
     finally:
