@@ -4,6 +4,7 @@ import os
 from typing import TYPE_CHECKING
 
 import pytest
+from asgi_lifespan import LifespanManager
 from httpx2 import ASGITransport, AsyncClient
 
 from app.core.config import get_settings
@@ -35,11 +36,11 @@ async def redis_clients(
     second_app = create_app()
 
     async with (
-        first_app.router.lifespan_context(first_app),
-        second_app.router.lifespan_context(second_app),
+        LifespanManager(first_app) as first_manager,
+        LifespanManager(second_app) as second_manager,
     ):
-        first_transport = ASGITransport(app=first_app)
-        second_transport = ASGITransport(app=second_app)
+        first_transport = ASGITransport(app=first_manager.app)
+        second_transport = ASGITransport(app=second_manager.app)
         async with (
             AsyncClient(transport=first_transport, base_url="http://testserver") as first_client,
             AsyncClient(transport=second_transport, base_url="http://testserver") as second_client,

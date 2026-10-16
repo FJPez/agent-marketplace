@@ -84,6 +84,16 @@ def test_settings_use_default_values(
     assert settings.api_key_prefix == "amp_"
     assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
+    assert settings.log_level == "INFO"
+
+
+def test_settings_reject_an_unknown_log_level(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env={"APP_LOG_LEVEL": "verbose"})
+
+    with pytest.raises(ValidationError, match="log_level"):
+        Settings()
 
 
 def test_settings_require_jwt_secret_key(

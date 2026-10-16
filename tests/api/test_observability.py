@@ -1,70 +1,13 @@
-import logging
-from dataclasses import dataclass
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
+from tests.fixtures.logs import LoggedEntries
 from tests.fixtures.settings import SettingsEnvFactory
 
-from app.core.logging import (
-    DURATION_MS_FIELD,
-    METHOD_FIELD,
-    PATH_FIELD,
-    REQUEST_ID_FIELD,
-    REQUEST_ID_HEADER,
-    STATUS_CODE_FIELD,
-)
+from app.core.logging import configure_logging
+from app.core.request_id import REQUEST_ID_HEADER
 from app.main import create_app
-
-
-def _get_str_field(record: logging.LogRecord, field_name: str) -> str:
-    value = getattr(record, field_name, None)
-    if not isinstance(value, str):
-        msg = f"log record field {field_name!r} must be a str"
-        raise AssertionError(msg)
-    return value
-
-
-def _get_int_field(record: logging.LogRecord, field_name: str) -> int:
-    value = getattr(record, field_name, None)
-    if not isinstance(value, int):
-        msg = f"log record field {field_name!r} must be an int"
-        raise AssertionError(msg)
-    return value
-
-
-@dataclass(slots=True)
-class RequestCompletedLog:
-    request_id: str
-    method: str
-    path: str
-    status_code: int
-    duration_ms: int
-
-    @classmethod
-    def from_record(cls, record: logging.LogRecord) -> "RequestCompletedLog":
-        return cls(
-            request_id=_get_str_field(record, REQUEST_ID_FIELD),
-            method=_get_str_field(record, METHOD_FIELD),
-            path=_get_str_field(record, PATH_FIELD),
-            status_code=_get_int_field(record, STATUS_CODE_FIELD),
-            duration_ms=_get_int_field(record, DURATION_MS_FIELD),
-        )
-
-
-@dataclass(slots=True)
-class RequestFailedLog:
-    request_id: str
-    method: str
-    path: str
-
-    @classmethod
-    def from_record(cls, record: logging.LogRecord) -> "RequestFailedLog":
-        return cls(
-            request_id=_get_str_field(record, REQUEST_ID_FIELD),
-            method=_get_str_field(record, METHOD_FIELD),
-            path=_get_str_field(record, PATH_FIELD),
-        )
 
 
 def test_health_echoes_provided_request_id(client: TestClient) -> None:
@@ -81,37 +24,56 @@ def test_health_generates_request_id_when_header_is_absent(client: TestClient) -
     assert str(UUID(response.headers[REQUEST_ID_HEADER])) == response.headers[REQUEST_ID_HEADER]
 
 
+@pytest.mark.parametrize(
+    "request_id",
+    [pytest.param("a" * 129, id="too_long"), pytest.param('x","level":"CRITICAL', id="json")],
+)
+def test_invalid_request_id_is_replaced_by_a_generated_one(
+    client: TestClient,
+    logged_entries: LoggedEntries,
+    request_id: str,
+) -> None:
+    configure_logging("INFO")
+
+    response = client.get("/health", headers={REQUEST_ID_HEADER: request_id})
+
+    generated = response.headers[REQUEST_ID_HEADER]
+    assert str(UUID(generated)) == generated
+    (entry,) = logged_entries()
+    assert entry["request_id"] == generated
+
+
 def test_health_logs_request_context(
     client: TestClient,
-    caplog: pytest.LogCaptureFixture,
+    logged_entries: LoggedEntries,
 ) -> None:
-    with caplog.at_level(logging.INFO, logger="app.core.observability"):
-        response = client.get("/health", headers={REQUEST_ID_HEADER: "request-123"})
+    configure_logging("INFO")
+
+    response = client.get("/health", headers={REQUEST_ID_HEADER: "request-123"})
 
     assert response.status_code == 200
+    (entry,) = logged_entries()
+    assert {
+        "logger": "app.core.observability",
+        "message": "request completed",
+        "request_id": "request-123",
+        "method": "GET",
+        "path": "/health",
+        "status_code": 200,
+    }.items() <= entry.items()
+    assert isinstance(entry["duration_ms"], int)
 
-    record = next(record for record in caplog.records if record.name == "app.core.observability")
-    request_log = RequestCompletedLog.from_record(record)
-    assert request_log.request_id == "request-123"
-    assert request_log.method == "GET"
-    assert request_log.path == "/health"
-    assert request_log.status_code == 200
-    assert request_log.duration_ms >= 0
 
-
-def test_failing_request_logs_exception_context(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_failing_request_logs_exception_context(logged_entries: LoggedEntries) -> None:
     app = create_app()
 
     @app.get("/boom")
     def read_boom() -> None:
         raise RuntimeError("database password is hunter2")
 
-    with (
-        caplog.at_level(logging.ERROR, logger="app.core.observability"),
-        TestClient(app, raise_server_exceptions=False) as client,
-    ):
+    # The client re-raises anything that escapes the app: the app must handle the error
+    # itself, so nothing reaches Starlette's ServerErrorMiddleware and uvicorn's logger.
+    with TestClient(app) as client:
         response = client.get("/boom", headers={REQUEST_ID_HEADER: "request-123"})
 
     assert response.status_code == 500
@@ -124,24 +86,24 @@ def test_failing_request_logs_exception_context(
     assert "hunter2" not in response.text
     assert response.headers[REQUEST_ID_HEADER] == "request-123"
 
-    record = next(record for record in caplog.records if record.name == "app.core.observability")
-    error_log = RequestFailedLog.from_record(record)
-    assert error_log.request_id == "request-123"
-    assert error_log.method == "GET"
-    assert error_log.path == "/boom"
+    (entry,) = [entry for entry in logged_entries() if entry["level"] == "ERROR"]
+    assert {
+        "logger": "app.core.observability",
+        "message": "request failed",
+        "request_id": "request-123",
+        "method": "GET",
+        "path": "/boom",
+    }.items() <= entry.items()
 
 
 def test_rate_limited_request_carries_request_id_and_is_logged(
     settings_env_factory: SettingsEnvFactory,
-    caplog: pytest.LogCaptureFixture,
+    logged_entries: LoggedEntries,
 ) -> None:
     settings_env_factory(env={"APP_API_RATE_LIMIT": "1/minute"})
     app = create_app()
 
-    with (
-        caplog.at_level(logging.INFO, logger="app.core.observability"),
-        TestClient(app) as client,
-    ):
+    with TestClient(app) as client:
         # The global rate limit applies to any /v1 path before routing, so an unknown
         # route still exhausts it without touching the database.
         client.get("/v1/unknown-route")
@@ -151,14 +113,12 @@ def test_rate_limited_request_carries_request_id_and_is_logged(
     assert response.headers["content-type"] == "application/problem+json"
     assert response.headers[REQUEST_ID_HEADER] == "request-429"
 
-    request_logs = [
-        RequestCompletedLog.from_record(record)
-        for record in caplog.records
-        if record.name == "app.core.observability"
-    ]
-    rate_limited_log = next(log for log in request_logs if log.request_id == "request-429")
-    assert rate_limited_log.path == "/v1/unknown-route"
-    assert rate_limited_log.status_code == 429
+    (entry,) = [entry for entry in logged_entries() if entry.get("request_id") == "request-429"]
+    assert {
+        "message": "request completed",
+        "path": "/v1/unknown-route",
+        "status_code": 429,
+    }.items() <= entry.items()
 
 
 class _UnavailableRateLimitsBackend:
@@ -169,18 +129,15 @@ class _UnavailableRateLimitsBackend:
 
 def test_rate_limit_store_outage_renders_internal_error_problem(
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
+    logged_entries: LoggedEntries,
 ) -> None:
     monkeypatch.setattr(
-        "app.main.create_rate_limits_backend",
+        "app.core.resources.create_rate_limits_backend",
         lambda settings: _UnavailableRateLimitsBackend(),
     )
     app = create_app()
 
-    with (
-        caplog.at_level(logging.ERROR, logger="app.core.observability"),
-        TestClient(app, raise_server_exceptions=False) as client,
-    ):
+    with TestClient(app) as client:
         response = client.get("/v1/services", headers={REQUEST_ID_HEADER: "request-500"})
 
     assert response.status_code == 500
@@ -188,5 +145,5 @@ def test_rate_limit_store_outage_renders_internal_error_problem(
     assert response.json()["type"] == "/problems/internal_error"
     assert "hunter2" not in response.text
 
-    record = next(record for record in caplog.records if record.name == "app.core.observability")
-    assert RequestFailedLog.from_record(record).request_id == "request-500"
+    (entry,) = [entry for entry in logged_entries() if entry["level"] == "ERROR"]
+    assert entry["request_id"] == "request-500"

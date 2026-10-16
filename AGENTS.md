@@ -33,7 +33,10 @@ Layer responsibilities:
 - `app/schemas` contains Pydantic request and response models only. Schemas
   must not import from services.
 - `app/core` contains configuration, logging, shared enums, and the shared
-  application exception taxonomy.
+  application exception taxonomy. `app/core/resources.py` builds the
+  process-wide resources (engine, session factory, Redis client, rate-limit
+  backend), which the API lifespan opens with `open_resources(settings)`. Add a
+  new shared client there, not to the lifespan.
 - `app/integrations` owns external protocol and provider behavior.
 
 ### No repository layer
@@ -97,6 +100,13 @@ Layer responsibilities:
   operation.
 - Do not wrap every route in `try`/`except` and do not log the same exception
   at every layer.
+
+### Logging
+
+- Never log headers, request or response bodies, or payment payloads. Pass ids
+  and short scalar values as `extra`.
+- `app/core/logging.py` writes JSON lines and redacts sensitive header values
+  found in log text. That is a safety net, not a licence to log them.
 
 ### Schemas
 

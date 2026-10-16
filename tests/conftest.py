@@ -2,8 +2,6 @@ import asyncio
 import logging
 import os
 from collections.abc import AsyncIterator, Generator
-from contextlib import suppress
-from pathlib import Path
 
 # These must be set before any import of app.main, which creates the
 # FastAPI application (and validates Settings) at module level.
@@ -14,6 +12,7 @@ os.environ.setdefault("APP_ENV_FILE", ".env.test")
 import pytest
 from alembic import command
 from alembic.config import Config
+from asgi_lifespan import LifespanManager
 from coredis import Redis
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -29,6 +28,7 @@ from tests.integration.db.support import (
     MIGRATION_DATABASE_SUFFIX,
     MigrationDatabase,
     PostgresUnavailableError,
+    drop_stale_test_databases,
     drop_test_database,
     get_test_database_url,
     recreate_test_database,
@@ -42,13 +42,28 @@ from app.main import create_app
 
 pytest_plugins = (
     "tests.fixtures.domain",
+    "tests.fixtures.logs",
     "tests.fixtures.settings",
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+@pytest.fixture(autouse=True)
+def restore_logging_configuration() -> Generator[None, None, None]:
+    """Undo, after each test, what `configure_logging` (run by every `create_app`) sets."""
+    app_logger = logging.getLogger("app")
+    handlers, level = app_logger.handlers[:], app_logger.level
+    yield
+    # Otherwise later tests log into this test's capture stream, which pytest has closed.
+    app_logger.handlers = handlers
+    app_logger.setLevel(level)
 
 
 def _build_alembic_config(database_url: str) -> Config:
+    # Imported here, not at the top: pytest imports the `pytest_plugins` modules after
+    # this module's body has run, and warns that a plugin module imported before then
+    # cannot have its asserts rewritten.
+    from tests.fixtures.settings import PROJECT_ROOT
+
     config = Config(PROJECT_ROOT / "alembic.ini")
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", database_url)
@@ -73,17 +88,22 @@ def use_dedicated_test_database(
     test_database_url = get_test_database_url(base_database_url)
     get_settings.cache_clear()
     try:
+        asyncio.run(drop_stale_test_databases(base_database_url))
         asyncio.run(recreate_test_database(test_database_url))
     except PostgresUnavailableError as exc:
-        raise pytest.skip.Exception(f"{exc}. Start PostgreSQL to run DB-backed tests.") from exc
+        msg = f"{exc}. Start PostgreSQL to run DB-backed tests."
+        # CI sets this so a missing PostgreSQL fails the run instead of skipping every
+        # DB-backed test.
+        if os.environ.get("APP_TEST_REQUIRE_DATABASE") == "1":
+            raise pytest.fail.Exception(msg, pytrace=False) from exc
+        raise pytest.skip.Exception(msg) from exc
     os.environ["APP_DATABASE_URL"] = test_database_url
     get_settings.cache_clear()
 
     try:
         yield
     finally:
-        with suppress(PostgresUnavailableError):
-            asyncio.run(drop_test_database(test_database_url))
+        asyncio.run(drop_test_database(test_database_url))
         if original_database_url is None:
             os.environ.pop("APP_DATABASE_URL", None)
         else:
@@ -170,8 +190,7 @@ def migration_database(
         yield MigrationDatabase(config=_build_alembic_config(database_url), engine=engine)
     finally:
         asyncio.run(engine.dispose())
-        with suppress(PostgresUnavailableError):
-            asyncio.run(drop_test_database(database_url))
+        asyncio.run(drop_test_database(database_url))
 
 
 @pytest.fixture
@@ -195,8 +214,8 @@ async def async_client(
     app: FastAPI,
     clean_database: None,
 ) -> AsyncIterator[AsyncClient]:
-    async with app.router.lifespan_context(app):
-        transport = ASGITransport(app=app)
+    async with LifespanManager(app) as manager:
+        transport = ASGITransport(app=manager.app)
         async with AsyncClient(
             transport=transport,
             base_url="http://testserver",
