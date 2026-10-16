@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.fixtures.settings import SettingsEnvFactory
 
-import app.main as main_module
 from app.core.logging import (
     DURATION_MS_FIELD,
     METHOD_FIELD,
@@ -173,8 +172,7 @@ def test_rate_limit_store_outage_renders_internal_error_problem(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(
-        main_module,
-        "create_rate_limits_backend",
+        "app.main.create_rate_limits_backend",
         lambda settings: _UnavailableRateLimitsBackend(),
     )
     app = create_app()
