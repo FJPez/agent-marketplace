@@ -2,12 +2,9 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
-from starlette.requests import Request
 from tests.fixtures.settings import SettingsEnvFactory
 
 import app.main as main_module
-from app.api.deps.dns import get_dns_resolver
 from app.core.config import AppEnv, Settings
 from app.core.rate_limits_backend import MemoryRateLimitsBackend, RedisRateLimitsBackend
 from app.core.request_id import REQUEST_ID_HEADER
@@ -36,13 +33,6 @@ def test_create_app_opens_resources_for_its_lifespan() -> None:
         assert resources.db_session_factory().bind is resources.db_engine
         assert resources.redis_client is None
         assert isinstance(resources.rate_limits_backend, MemoryRateLimitsBackend)
-
-
-def test_the_dns_resolver_dependency_serves_the_resolver_the_app_opened() -> None:
-    with TestClient(create_app()) as client:
-        request = Request({"type": "http", "state": client.app_state})
-
-        assert get_dns_resolver(request) is _resources(client).dns_resolver
 
 
 @pytest.mark.parametrize(
@@ -91,7 +81,7 @@ def test_create_app_applies_runtime_resource_settings(
         main_module,
         "get_settings",
         lambda: Settings(
-            jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
+            jwt_secret_key="test-secret-key-with-32-bytes-123",
             db_pool_size=7,
             db_max_overflow=11,
             db_pool_timeout=25.0,
@@ -119,7 +109,7 @@ def test_create_app_opens_redis_client_and_rate_limit_backend_when_configured(
         main_module,
         "get_settings",
         lambda: Settings(
-            jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
+            jwt_secret_key="test-secret-key-with-32-bytes-123",
             redis_url="redis://localhost:6379/0",
         ),
     )

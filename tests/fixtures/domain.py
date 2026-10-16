@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from tests.fixtures.settings import TEST_PRICE_TERMS
 from tests.helpers.auth import create_account
 from tests.helpers.dns import TEST_DOMAIN_TOKEN, TEST_UPSTREAM_BASE_URL
@@ -16,9 +16,9 @@ from app.core.enums import (
 )
 from app.core.json_types import JsonObject
 from app.db.models import (
+    Account,
     ListingPrice,
     ModerationAction,
-    ProviderDomainToken,
     ProviderUpstream,
     Service,
     ServiceEndpoint,
@@ -365,14 +365,15 @@ async def create_signing_secret_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     account_id: int,
-) -> None:
-    """Issue the account's signing secret, as a provider does before publishing."""
+) -> str:
+    """Issue the account's signing secret, as a provider does; return the plaintext."""
     async with db_session_factory() as session:
-        await provider_signing_secrets.create_signing_secret(
+        _, secret = await provider_signing_secrets.issue_signing_secret(
             session=session,
             settings=get_settings(),
             account_id=account_id,
         )
+    return secret
 
 
 async def create_trusted_provider_records(
@@ -380,14 +381,12 @@ async def create_trusted_provider_records(
     *,
     account_id: int,
 ) -> None:
-    """Give the account what publishing asks of a provider.
-
-    A signing secret, and the test domain token, whose TXT record the `dns_resolver`
-    fixture serves for the test upstream host.
-    """
+    """Give the account a signing secret and the domain token the test DNS records carry."""
     await create_signing_secret_record(db_session_factory, account_id=account_id)
     async with db_session_factory.begin() as session:
-        session.add(ProviderDomainToken(account_id=account_id, token=TEST_DOMAIN_TOKEN))
+        await session.execute(
+            update(Account).where(Account.id == account_id).values(domain_token=TEST_DOMAIN_TOKEN),
+        )
 
 
 async def create_moderation_action_record(

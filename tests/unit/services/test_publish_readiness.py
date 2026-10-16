@@ -61,7 +61,7 @@ def test_validate_service_for_publish_rejects_service_without_endpoints() -> Non
         InvalidInputError,
         match="service must define at least one endpoint before publish",
     ):
-        validate_service_for_publish(service, has_signing_secret=True)
+        validate_service_for_publish(service)
 
 
 def test_validate_service_for_publish_rejects_enabled_endpoint_without_upstream() -> None:
@@ -71,7 +71,7 @@ def test_validate_service_for_publish_rejects_enabled_endpoint_without_upstream(
         InvalidInputError,
         match="must define upstream before publish",
     ):
-        validate_service_for_publish(service, has_signing_secret=True)
+        validate_service_for_publish(service)
 
 
 def test_validate_service_for_publish_rejects_paid_endpoint_without_price() -> None:
@@ -81,7 +81,7 @@ def test_validate_service_for_publish_rejects_paid_endpoint_without_price() -> N
         InvalidInputError,
         match="must define a price before publish",
     ):
-        validate_service_for_publish(service, has_signing_secret=True)
+        validate_service_for_publish(service)
 
 
 def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price() -> None:
@@ -94,7 +94,7 @@ def test_validate_service_for_publish_accepts_enabled_paid_endpoint_with_a_price
         ],
     )
 
-    validate_service_for_publish(service, has_signing_secret=True)
+    validate_service_for_publish(service)
 
 
 def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoints() -> None:
@@ -106,21 +106,4 @@ def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoin
         InvalidInputError,
         match="service must enable at least one endpoint before publish",
     ):
-        validate_service_for_publish(service, has_signing_secret=True)
-
-
-def test_validate_service_for_publish_rejects_a_provider_without_a_signing_secret() -> None:
-    service = _build_service(endpoints=[_build_endpoint()])
-
-    with pytest.raises(
-        InvalidInputError,
-        match="provider must create a signing secret before publish",
-    ):
-        validate_service_for_publish(service, has_signing_secret=False)
-
-
-def test_validate_service_for_publish_checks_endpoints_before_the_signing_secret() -> None:
-    service = _build_service(endpoints=[_build_endpoint(with_upstream=False)])
-
-    with pytest.raises(InvalidInputError, match="must define upstream before publish"):
-        validate_service_for_publish(service, has_signing_secret=False)
+        validate_service_for_publish(service)

@@ -98,6 +98,7 @@ jobs:
           - 5432:5432
     env:
       APP_JWT_SECRET_KEY: ci-only-jwt-secret-key-with-32-bytes
+      APP_PROVIDER_SECRET_ENCRYPTION_KEY: Fj0w1W7BXPC98Z94kI3x29FZjWK-SC6xOkyr9Kd3oQU=
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

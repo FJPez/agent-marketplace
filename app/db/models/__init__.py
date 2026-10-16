@@ -4,7 +4,6 @@ from app.db.models.listing_price import ListingPrice
 from app.db.models.moderation_action import ModerationAction
 from app.db.models.payout_address import PayoutAddress
 from app.db.models.payout_address_challenge import PayoutAddressChallenge
-from app.db.models.provider_domain_token import ProviderDomainToken
 from app.db.models.provider_signing_secret import ProviderSigningSecret
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -21,7 +20,6 @@ __all__ = [
     "ModerationAction",
     "PayoutAddress",
     "PayoutAddressChallenge",
-    "ProviderDomainToken",
     "ProviderSigningSecret",
     "ProviderUpstream",
     "Service",

@@ -17,7 +17,6 @@ DOMAIN_TABLES = {
     "moderation_actions",
     "payout_address_challenges",
     "payout_addresses",
-    "provider_domain_tokens",
     "provider_signing_secrets",
     "provider_upstreams",
     "service_endpoints",
@@ -241,41 +240,13 @@ async def _insert_current_listing_price(db_engine: AsyncEngine, *, endpoint_id: 
         )
 
 
-async def _insert_signing_secret(
-    db_engine: AsyncEngine,
-    *,
-    service_id: int,
-    previous_ciphertext: str | None = None,
-    previous_expires: bool = False,
-) -> None:
+async def _insert_signing_secret(db_engine: AsyncEngine, *, service_id: int) -> None:
     async with db_engine.begin() as connection:
         await connection.execute(
             text(
-                """
-                INSERT INTO provider_signing_secrets (
-                    account_id, ciphertext, issued_at, previous_ciphertext,
-                    previous_expires_at
-                )
-                SELECT
-                    provider_account_id, 'ciphertext', now(), :previous_ciphertext,
-                    CASE WHEN :previous_expires THEN now() + interval '1 day' END
-                FROM services WHERE id = :service_id
-                """
-            ),
-            {
-                "service_id": service_id,
-                "previous_ciphertext": previous_ciphertext,
-                "previous_expires": previous_expires,
-            },
-        )
-
-
-async def _insert_domain_token(db_engine: AsyncEngine, *, service_id: int) -> None:
-    async with db_engine.begin() as connection:
-        await connection.execute(
-            text(
-                "INSERT INTO provider_domain_tokens (account_id, token) "
-                "SELECT provider_account_id, 'token' FROM services WHERE id = :service_id"
+                "INSERT INTO provider_signing_secrets (account_id, ciphertext, issued_at) "
+                "SELECT provider_account_id, 'ciphertext', now() "
+                "FROM services WHERE id = :service_id"
             ),
             {"service_id": service_id},
         )
@@ -408,35 +379,6 @@ def test_head_migration_rejects_endpoint_timeout_outside_the_cap(
         )
 
 
-@pytest.mark.parametrize(
-    ("previous_ciphertext", "previous_expires"),
-    [
-        pytest.param("old", False, id="secret_without_expiry"),
-        pytest.param(None, True, id="expiry_without_secret"),
-    ],
-)
-def test_head_migration_requires_a_previous_signing_secret_and_its_expiry_together(
-    clean_database: None,
-    db_engine: AsyncEngine,
-    previous_ciphertext: str | None,
-    previous_expires: bool,
-) -> None:
-    service_id = asyncio.run(_seed_service(db_engine, slug="previous-secret-check"))
-
-    with pytest.raises(
-        IntegrityError,
-        match="ck_provider_signing_secrets_previous_secret_complete",
-    ):
-        asyncio.run(
-            _insert_signing_secret(
-                db_engine,
-                service_id=service_id,
-                previous_ciphertext=previous_ciphertext,
-                previous_expires=previous_expires,
-            ),
-        )
-
-
 @pytest.mark.parametrize("lifecycle", ["suspended", "delisted"])
 def test_head_migration_rejects_the_retired_lifecycle_values(
     clean_database: None,
@@ -509,7 +451,6 @@ def test_migrations_downgrade_cleanly_with_catalogue_rows(
     asyncio.run(_insert_current_listing_price(engine, endpoint_id=endpoint_id))
     asyncio.run(_insert_upstream(engine, endpoint_id=endpoint_id))
     asyncio.run(_insert_signing_secret(engine, service_id=service_id))
-    asyncio.run(_insert_domain_token(engine, service_id=service_id))
     asyncio.run(_insert_payout_address_and_challenge(engine, service_id=service_id))
 
     try:

@@ -36,7 +36,7 @@ class AuthResult:
 
 def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
     access_token = create_jwt(
-        secret_key=settings.jwt_secret_key.get_secret_value(),
+        secret_key=settings.jwt_secret_key,
         account_id=account.id,
         wallet_address=account.wallet_address,
         token_version=account.token_version,
@@ -44,7 +44,7 @@ def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
         expires_in_seconds=settings.jwt_access_token_expiry,
     )
     refresh_token = create_jwt(
-        secret_key=settings.jwt_secret_key.get_secret_value(),
+        secret_key=settings.jwt_secret_key,
         account_id=account.id,
         wallet_address=account.wallet_address,
         token_version=account.token_version,
@@ -139,7 +139,7 @@ async def refresh_access_token(
     try:
         claims = decode_jwt(
             refresh_token,
-            secret_key=settings.jwt_secret_key.get_secret_value(),
+            secret_key=settings.jwt_secret_key,
             expected_token_type=AuthTokenType.REFRESH,
         )
     except InvalidTokenError as exc:
@@ -150,7 +150,7 @@ async def refresh_access_token(
     if account.token_version != claims.token_version:
         raise UnauthenticatedError("token version is not valid")
     return create_jwt(
-        secret_key=settings.jwt_secret_key.get_secret_value(),
+        secret_key=settings.jwt_secret_key,
         account_id=account.id,
         wallet_address=account.wallet_address,
         token_version=account.token_version,
@@ -245,7 +245,7 @@ async def _resolve_jwt_token_actor(
     try:
         claims = decode_jwt(
             token,
-            secret_key=settings.jwt_secret_key.get_secret_value(),
+            secret_key=settings.jwt_secret_key,
             expected_token_type=AuthTokenType.ACCESS,
         )
     except InvalidTokenError as exc:

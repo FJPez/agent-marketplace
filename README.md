@@ -17,7 +17,7 @@ Core capabilities:
 
 - wallet-based authentication (SIWE) and API keys
 - provider service authoring and publish control
-- marketplace-issued provider signing secrets, rotatable with a grace period
+- marketplace-issued provider signing secrets
 - DNS proof that a provider controls its upstream hosts, checked at every publish
 - provider payout addresses proven by signature, with payouts held after every proof
 - public discovery, schemas, and pricing lookups
@@ -75,10 +75,8 @@ database and bootstraps the admin. Set the `APP_*` variables,
 after SIGTERM, cutting off the requests in flight at every deploy; with 30
 seconds, uvicorn finishes them before it exits.
 
-Generate `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` with the command in
-`.env.example` (see
-[Signing Secret Encryption Keys](#signing-secret-encryption-keys)) and set it on
-the service: in staging and production the API does not start without it.
+Generate `APP_PROVIDER_SECRET_ENCRYPTION_KEY` with the command in `.env.example`,
+back it up, and set it on the service: the API does not start without it.
 
 Railway's config as code (`railway.toml`) is deprecated, and Railway stops
 reading it on 2026-12-01. After that the API would deploy without its health
@@ -136,11 +134,8 @@ uv run alembic upgrade head
 
 To reload the demo data, set `APP_TREASURY_ADDRESS` (where paid demo calls are
 paid to, in `.env` or the environment), export `PROVIDER_PRIVATE_KEY` (the
-demo provider's wallet key), and set `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (see
-[Signing Secret Encryption Keys](#signing-secret-encryption-keys)); the demo
-provider needs a signing secret before its listings can be invoked, and the seed
-fails, naming that variable, without one. Then run `make seed` again; it prints
-the demo provider's signing secret once, for local manual testing only.
+demo provider's wallet key), then run `make seed` again. Each run issues the demo
+provider a fresh signing secret and prints it, for local manual testing only.
 
 ## Admin Bootstrap
 
@@ -164,19 +159,14 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
 - A request body over `APP_MAX_REQUEST_BODY_BYTES` (default 1 MiB) is refused
   with `413` before it is read into memory.
 - Staging and production require a non-local `APP_DATABASE_URL`,
-  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN`, `APP_TREASURY_ADDRESS` and
-  `APP_PROVIDER_SECRET_ENCRYPTION_KEYS`.
-- A provider upstream must be an `https://` URL on port 443, without credentials,
-  query string or fragment, whose host is a DNS name that resolves only to public
-  addresses. This holds in every environment, so a local mock upstream cannot be
-  registered through the API. The API resolves hosts with the system's nameservers.
-  A service's upstreams can name at most 10 distinct hosts, which bounds the DNS
-  queries each publish sends.
-- Publishing checks live that every upstream host of the service carries the
-  provider's TXT record at `_agent-marketplace.<host>`, with the value
-  `POST /v1/provider/domain-verification` returns. A new or changed record can take
-  minutes to be visible, longer after a failed check because resolvers cache the
-  miss (negative caching), so publish again once it is.
+  `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN` and `APP_TREASURY_ADDRESS`.
+- A provider upstream must be an `https://` URL on port 443 naming a DNS host,
+  without credentials, query string or fragment, so a local mock upstream cannot be
+  registered through the API.
+- Publishing checks that every upstream host of the service, at most 10, resolves
+  only to public IPv4 addresses and carries the provider's TXT record at
+  `_agent-marketplace.<host>`, with the value `GET /v1/provider/domain-verification`
+  returns.
 - Every EVM address the API takes, from a wallet in a SIWE message to the treasury
   and asset settings, must be a lowercase `0x` followed by exactly 40 hex digits, with
   no surrounding whitespace. The digits may be all lowercase, all uppercase or EIP-55
@@ -232,13 +222,10 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
 - Payments go to the treasury, `APP_TREASURY_ADDRESS`, in force when they are
   requested, so changing it takes effect at once. It has no default, and without
   it no paid price can be set.
-- Provider signing secrets are stored encrypted with the Fernet keys in
-  `APP_PROVIDER_SECRET_ENCRYPTION_KEYS` (comma-separated; no default; without one no
-  signing secret can be issued). The first key encrypts and every listed key
-  decrypts; see [Signing Secret Encryption Keys](#signing-secret-encryption-keys).
-  A rotated-out secret keeps signing beside its replacement for
-  `APP_PROVIDER_SECRET_GRACE_SECONDS` (default 86400, one day). Rotating again
-  ends that grace at once, so deploy the new secret before rotating again.
+- Provider signing secrets are stored encrypted with the Fernet key
+  `APP_PROVIDER_SECRET_ENCRYPTION_KEY`. Losing the key makes every stored secret
+  unrecoverable, and each provider must then issue a new one. Issuing a new secret
+  replaces the old one at once.
 - A provider proves a payout address in two steps. First,
   `POST /v1/provider/payout-address/challenge` names the address and the payment
   network (`APP_PAYMENT_NETWORK`), and answers with EIP-712 typed data naming the
@@ -264,26 +251,3 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   stolen access token can move the login wallet to their own (which signs the owner
   out) and then prove their own payout address. Payouts are not sent yet; closing
   this gap is a follow-up that must land before they are.
-
-## Signing Secret Encryption Keys
-
-Generate a key with the command in `.env.example`:
-
-```bash
-uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-- **Back up every listed key** outside the deployment. A stored secret decrypts
-  only with the key it was encrypted under, so losing every listed key makes every
-  stored secret unrecoverable: each provider must then rotate its secret and deploy
-  the new one before the marketplace can sign its requests again.
-- **To replace a key**, list the new one first and keep the old one after it. The
-  new key encrypts every secret issued from then on, while each stored secret stays
-  encrypted under the key it was issued with until its provider rotates it. Nothing
-  re-encrypts stored secrets or reports which key each one uses yet, so keep every
-  old key listed until a re-encryption command exists (a follow-up).
-- **To remove a key** (after a compromise, say), take it out of the list. A provider
-  whose current secret was encrypted under it cannot have its requests signed until
-  it rotates. After it rotates, the new secret signs at once; the replaced secret
-  cannot be decrypted, so it is skipped, with a warning in the logs, instead of
-  signing during the grace period. Listing the old key again restores that grace.

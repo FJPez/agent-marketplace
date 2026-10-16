@@ -4,7 +4,6 @@ import pytest
 from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_keys.constants import SECPK1_N
-from pydantic import SecretStr
 
 from app.core.config import Settings
 from app.core.security import (
@@ -29,7 +28,7 @@ HIGH_S = format(SECPK1_N // 2 + 1, "064x")
 
 def _settings() -> Settings:
     return Settings(
-        jwt_secret_key=SecretStr("test-secret-key-with-32-bytes-123"),
+        jwt_secret_key="test-secret-key-with-32-bytes-123",
         siwe_domain="testserver",
     )
 
@@ -92,7 +91,7 @@ def test_parse_siwe_message_rejects_an_address_with_a_mistyped_checksum() -> Non
 
 
 def test_create_and_decode_jwt_round_trip() -> None:
-    secret_key = _settings().jwt_secret_key.get_secret_value()
+    secret_key = _settings().jwt_secret_key
     wallet_address = "0x1234567890123456789012345678901234567890"
 
     token = create_jwt(

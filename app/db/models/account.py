@@ -1,6 +1,7 @@
 from datetime import datetime
+from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Integer, String, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Identity, Integer, String, Uuid, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, utc_now
@@ -46,6 +47,12 @@ class Account(Base):
         nullable=True,
     )
     pending_wallet_address: Mapped[str | None] = mapped_column(String(42), nullable=True)
+    # A provider publishes it in DNS to prove it controls its upstream hosts.
+    domain_token: Mapped[UUID] = mapped_column(
+        Uuid,
+        default=uuid4,
+        server_default=text("gen_random_uuid()"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
