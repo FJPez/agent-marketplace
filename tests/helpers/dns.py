@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.integrations.providers.dns import DnsLookupError
-from app.services.domain_control import RECORD_LABEL, record_value
+from app.services.domain_control import RECORD_LABEL
 
 if TYPE_CHECKING:
     from collections.abc import Collection, Mapping, Sequence
@@ -19,7 +19,7 @@ TEST_UPSTREAM_BASE_URL = f"https://{TEST_UPSTREAM_HOST}/"
 # The domain token test providers get, and the TXT record that proves it on the host.
 TEST_DOMAIN_TOKEN = UUID("6f1c2d3e-4a5b-4c6d-8e7f-001122334455")
 TEST_DOMAIN_RECORD_NAME = f"{RECORD_LABEL}.{TEST_UPSTREAM_HOST}"
-TEST_DOMAIN_RECORD_VALUE = record_value(TEST_DOMAIN_TOKEN)
+TEST_DOMAIN_RECORD_VALUE = f"agent-marketplace-verification={TEST_DOMAIN_TOKEN}"
 
 
 class FakeResolver:

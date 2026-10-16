@@ -90,7 +90,7 @@ async def test_the_domain_verification_record_is_per_account_and_accepts_an_api_
     )
 
     assert with_jwt.status_code == 200
-    assert with_jwt.json()["record_label"] == "_agent-marketplace"
-    assert with_jwt.json()["record_value"].startswith("agent-marketplace-verification=")
+    assert with_jwt.json()["label"] == "_agent-marketplace"
+    assert with_jwt.json()["value"].startswith("agent-marketplace-verification=")
     assert with_api_key.json() == with_jwt.json()
-    assert other.json()["record_value"] != with_jwt.json()["record_value"]
+    assert other.json()["value"] != with_jwt.json()["value"]

@@ -279,15 +279,15 @@ async def test_publish_without_a_signing_secret_fails_and_stays_draft(
         slug="secretless-service",
         trusted=False,
     )
-    # The provider proves its domain with its own token, but has no signing secret.
+    # The provider proves its domain with its own record, but has no signing secret.
     async with db_session_factory() as session:
-        token = await domain_control.get_domain_token(
+        record = await domain_control.get_verification_record(
             session=session,
             account_id=provider_account_id,
         )
     resolver = FakeResolver(
         {TEST_UPSTREAM_HOST: [TEST_UPSTREAM_ADDRESS]},
-        txt_records={TEST_DOMAIN_RECORD_NAME: [domain_control.record_value(token)]},
+        txt_records={TEST_DOMAIN_RECORD_NAME: [record.value]},
     )
 
     with pytest.raises(InvalidInputError, match="provider must issue a signing secret"):
