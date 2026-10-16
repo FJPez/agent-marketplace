@@ -10,7 +10,7 @@ from eth_account import Account as EthAccount
 from sqlalchemy import select
 
 from app.core.config import Settings, get_settings
-from app.core.enums import AccessMode, ServiceLifecycle
+from app.core.enums import AccessMode, AppEnv, ServiceLifecycle
 from app.db.models import (
     Account,
     ListingPrice,
@@ -26,6 +26,7 @@ from app.services.provider_endpoints import (
     is_on_current_terms,
     put_price_on_sale,
 )
+from app.services.provider_signing_secrets import issue_signing_secret
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +53,7 @@ class SeedResult:
     paid_endpoint_id: int
     provider_wallet_address: str
     consumer_wallet_address: str | None
+    provider_signing_secret: str
 
 
 def _get_required_private_key(env_name: str, *, purpose: str) -> str:
@@ -314,8 +316,12 @@ async def _ensure_revision(
 
 
 async def seed_demo_data() -> SeedResult:
-    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     settings = get_settings()
+    # It creates a signing secret that main() prints, so never in a deployed environment.
+    if settings.env not in {AppEnv.DEV, AppEnv.TEST}:
+        msg = f"the demo seed runs only in dev and test, not {settings.env}"
+        raise RuntimeError(msg)
+    provider_wallet_address, consumer_wallet_address = _resolve_demo_wallets()
     engine = create_engine(settings)
     session_factory = create_session_factory(engine)
     try:
@@ -372,14 +378,28 @@ async def seed_demo_data() -> SeedResult:
                 paid_endpoint_id=paid_endpoint.id,
                 paid_price=paid_price,
             )
-            return SeedResult(
-                provider_account_id=provider.id,
-                service_id=service.id,
-                free_endpoint_id=free_endpoint.id,
-                paid_endpoint_id=paid_endpoint.id,
-                provider_wallet_address=provider_wallet_address,
-                consumer_wallet_address=consumer_wallet_address,
+            provider_account_id = provider.id
+            service_id = service.id
+            free_endpoint_id = free_endpoint.id
+            paid_endpoint_id = paid_endpoint.id
+
+        # The demo listings need a signing secret before they can load; each run issues
+        # a fresh one, after the transaction above commits.
+        async with session_factory() as session:
+            _, provider_signing_secret = await issue_signing_secret(
+                session=session,
+                settings=settings,
+                account_id=provider_account_id,
             )
+        return SeedResult(
+            provider_account_id=provider_account_id,
+            service_id=service_id,
+            free_endpoint_id=free_endpoint_id,
+            paid_endpoint_id=paid_endpoint_id,
+            provider_wallet_address=provider_wallet_address,
+            consumer_wallet_address=consumer_wallet_address,
+            provider_signing_secret=provider_signing_secret,
+        )
     finally:
         await engine.dispose()
 
@@ -398,6 +418,7 @@ async def main() -> None:
                 f"demo_free_upstream_path={get_settings().demo_free_upstream_path}",
                 f"demo_paid_upstream_path={get_settings().demo_paid_upstream_path}",
                 f"demo_provider_wallet={result.provider_wallet_address}",
+                f"demo_provider_signing_secret={result.provider_signing_secret}",
             ],
         )
         + "\n",

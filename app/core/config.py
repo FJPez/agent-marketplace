@@ -74,6 +74,17 @@ class Settings(BaseSettings):
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
     # The Fernet key that encrypts provider signing secrets at rest.
     provider_secret_encryption_key: SecretStr = SecretStr("")
+    # Request bodies are validated in this many worker processes, each validation within
+    # this deadline (app/core/request_validation.py). A caller also waits at most the
+    # deadline for a free worker. A worker starts at about 25 MiB and is replaced once it
+    # passes 384 MiB; on Linux it can never pass 512 MiB, so an API process holds up to
+    # this many times 512 MiB in workers.
+    request_validation_timeout_ms: int = Field(default=250, gt=0, le=10_000)
+    request_validation_workers: int = Field(default=2, gt=0, le=32)
+    # A request schema is compiled in a worker when it is saved, within this deadline:
+    # at most half the validation deadline (checked below), so a worker compiling a
+    # stored schema afresh leaves at least half of it to validate the body.
+    request_schema_compile_timeout_ms: int = Field(default=100, gt=0, le=5_000)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
@@ -114,6 +125,16 @@ class Settings(BaseSettings):
         Fernet(encryption_key)
         if self.env in {AppEnv.PROD, AppEnv.STAGING}:
             self._validate_deployment_settings()
+        return self
+
+    @model_validator(mode="after")
+    def check_request_schema_compile_timeout(self) -> "Settings":
+        if self.request_schema_compile_timeout_ms * 2 > self.request_validation_timeout_ms:
+            msg = (
+                "request_schema_compile_timeout_ms must be at most half of "
+                "request_validation_timeout_ms"
+            )
+            raise ValueError(msg)
         return self
 
     def _validate_deployment_settings(self) -> None:
