@@ -31,15 +31,6 @@ class TokenClaims:
 
 
 @dataclass(frozen=True, slots=True)
-class TokenPayload:
-    subject: str
-    wallet_address: str
-    token_version: int
-    token_type: str
-    expires_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
 class ParsedSiweMessage:
     domain: str
     address: str
@@ -86,21 +77,6 @@ def create_jwt(
     return jwt.encode(payload, secret_key, algorithm="HS256")
 
 
-def encode_token(settings: Settings, payload: TokenPayload) -> str:
-    return jwt.encode(
-        {
-            "sub": payload.subject,
-            "wallet": normalize_wallet_address(payload.wallet_address),
-            "tv": payload.token_version,
-            "type": payload.token_type,
-            "iat": int(datetime.now(UTC).timestamp()),
-            "exp": int(payload.expires_at.timestamp()),
-        },
-        settings.jwt_secret_key,
-        algorithm="HS256",
-    )
-
-
 def decode_jwt(
     token: str,
     *,
@@ -142,35 +118,6 @@ def decode_jwt(
         wallet_address=wallet_address,
         token_version=token_version,
         token_type=expected_token_type,
-    )
-
-
-def decode_token(
-    settings: Settings,
-    token: str,
-    *,
-    expected_type: str,
-    now: datetime | None = None,
-) -> TokenPayload:
-    claims = decode_jwt(
-        token,
-        secret_key=settings.jwt_secret_key,
-        expected_token_type=AuthTokenType(expected_type),
-        now=now,
-    )
-    payload = jwt.decode(
-        token,
-        settings.jwt_secret_key,
-        algorithms=["HS256"],
-        options={"verify_exp": False, "verify_iat": False},
-    )
-    expires_at = datetime.fromtimestamp(int(payload["exp"]), UTC)
-    return TokenPayload(
-        subject=str(claims.account_id),
-        wallet_address=claims.wallet_address,
-        token_version=claims.token_version,
-        token_type=claims.token_type.value,
-        expires_at=expires_at,
     )
 
 
@@ -223,15 +170,12 @@ def verify_siwe_signature(
     *,
     message: str,
     signature: str,
-    expected_nonce: str,
     now: datetime | None = None,
 ) -> ParsedSiweMessage:
+    """Check the message's domain, age and signature; the caller checks its nonce."""
     parsed = parse_siwe_message(message)
     if parsed.domain != settings.siwe_domain:
         msg = "SIWE domain is not valid"
-        raise ValueError(msg)
-    if parsed.nonce != expected_nonce:
-        msg = "nonce is not valid"
         raise ValueError(msg)
 
     current_time = now or datetime.now(UTC)
