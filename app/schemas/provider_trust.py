@@ -16,7 +16,9 @@ class IssuedSigningSecretResponse(SigningSecretResponse):
 
 
 class DomainVerificationResponse(BaseModel):
-    """The TXT record to publish at `<record_label>.<host>` for every upstream host."""
+    """The TXT record to publish at `<label>.<host>` for every upstream host."""
 
-    record_label: str
-    record_value: str
+    model_config = ConfigDict(from_attributes=True)
+
+    label: str
+    value: str

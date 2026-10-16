@@ -30,11 +30,11 @@ async def publish_service(
         service_id=service_id,
     )
     hosts = _upstream_hosts(unlocked)
-    token = await domain_control.get_domain_token(session=session, account_id=account_id)
+    record = await domain_control.get_verification_record(session=session, account_id=account_id)
     await session.rollback()
     domain_problems = await domain_control.check_domain_control(
         resolver=resolver,
-        token=token,
+        record=record,
         hosts=hosts,
     )
 
