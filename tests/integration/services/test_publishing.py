@@ -5,6 +5,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_endpoint_record,
+    create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
     create_trusted_provider_records,
@@ -34,6 +35,7 @@ async def _seed_publishable_service(
     *,
     provider_account_id: int,
     slug: str,
+    lifecycle: ServiceLifecycle = ServiceLifecycle.DRAFT,
     with_upstream: bool = True,
     trusted: bool = True,
 ) -> int:
@@ -41,7 +43,7 @@ async def _seed_publishable_service(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug=slug,
-        lifecycle=ServiceLifecycle.DRAFT,
+        lifecycle=lifecycle,
     )
     endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
     if with_upstream:
@@ -167,6 +169,50 @@ async def test_publish_service_rejects_second_publish_of_active_service(
             account_id=provider_account_id,
             service_id=service_id,
         )
+
+
+@pytest.mark.parametrize(
+    ("lifecycle", "moderation_action", "refusal"),
+    [
+        pytest.param(
+            ServiceLifecycle.ACTIVE,
+            None,
+            "service is not publishable outside draft",
+            id="active",
+        ),
+        pytest.param(ServiceLifecycle.DRAFT, "suspend", "service is suspended", id="suspended"),
+    ],
+)
+async def test_an_unpublishable_service_is_refused_before_any_dns_query(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+    lifecycle: ServiceLifecycle,
+    moderation_action: str | None,
+    refusal: str,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="unpublishable-service",
+        lifecycle=lifecycle,
+    )
+    if moderation_action is not None:
+        await create_moderation_action_record(
+            db_session_factory,
+            service_id=service_id,
+            action=moderation_action,
+        )
+
+    with pytest.raises(InvalidStateError, match=refusal):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    assert dns_resolver.lookups == []
 
 
 async def test_publish_service_rejects_unknown_service(

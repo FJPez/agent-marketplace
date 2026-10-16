@@ -26,7 +26,7 @@ class FakeResolver:
     """A DnsResolver answering from its attributes, so no test resolves a real name.
 
     A name missing from `addresses` or `txt_records` has no records; a name in
-    `failing_names` fails like a timed-out lookup.
+    `failing_names` fails like a timed-out lookup. `lookups` lists every name asked.
     """
 
     def __init__(
@@ -39,16 +39,18 @@ class FakeResolver:
         self.addresses = {host: list(values) for host, values in (addresses or {}).items()}
         self.txt_records = {name: list(values) for name, values in (txt_records or {}).items()}
         self.failing_names = set(failing_names)
+        self.lookups: list[str] = []
 
     async def resolve_ipv4(self, host: str) -> list[IPv4Address]:
-        self._fail_if_failing(host)
+        self._look_up(host)
         return [IPv4Address(value) for value in self.addresses.get(host, [])]
 
     async def resolve_txt(self, name: str) -> list[str]:
-        self._fail_if_failing(name)
+        self._look_up(name)
         return list(self.txt_records.get(name, []))
 
-    def _fail_if_failing(self, name: str) -> None:
+    def _look_up(self, name: str) -> None:
+        self.lookups.append(name)
         if name in self.failing_names:
             raise DnsLookupError(f"DNS lookup for {name} failed")
 
