@@ -66,4 +66,4 @@ def read_health_live() -> HealthResponse:
     },
 )
 async def read_health_ready(request: Request) -> HealthResponse:
-    return await get_readiness_response(get_resources(request.app))
+    return await get_readiness_response(get_resources(request))
