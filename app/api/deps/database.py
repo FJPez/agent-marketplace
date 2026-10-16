@@ -8,7 +8,7 @@ from app.core.lifespan import get_resources
 
 
 def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
-    return get_resources(request.app).db_session_factory
+    return get_resources(request).db_session_factory
 
 
 SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]

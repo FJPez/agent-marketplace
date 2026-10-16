@@ -9,19 +9,26 @@ from tests.fixtures.settings import SettingsEnvFactory
 import app.main as main_module
 from app.api.deps.dns import get_dns_resolver
 from app.core.config import AppEnv, Settings
-from app.core.lifespan import get_resources
 from app.core.rate_limits_backend import MemoryRateLimitsBackend, RedisRateLimitsBackend
 from app.core.request_id import REQUEST_ID_HEADER
+from app.core.resources import Resources
 from app.main import create_app
+
+
+def _resources(client: TestClient) -> Resources:
+    # The lifespan state the client copies into each request it sends.
+    resources = client.app_state["resources"]
+    assert isinstance(resources, Resources)
+    return resources
 
 
 def test_create_app_opens_resources_for_its_lifespan() -> None:
     app = create_app()
 
-    with TestClient(app):
+    with TestClient(app) as client:
         assert app.title == "Agent Marketplace Backend"
         assert app.debug is False
-        resources = get_resources(app)
+        resources = _resources(client)
 
         assert resources.settings.env is AppEnv.DEV
         assert resources.settings.title == "Agent Marketplace Backend"
@@ -30,16 +37,12 @@ def test_create_app_opens_resources_for_its_lifespan() -> None:
         assert resources.redis_client is None
         assert isinstance(resources.rate_limits_backend, MemoryRateLimitsBackend)
 
-    assert not hasattr(app.state, "resources")
-
 
 def test_the_dns_resolver_dependency_serves_the_resolver_the_app_opened() -> None:
-    app = create_app()
+    with TestClient(create_app()) as client:
+        request = Request({"type": "http", "state": client.app_state})
 
-    with TestClient(app):
-        request = Request({"type": "http", "app": app})
-
-        assert get_dns_resolver(request) is get_resources(app).dns_resolver
+        assert get_dns_resolver(request) is _resources(client).dns_resolver
 
 
 @pytest.mark.parametrize(
@@ -97,8 +100,8 @@ def test_create_app_applies_runtime_resource_settings(
     )
     app = create_app()
 
-    with TestClient(app):
-        pool = get_resources(app).db_engine.sync_engine.pool
+    with TestClient(app) as client:
+        pool = _resources(client).db_engine.sync_engine.pool
         pool_size = getattr(pool, "size", None)
         assert callable(pool_size)
         assert pool_size() == 7
@@ -122,7 +125,7 @@ def test_create_app_opens_redis_client_and_rate_limit_backend_when_configured(
     )
     app = create_app()
 
-    with TestClient(app):
-        resources = get_resources(app)
+    with TestClient(app) as client:
+        resources = _resources(client)
         assert resources.redis_client is not None
         assert isinstance(resources.rate_limits_backend, RedisRateLimitsBackend)
