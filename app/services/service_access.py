@@ -21,7 +21,7 @@ async def load_owned_service(
         select(Service)
         .options(
             selectinload(Service.tags),
-            selectinload(Service.endpoints).selectinload(ServiceEndpoint.price),
+            selectinload(Service.endpoints).selectinload(ServiceEndpoint.current_price),
             selectinload(Service.endpoints).selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)
@@ -110,7 +110,7 @@ async def load_owned_endpoint(
         .join(Service)
         .options(
             joinedload(ServiceEndpoint.service),
-            selectinload(ServiceEndpoint.price),
+            selectinload(ServiceEndpoint.current_price),
             selectinload(ServiceEndpoint.upstream),
         )
         .execution_options(populate_existing=True)

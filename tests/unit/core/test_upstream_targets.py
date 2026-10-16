@@ -1,5 +1,5 @@
 import pytest
-from tests.fixtures.settings import SettingsEnvFactory
+from tests.fixtures.settings import TEST_TREASURY_ADDRESS, SettingsEnvFactory
 
 
 def test_validate_upstream_base_url_accepts_loopback_http_in_test_env(
@@ -23,6 +23,7 @@ def test_validate_upstream_base_url_rejects_loopback_http_in_prod(
             "APP_DATABASE_URL": "postgresql+asyncpg://db.example.com:5432/agent_marketplace",
             "APP_REDIS_URL": "redis://cache.example.com:6379/0",
             "APP_SIWE_DOMAIN": "api.example.com",
+            "APP_TREASURY_ADDRESS": TEST_TREASURY_ADDRESS,
         }
     )
 
