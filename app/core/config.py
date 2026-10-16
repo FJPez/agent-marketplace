@@ -2,7 +2,7 @@ import os
 from functools import lru_cache
 from urllib.parse import urlsplit
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -45,10 +45,15 @@ class Settings(BaseSettings):
     siwe_nonce_expiry: int = 300
     wallet_change_cooldown: int = 604800
     api_key_prefix: str = "amp_"
+    api_key_touch_interval: int = Field(default=300, ge=0)
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_timeout: float = 30.0
     db_pool_recycle: int = 1800
+    db_statement_timeout_ms: int = Field(default=30000, gt=0)
+    db_lock_timeout_ms: int = Field(default=5000, gt=0)
+    db_idle_in_transaction_session_timeout_ms: int = Field(default=60000, gt=0)
+    db_application_name: str = "agent-marketplace-api"
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
     demo_upstream_base_url: str = "https://provider.example.com"

@@ -60,15 +60,22 @@ Layer responsibilities:
 ### Transactions
 
 - The session dependency owns session lifetime only. It never commits.
+- Authentication dependencies resolve the actor on their own short-lived
+  session and return a plain `ActorContext`, so the route's request session
+  starts with no transaction open. A dependency that reads the database for
+  request-wide context does the same.
 - Routes do not commit, flush, roll back, or close the session.
 - Read services do not commit.
 - The top-level mutation service owns the transaction and commits exactly once.
 - Private helpers may `flush()` but never commit.
-- Do not hold a database transaction open across external network I/O.
+- Do not hold a database transaction or row lock open across external
+  network I/O.
 - External workflows (x402 payments, provider invocation, payouts) may use
   multiple short transactions with explicit durable states, idempotency, and
   safe retries. This is not an ordinary CRUD pattern; do not force it
   elsewhere.
+- The statement, lock and idle-in-transaction timeouts set in
+  `app/db/session.py` are a backstop for these rules, not a design tool.
 
 ### Errors
 
@@ -99,6 +106,16 @@ Layer responsibilities:
   public fields. Never expose ORM models as the API contract.
 - Queries must eagerly load everything a response needs. Pydantic conversion
   must not trigger async lazy-loading after the service returns.
+
+### Constraints and indexes
+
+- Name every new constraint and index explicitly: `name=` on
+  `UniqueConstraint`, `ForeignKey` and `CheckConstraint`, the first argument of
+  `Index`. Do not use `unique=True` or `index=True` for new columns. The
+  metadata naming convention `uq_%(table_name)s_%(column_0_name)s` uses only
+  the first column, so two unique keys on one table that start with the same
+  column would get the same name. (The convention still prefixes a check
+  constraint's name with `ck_<table>_`.)
 
 ## Primary goals
 

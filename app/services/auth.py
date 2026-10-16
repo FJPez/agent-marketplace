@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from jwt import InvalidTokenError
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,11 +37,10 @@ class AuthResult:
 
 
 def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
-    wallet_address = _require_wallet_address(account)
     access_token = create_jwt(
         secret_key=settings.jwt_secret_key,
         account_id=account.id,
-        wallet_address=wallet_address,
+        wallet_address=account.wallet_address,
         token_version=account.token_version,
         token_type=AuthTokenType.ACCESS,
         expires_in_seconds=settings.jwt_access_token_expiry,
@@ -49,7 +48,7 @@ def issue_token_pair(*, settings: Settings, account: Account) -> TokenPair:
     refresh_token = create_jwt(
         secret_key=settings.jwt_secret_key,
         account_id=account.id,
-        wallet_address=wallet_address,
+        wallet_address=account.wallet_address,
         token_version=account.token_version,
         token_type=AuthTokenType.REFRESH,
         expires_in_seconds=settings.jwt_refresh_token_expiry,
@@ -152,7 +151,7 @@ async def refresh_access_token(
     return create_jwt(
         secret_key=settings.jwt_secret_key,
         account_id=account.id,
-        wallet_address=_require_wallet_address(account),
+        wallet_address=account.wallet_address,
         token_version=account.token_version,
         token_type=AuthTokenType.ACCESS,
         expires_in_seconds=settings.jwt_access_token_expiry,
@@ -170,6 +169,7 @@ async def resolve_actor(
     if token.startswith(settings.api_key_prefix):
         return await _resolve_api_key_actor(
             session=session,
+            settings=settings,
             token=token,
             touch_api_key=touch_api_key,
         )
@@ -182,22 +182,10 @@ async def resolve_jwt_actor(
     settings: Settings,
     authorization: str,
 ) -> ActorContext:
-    actor = await resolve_actor(
-        session=session,
-        settings=settings,
-        authorization=authorization,
-        touch_api_key=False,
-    )
-    if actor.auth_method != "jwt":
+    token = _extract_bearer_token(authorization)
+    if token.startswith(settings.api_key_prefix):
         raise PermissionDeniedError("jwt authentication required")
-    return actor
-
-
-def _require_wallet_address(account: Account) -> str:
-    if account.wallet_address is None:
-        msg = "account wallet address is required"
-        raise UnauthenticatedError(msg)
-    return account.wallet_address
+    return await _resolve_jwt_token_actor(session=session, settings=settings, token=token)
 
 
 def _extract_bearer_token(authorization: str) -> str:
@@ -244,6 +232,7 @@ def _nonce_is_active(account: Account, *, settings: Settings) -> bool:
 async def _resolve_api_key_actor(
     *,
     session: AsyncSession,
+    settings: Settings,
     token: str,
     touch_api_key: bool,
 ) -> ActorContext:
@@ -263,16 +252,39 @@ async def _resolve_api_key_actor(
         msg = "authenticated account does not exist"
         raise UnauthenticatedError(msg)
 
-    if touch_api_key:
-        api_key.last_used_at = now
-        await session.commit()
-    return ActorContext(
+    actor = ActorContext(
         account_id=account.id,
         is_admin=account.is_admin,
         account_type=account.account_type,
         auth_method="api_key",
-        wallet_address=_require_wallet_address(account),
+        wallet_address=account.wallet_address,
     )
+    if touch_api_key:
+        await _touch_api_key(session=session, settings=settings, api_key=api_key, now=now)
+    return actor
+
+
+async def _touch_api_key(
+    *,
+    session: AsyncSession,
+    settings: Settings,
+    api_key: ApiKey,
+    now: datetime,
+) -> None:
+    """Record that the key was used, writing at most once per touch interval."""
+    stale_before = now - timedelta(seconds=settings.api_key_touch_interval)
+    if api_key.last_used_at is not None and api_key.last_used_at > stale_before:
+        return
+    # Checked again in SQL: a concurrent request may have touched the key since it was read.
+    await session.execute(
+        update(ApiKey)
+        .where(
+            ApiKey.id == api_key.id,
+            or_(ApiKey.last_used_at.is_(None), ApiKey.last_used_at <= stale_before),
+        )
+        .values(last_used_at=now),
+    )
+    await session.commit()
 
 
 async def _resolve_jwt_token_actor(
@@ -305,5 +317,5 @@ async def _resolve_jwt_token_actor(
         is_admin=account.is_admin,
         account_type=account.account_type,
         auth_method="jwt",
-        wallet_address=_require_wallet_address(account),
+        wallet_address=account.wallet_address,
     )

@@ -14,12 +14,7 @@ class Account(Base):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
-    wallet_address: Mapped[str | None] = mapped_column(
-        String(42),
-        unique=True,
-        index=True,
-        nullable=True,
-    )
+    wallet_address: Mapped[str] = mapped_column(String(42), unique=True, index=True)
     account_type: Mapped[str] = mapped_column(
         String(10),
         default="human",

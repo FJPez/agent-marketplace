@@ -82,6 +82,7 @@ def test_settings_use_default_values(
     assert settings.siwe_nonce_expiry == 300
     assert settings.wallet_change_cooldown == 604800
     assert settings.api_key_prefix == "amp_"
+    assert settings.api_key_touch_interval == 300
     assert settings.api_rate_limit == "120/minute"
 
 
@@ -272,3 +273,25 @@ def test_settings_ignore_retired_payment_variables(
     settings = Settings()
 
     assert settings.env is AppEnv.PROD
+
+
+@pytest.mark.parametrize(
+    "env_overrides",
+    [
+        pytest.param({"APP_DB_STATEMENT_TIMEOUT_MS": "0"}, id="statement-timeout-zero"),
+        pytest.param({"APP_DB_LOCK_TIMEOUT_MS": "0"}, id="lock-timeout-zero"),
+        pytest.param(
+            {"APP_DB_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS": "0"},
+            id="idle-in-transaction-timeout-zero",
+        ),
+        pytest.param({"APP_API_KEY_TOUCH_INTERVAL": "-1"}, id="touch-interval-negative"),
+    ],
+)
+def test_settings_reject_timeouts_of_zero_and_a_negative_touch_interval(
+    env_overrides: dict[str, str],
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env=env_overrides)
+
+    with pytest.raises(ValidationError):
+        Settings()
