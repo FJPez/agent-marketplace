@@ -69,8 +69,8 @@ async def get_domain_verification_record(
     actor: CurrentActor,
     session: SessionDep,
 ) -> DomainVerificationResponse:
-    token = await domain_control.get_domain_token(session=session, account_id=actor.account_id)
-    return DomainVerificationResponse(
-        record_label=domain_control.RECORD_LABEL,
-        record_value=domain_control.record_value(token),
+    record = await domain_control.get_verification_record(
+        session=session,
+        account_id=actor.account_id,
     )
+    return DomainVerificationResponse.model_validate(record)
