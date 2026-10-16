@@ -5,8 +5,8 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 
 import coredis
-import dns.asyncresolver
 from coredis.client.basic import Redis
+from dns.asyncresolver import Resolver
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
@@ -40,7 +40,7 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             stack.callback(redis_client.connection_pool.disconnect)
 
         # Reads the system's nameservers; each query gives up after 5 s, retries included.
-        system_resolver = dns.asyncresolver.Resolver()
+        system_resolver = Resolver()
         system_resolver.lifetime = 5.0
 
         # Its worker processes start on first use, so a process that validates no request
