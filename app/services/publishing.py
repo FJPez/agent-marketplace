@@ -35,6 +35,8 @@ async def publish_service(
         account_id=account_id,
         service_id=service_id,
     )
+    # Refuses an unpublishable service before any DNS query; the lock below checks again.
+    await _ensure_publishable_state(session=session, service=unlocked)
     hosts = _upstream_hosts(unlocked)
     record = await get_verification_record(session=session, account_id=account_id)
     await session.rollback()
@@ -47,13 +49,7 @@ async def publish_service(
     )
     if _upstream_hosts(service) != hosts:
         raise ConflictError("the service's upstreams changed while publishing; publish again")
-    if service.lifecycle is not ServiceLifecycle.DRAFT:
-        raise InvalidStateError("service is not publishable outside draft")
-
-    try:
-        await ensure_service_publishable(session=session, service_id=service.id)
-    except ServiceUnavailableError as exc:
-        raise InvalidStateError(f"service is {exc.state.value}") from exc
+    await _ensure_publishable_state(session=session, service=service)
 
     has_signing_secret = await session.scalar(
         select(exists().where(ProviderSigningSecret.account_id == account_id)),
@@ -108,6 +104,15 @@ async def publish_service(
     service.updated_at = now
     await session.commit()
     return service
+
+
+async def _ensure_publishable_state(*, session: AsyncSession, service: Service) -> None:
+    if service.lifecycle is not ServiceLifecycle.DRAFT:
+        raise InvalidStateError("service is not publishable outside draft")
+    try:
+        await ensure_service_publishable(session=session, service_id=service.id)
+    except ServiceUnavailableError as exc:
+        raise InvalidStateError(f"service is {exc.state.value}") from exc
 
 
 def _upstream_hosts(service: Service) -> frozenset[str]:
