@@ -4,10 +4,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.main as main_module
-from app.core import lifespan as lifespan_module
 from app.core.config import AppEnv, Settings
-from app.core.lifespan import get_app_state
+from app.core.lifespan import AppState, create_lifespan, get_app_state
 from app.main import create_app
 
 
@@ -53,11 +51,11 @@ def test_retired_execution_routes_are_not_served(method: str, path: str) -> None
 def test_create_lifespan_cleans_up_state_on_startup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fail_init(state: lifespan_module.AppState) -> None:
+    async def fail_init(state: AppState) -> None:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(lifespan_module, "_init_app_state", fail_init, raising=False)
-    app = FastAPI(lifespan=lifespan_module.create_lifespan(Settings()))
+    monkeypatch.setattr("app.core.lifespan._init_app_state", fail_init, raising=False)
+    app = FastAPI(lifespan=create_lifespan(Settings()))
 
     with pytest.raises(RuntimeError, match="boom"), TestClient(app):
         pass
@@ -71,8 +69,7 @@ def test_create_app_applies_runtime_resource_settings(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        main_module,
-        "get_settings",
+        "app.main.get_settings",
         lambda: Settings(
             jwt_secret_key="test-secret-key-with-32-bytes-123",
             db_pool_size=7,
@@ -102,8 +99,7 @@ def test_create_app_initializes_redis_client_and_rate_limit_backend_when_configu
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        main_module,
-        "get_settings",
+        "app.main.get_settings",
         lambda: Settings(
             jwt_secret_key="test-secret-key-with-32-bytes-123",
             redis_url="redis://localhost:6379/0",
