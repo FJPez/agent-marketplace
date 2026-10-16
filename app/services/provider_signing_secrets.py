@@ -8,7 +8,6 @@ only encrypted under `provider_secret_encryption_keys`.
 
 import logging
 from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 from secrets import token_urlsafe
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -21,10 +20,6 @@ from app.core.errors import ConflictError, InvalidStateError, NotFoundError
 from app.db.models import ProviderSigningSecret
 
 logger = logging.getLogger(__name__)
-
-# A lost rotate response is retried within minutes; replaying longer would let a leaked
-# Idempotency-Key read the deployed secret.
-ROTATION_REPLAY_MINUTES = 15
 
 
 async def create_signing_secret(
@@ -53,14 +48,10 @@ async def rotate_signing_secret(
     session: AsyncSession,
     settings: Settings,
     account_id: int,
-    idempotency_key: str | None = None,
 ) -> tuple[ProviderSigningSecret, str]:
     """Replace the current secret; it keeps signing for the grace window.
 
     A previous secret still in its grace window is dropped: at most two secrets sign.
-    A retry sent with the `idempotency_key` of the rotation that issued the current
-    secret returns that secret instead, so a lost response does not rotate twice; after
-    `ROTATION_REPLAY_MINUTES` the retry is refused and rotates nothing either.
     """
     cipher = _cipher(settings)
     stored = await session.scalar(
@@ -72,27 +63,11 @@ async def rotate_signing_secret(
         raise NotFoundError("the account has no signing secret; create one first")
 
     now = datetime.now(UTC)
-    key_hash = None if idempotency_key is None else sha256(idempotency_key.encode()).hexdigest()
-    if key_hash is not None and key_hash == stored.rotation_idempotency_key_hash:
-        if now - stored.issued_at > timedelta(minutes=ROTATION_REPLAY_MINUTES):
-            # Rotating here would end the grace of the secret the provider deployed.
-            raise ConflictError(
-                "the rotation made with this Idempotency-Key is more than "
-                f"{ROTATION_REPLAY_MINUTES} minutes old, so its secret is no longer "
-                "returned; check GET /v1/provider/signing-secret and rotate with a new "
-                "Idempotency-Key if a new secret is still needed",
-            )
-        secret = _decrypt(cipher, stored.ciphertext)
-        # Nothing changed; the commit only releases the row lock.
-        await session.commit()
-        return stored, secret
-
     secret, ciphertext = _issue(cipher)
     stored.previous_ciphertext = stored.ciphertext
     stored.previous_expires_at = now + timedelta(seconds=settings.provider_secret_grace_seconds)
     stored.ciphertext = ciphertext
     stored.issued_at = now
-    stored.rotation_idempotency_key_hash = key_hash
     await session.commit()
     return stored, secret
 
@@ -120,7 +95,13 @@ async def load_signing_secrets(
     if stored is None:
         raise InvalidStateError("the provider has no signing secret")
 
-    signing = [_decrypt(cipher, stored.ciphertext)]
+    try:
+        signing = [cipher.decrypt(stored.ciphertext).decode()]
+    except InvalidToken as exc:
+        raise InvalidStateError(
+            "the provider's signing secret cannot be decrypted with "
+            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS",
+        ) from exc
     if (
         stored.previous_ciphertext is not None
         and stored.previous_expires_at is not None
@@ -156,13 +137,3 @@ def _issue(cipher: MultiFernet) -> tuple[str, str]:
     """
     secret = f"amp_sig_{token_urlsafe(32)}"
     return secret, cipher.encrypt(secret.encode()).decode()
-
-
-def _decrypt(cipher: MultiFernet, ciphertext: str) -> str:
-    try:
-        return cipher.decrypt(ciphertext).decode()
-    except InvalidToken as exc:
-        raise InvalidStateError(
-            "the provider's signing secret cannot be decrypted with "
-            "APP_PROVIDER_SECRET_ENCRYPTION_KEYS",
-        ) from exc
