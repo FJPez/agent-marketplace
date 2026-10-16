@@ -21,7 +21,13 @@ from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
 from app.core.security import verify_siwe_signature
 from app.db.models import Account as AccountModel
 from app.db.models import PayoutAddress, PayoutAddressChallenge
-from app.services import payout_addresses
+from app.services.payout_addresses import (
+    effective_payout_address,
+    get_payout_address,
+    proof_typed_data,
+    prove_payout_address,
+    request_payout_address_challenge,
+)
 
 PAYMENT_NETWORK = "eip155:84532"
 PAYOUT_ADDRESS = "0x1111111111111111111111111111111111111111"
@@ -29,7 +35,7 @@ PAYOUT_ADDRESS = "0x1111111111111111111111111111111111111111"
 
 def _signed(challenge: PayoutAddressChallenge, wallet: LocalAccount) -> SignedMessage:
     """Sign the challenge's typed data as a wallet does for eth_signTypedData_v4."""
-    signable = encode_typed_data(full_message=payout_addresses.proof_typed_data(challenge))
+    signable = encode_typed_data(full_message=proof_typed_data(challenge))
     return wallet.sign_message(signable)
 
 
@@ -50,7 +56,7 @@ async def _request(
 ) -> PayoutAddressChallenge:
     settings = settings or build_service_settings()
     async with db_session_factory() as session:
-        return await payout_addresses.request_payout_address_challenge(
+        return await request_payout_address_challenge(
             session=session,
             settings=settings,
             account_id=account_id,
@@ -65,7 +71,7 @@ async def _prove(
     signature: str,
 ) -> PayoutAddress:
     async with db_session_factory() as session:
-        return await payout_addresses.prove_payout_address(
+        return await prove_payout_address(
             session=session,
             settings=build_service_settings(),
             account_id=account_id,
@@ -92,7 +98,7 @@ async def _effective(
     network: str = PAYMENT_NETWORK,
 ) -> str | None:
     async with db_session_factory() as session:
-        return await payout_addresses.effective_payout_address(
+        return await effective_payout_address(
             session=session,
             account_id=account_id,
             network=network,
@@ -168,7 +174,7 @@ async def test_a_proven_address_is_recorded_and_held_before_it_takes_effect(
     effective = await _effective(db_session_factory, account_id, at=proven.effective_at)
     assert (held, effective) == (None, wallet.address)
     async with db_session_factory() as session:
-        latest = await payout_addresses.get_payout_address(
+        latest = await get_payout_address(
             session=session,
             settings=build_service_settings(),
             account_id=account_id,
@@ -215,7 +221,7 @@ async def test_the_latest_proof_by_id_decides_even_when_its_clock_was_behind(
     )
 
     async with db_session_factory() as session:
-        latest = await payout_addresses.get_payout_address(
+        latest = await get_payout_address(
             session=session,
             settings=build_service_settings(),
             account_id=account_id,
@@ -382,7 +388,7 @@ async def test_a_challenge_requested_again_in_one_session_carries_the_new_terms(
     second_wallet = Account.create()
     async with db_session_factory() as session:
         challenges = [
-            await payout_addresses.request_payout_address_challenge(
+            await request_payout_address_challenge(
                 session=session,
                 settings=settings,
                 account_id=account_id,
@@ -423,7 +429,7 @@ async def test_a_lowercase_address_is_challenged_in_its_checksummed_form(
     wallet = Account.create()
 
     async with db_session_factory() as session:
-        challenge = await payout_addresses.request_payout_address_challenge(
+        challenge = await request_payout_address_challenge(
             session=session,
             settings=build_service_settings(),
             account_id=account_id,
@@ -463,7 +469,7 @@ async def test_a_challenge_with_a_malformed_address_or_another_network_is_refuse
 
     async with db_session_factory() as session:
         with pytest.raises(InvalidInputError, match=message):
-            await payout_addresses.request_payout_address_challenge(
+            await request_payout_address_challenge(
                 session=session,
                 settings=build_service_settings(),
                 account_id=account_id,
@@ -586,7 +592,10 @@ async def test_a_skewed_host_clock_moves_neither_an_expiry_nor_a_hold(
     db_session_factory: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(payout_addresses, "datetime", _host_clock_off_by(timedelta(days=365)))
+    monkeypatch.setattr(
+        "app.services.payout_addresses.datetime",
+        _host_clock_off_by(timedelta(days=365)),
+    )
     settings = build_service_settings()
     account_id = await create_provider_account_record(db_session_factory)
     wallet = Account.create()
@@ -629,7 +638,10 @@ async def test_the_effective_address_is_judged_by_the_database_clock_by_default(
     host_clock_off_by: timedelta,
     expected: str | None,
 ) -> None:
-    monkeypatch.setattr(payout_addresses, "datetime", _host_clock_off_by(host_clock_off_by))
+    monkeypatch.setattr(
+        "app.services.payout_addresses.datetime",
+        _host_clock_off_by(host_clock_off_by),
+    )
     account_id = await create_provider_account_record(db_session_factory)
     effective_at = await _database_now(db_session_factory) + effective_in
     await _insert_proof(
@@ -650,7 +662,7 @@ async def test_no_payout_address_is_effective_before_one_is_proven(
     assert await _effective(db_session_factory, account_id, at=None) is None
     async with db_session_factory() as session:
         with pytest.raises(NotFoundError, match="no payout address has been proven"):
-            await payout_addresses.get_payout_address(
+            await get_payout_address(
                 session=session,
                 settings=build_service_settings(),
                 account_id=account_id,
