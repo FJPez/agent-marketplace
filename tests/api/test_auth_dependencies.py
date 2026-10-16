@@ -1,10 +1,10 @@
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from httpx2 import AsyncClient
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from tests.fixtures.logs import LoggedEntries
 from tests.helpers.auth import api_key_headers_for_account, auth_headers_for_account, create_account
 
@@ -25,10 +25,18 @@ credential_types = pytest.mark.parametrize(
 
 
 @pytest.fixture
-def executed_statements(app: FastAPI, async_client: AsyncClient) -> Iterator[list[str]]:
+async def executed_statements(app: FastAPI, async_client: AsyncClient) -> AsyncIterator[list[str]]:
     """The SQL the app's own engine runs during the test."""
+    engines: list[AsyncEngine] = []
+
+    # The engine lives in the lifespan state, which only a request can read.
+    @app.get("/probe/engine")
+    async def probe_engine(request: Request) -> None:
+        engines.append(get_resources(request).db_engine)
+
+    await async_client.get("/probe/engine")
     statements: list[str] = []
-    engine = get_resources(app).db_engine.sync_engine
+    engine = engines[0].sync_engine
 
     def record(*args: object) -> None:
         # before_cursor_execute passes (connection, cursor, statement, ...).
