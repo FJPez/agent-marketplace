@@ -33,6 +33,7 @@ services:
       APP_DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/agent_marketplace
       APP_REDIS_URL: redis://redis:6379/0
       APP_JWT_SECRET_KEY: test-secret-key-with-32-bytes-123
+      APP_PROVIDER_SECRET_ENCRYPTION_KEY: hSHxHDOnrub2nJUV4ELrhQ8qKrhEFxJZrSwoqseKlZI=
       APP_SIWE_DOMAIN: localhost
       PORT: 8000
     ports:

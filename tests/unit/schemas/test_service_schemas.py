@@ -32,7 +32,7 @@ ENDPOINT_REQUESTS = [
     (EndpointUpdateRequest, {}),
 ]
 VALID_UPSTREAM = {
-    "base_url": "http://127.0.0.1:9000",
+    "base_url": "https://provider.example.com",
     "path": "/translate",
     "http_method": "POST",
 }
@@ -355,3 +355,30 @@ def test_service_tags_update_request_rejects_more_than_max_tags() -> None:
         ServiceTagsUpdateRequest(
             tags=[f"tag-{index}" for index in range(SERVICE_TAGS_MAX_COUNT + 1)]
         )
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://provider.example.com",
+        "https://provider.example.com:8443",
+        "https://user:secret@provider.example.com",
+        "https://provider.example.com/?key=value",
+        "https://provider.example.com/#part",
+        "https://93.184.215.14",
+        "https://[2606:4700:4700::1111]",
+        "https://localhost",
+    ],
+    ids=["http", "other_port", "credentials", "query", "fragment", "ipv4", "ipv6", "one_label"],
+)
+def test_upstream_request_rejects_a_base_url_outside_the_rules(base_url: str) -> None:
+    with pytest.raises(ValidationError):
+        EndpointUpstreamRequest.model_validate({**VALID_UPSTREAM, "base_url": base_url})
+
+
+def test_upstream_request_accepts_an_https_url_on_a_dns_name() -> None:
+    request = EndpointUpstreamRequest.model_validate(
+        {**VALID_UPSTREAM, "base_url": "https://api.provider.example.com:443/v1"},
+    )
+
+    assert str(request.base_url) == "https://api.provider.example.com/v1"

@@ -3,7 +3,6 @@ from tests.fixtures.settings import TEST_PRICE_TERMS
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import InvalidInputError
-from app.core.json_types import JsonObject
 from app.db.models.listing_price import ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
 from app.db.models.service import Service
@@ -50,13 +49,6 @@ def _build_endpoint(
             base_url="https://provider.internal",
             path="/translate",
             http_method="POST",
-            config={
-                "auth": {
-                    "type": "hmac_sha256",
-                    "key_id": "gateway-key",
-                    "secret": "super-secret",
-                },
-            },
         )
     endpoint.current_price = price
     return endpoint
@@ -113,30 +105,5 @@ def test_validate_service_for_publish_rejects_service_with_only_disabled_endpoin
     with pytest.raises(
         InvalidInputError,
         match="service must enable at least one endpoint before publish",
-    ):
-        validate_service_for_publish(service)
-
-
-@pytest.mark.parametrize(
-    "config",
-    [
-        {},
-        {"auth": "hmac_sha256"},
-        {"auth": {"type": "basic", "key_id": "gateway-key", "secret": "super-secret"}},
-        {"auth": {"type": "hmac_sha256", "key_id": 7, "secret": "super-secret"}},
-        {"auth": {"type": "hmac_sha256", "key_id": "gateway-key"}},
-    ],
-)
-def test_validate_service_for_publish_rejects_missing_or_incomplete_hmac_auth_config(
-    config: JsonObject,
-) -> None:
-    endpoint = _build_endpoint()
-    assert endpoint.upstream is not None
-    endpoint.upstream.config = config
-    service = _build_service(endpoints=[endpoint])
-
-    with pytest.raises(
-        InvalidInputError,
-        match="must define hmac auth config before publish",
     ):
         validate_service_for_publish(service)

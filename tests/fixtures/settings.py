@@ -17,6 +17,8 @@ TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
 TEST_TREASURY_ADDRESS = "0x1111111111111111111111111111111111111111"
+# A Fernet key for encrypting provider signing secrets in tests only.
+TEST_PROVIDER_SECRET_ENCRYPTION_KEY = "hSHxHDOnrub2nJUV4ELrhQ8qKrhEFxJZrSwoqseKlZI="
 # The terms a price version gets under the default settings.
 TEST_PRICE_TERMS = {
     "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
@@ -31,7 +33,7 @@ UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 
 
 def build_service_settings() -> Settings:
-    """Settings for calling services directly, with the test treasury set explicitly."""
+    """Settings for calling services directly: always the test env, with the test treasury."""
     return Settings(
         env=AppEnv.TEST,
         jwt_secret_key=TEST_JWT_SECRET_KEY,
@@ -56,12 +58,14 @@ def base_test_env() -> Generator[None, None, None]:
         "APP_SIWE_DOMAIN": os.environ.get("APP_SIWE_DOMAIN"),
         "APP_ENV_FILE": os.environ.get("APP_ENV_FILE"),
         "APP_TREASURY_ADDRESS": os.environ.get("APP_TREASURY_ADDRESS"),
+        "APP_PROVIDER_SECRET_ENCRYPTION_KEY": os.environ.get("APP_PROVIDER_SECRET_ENCRYPTION_KEY"),
     }
 
     os.environ["APP_JWT_SECRET_KEY"] = TEST_JWT_SECRET_KEY
     os.environ["APP_SIWE_DOMAIN"] = TEST_SIWE_DOMAIN
     os.environ["APP_ENV_FILE"] = TEST_ENV_FILE
     os.environ["APP_TREASURY_ADDRESS"] = TEST_TREASURY_ADDRESS
+    os.environ["APP_PROVIDER_SECRET_ENCRYPTION_KEY"] = TEST_PROVIDER_SECRET_ENCRYPTION_KEY
     get_settings.cache_clear()
 
     try:
@@ -92,6 +96,10 @@ def settings_env_factory(
             monkeypatch.setenv("APP_SIWE_DOMAIN", TEST_SIWE_DOMAIN)
             monkeypatch.setenv("APP_ENV_FILE", TEST_ENV_FILE)
             monkeypatch.setenv("APP_TREASURY_ADDRESS", TEST_TREASURY_ADDRESS)
+            monkeypatch.setenv(
+                "APP_PROVIDER_SECRET_ENCRYPTION_KEY",
+                TEST_PROVIDER_SECRET_ENCRYPTION_KEY,
+            )
 
         for key, value in (env or {}).items():
             if value is None:

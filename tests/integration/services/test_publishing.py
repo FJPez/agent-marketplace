@@ -1,19 +1,33 @@
+from ipaddress import IPv4Address
+
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tests.fixtures.domain import (
     create_endpoint_record,
+    create_moderation_action_record,
     create_provider_account_record,
     create_service_record,
+    create_trusted_provider_records,
     create_upstream_record,
 )
+from tests.helpers.dns import (
+    TEST_DOMAIN_RECORD_NAME,
+    TEST_UPSTREAM_ADDRESS,
+    TEST_UPSTREAM_HOST,
+    FakeResolver,
+    TransactionWatchingResolver,
+)
 
-from app.core.enums import AccessMode, ServiceHealthStatus, ServiceLifecycle
-from app.core.errors import InvalidInputError, InvalidStateError, NotFoundError
-from app.db.models import Service, ServiceHealthCheck, ServiceRevision
+from app.core.enums import ServiceHealthStatus, ServiceLifecycle
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.db.models import ProviderUpstream, Service, ServiceHealthCheck, ServiceRevision
+from app.services.domain_control import RECORD_LABEL, get_verification_record
 from app.services.publishing import publish_service
 
 pytestmark = [pytest.mark.asyncio]
+
+OTHER_HOST = "api.other-provider.example"
 
 
 async def _seed_publishable_service(
@@ -21,23 +35,38 @@ async def _seed_publishable_service(
     *,
     provider_account_id: int,
     slug: str,
-    access_mode: AccessMode = AccessMode.FREE,
+    lifecycle: ServiceLifecycle = ServiceLifecycle.DRAFT,
     with_upstream: bool = True,
+    trusted: bool = True,
 ) -> int:
     service_id = await create_service_record(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug=slug,
-        lifecycle=ServiceLifecycle.DRAFT,
+        lifecycle=lifecycle,
     )
-    endpoint_id = await create_endpoint_record(
-        db_session_factory,
-        service_id=service_id,
-        access_mode=access_mode,
-    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
     if with_upstream:
         await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
+    if trusted:
+        await create_trusted_provider_records(db_session_factory, account_id=provider_account_id)
     return service_id
+
+
+async def _publish(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    resolver: FakeResolver,
+    account_id: int,
+    service_id: int,
+) -> Service:
+    async with db_session_factory() as session:
+        return await publish_service(
+            session=session,
+            resolver=resolver,
+            account_id=account_id,
+            service_id=service_id,
+        )
 
 
 async def _health_checks(
@@ -53,8 +82,33 @@ async def _health_checks(
     return list(result.all())
 
 
+class RepointingResolver(FakeResolver):
+    """Answers as `answers` does, but repoints an upstream at another host on its first lookup."""
+
+    def __init__(
+        self,
+        answers: FakeResolver,
+        db_session_factory: async_sessionmaker[AsyncSession],
+        *,
+        endpoint_id: int,
+    ) -> None:
+        super().__init__(answers.addresses, txt_records=answers.txt_records)
+        self._db_session_factory = db_session_factory
+        self._endpoint_id = endpoint_id
+
+    async def resolve_ipv4(self, host: str) -> list[IPv4Address]:
+        async with self._db_session_factory.begin() as session:
+            await session.execute(
+                update(ProviderUpstream)
+                .where(ProviderUpstream.endpoint_id == self._endpoint_id)
+                .values(base_url=f"https://{OTHER_HOST}/"),
+            )
+        return await super().resolve_ipv4(host)
+
+
 async def test_publish_service_activates_service_with_revision_and_pass_check(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
     service_id = await _seed_publishable_service(
@@ -63,12 +117,12 @@ async def test_publish_service_activates_service_with_revision_and_pass_check(
         slug="publishable-service",
     )
 
-    async with db_session_factory() as session:
-        published = await publish_service(
-            session=session,
-            account_id=provider_account_id,
-            service_id=service_id,
-        )
+    published = await _publish(
+        db_session_factory,
+        resolver=dns_resolver,
+        account_id=provider_account_id,
+        service_id=service_id,
+    )
 
     assert published.lifecycle is ServiceLifecycle.ACTIVE
 
@@ -93,6 +147,7 @@ async def test_publish_service_activates_service_with_revision_and_pass_check(
 
 async def test_publish_service_rejects_second_publish_of_active_service(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
     service_id = await _seed_publishable_service(
@@ -100,39 +155,84 @@ async def test_publish_service_rejects_second_publish_of_active_service(
         provider_account_id=provider_account_id,
         slug="twice-published-service",
     )
+    await _publish(
+        db_session_factory,
+        resolver=dns_resolver,
+        account_id=provider_account_id,
+        service_id=service_id,
+    )
 
-    async with db_session_factory() as session:
-        await publish_service(
-            session=session,
+    with pytest.raises(InvalidStateError, match="service is not publishable outside draft"):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
             account_id=provider_account_id,
             service_id=service_id,
         )
 
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidStateError, match="service is not publishable outside draft"):
-            await publish_service(
-                session=session,
-                account_id=provider_account_id,
-                service_id=service_id,
-            )
+
+@pytest.mark.parametrize(
+    ("lifecycle", "moderation_action", "refusal"),
+    [
+        pytest.param(
+            ServiceLifecycle.ACTIVE,
+            None,
+            "service is not publishable outside draft",
+            id="active",
+        ),
+        pytest.param(ServiceLifecycle.DRAFT, "suspend", "service is suspended", id="suspended"),
+    ],
+)
+async def test_an_unpublishable_service_is_refused_before_any_dns_query(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+    lifecycle: ServiceLifecycle,
+    moderation_action: str | None,
+    refusal: str,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="unpublishable-service",
+        lifecycle=lifecycle,
+    )
+    if moderation_action is not None:
+        await create_moderation_action_record(
+            db_session_factory,
+            service_id=service_id,
+            action=moderation_action,
+        )
+
+    with pytest.raises(InvalidStateError, match=refusal):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    assert dns_resolver.lookups == []
 
 
 async def test_publish_service_rejects_unknown_service(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
 
-    async with db_session_factory() as session:
-        with pytest.raises(NotFoundError, match="service not found"):
-            await publish_service(
-                session=session,
-                account_id=provider_account_id,
-                service_id=987654,
-            )
+    with pytest.raises(NotFoundError, match="service not found"):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=987654,
+        )
 
 
 async def test_publish_service_persists_fail_check_and_leaves_service_in_draft(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
     service_id = await _seed_publishable_service(
@@ -147,13 +247,13 @@ async def test_publish_service_persists_fail_check_and_leaves_service_in_draft(
         assert seeded_service is not None
         seeded_updated_at = seeded_service.updated_at
 
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError, match="must define upstream before publish"):
-            await publish_service(
-                session=session,
-                account_id=provider_account_id,
-                service_id=service_id,
-            )
+    with pytest.raises(InvalidInputError, match="must define upstream before publish"):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)
@@ -176,35 +276,33 @@ async def test_publish_service_persists_fail_check_and_leaves_service_in_draft(
 
 async def test_publish_service_adds_pass_check_beside_earlier_failed_attempt(
     db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
 ) -> None:
     provider_account_id = await create_provider_account_record(db_session_factory)
+    await create_trusted_provider_records(db_session_factory, account_id=provider_account_id)
     service_id = await create_service_record(
         db_session_factory,
         provider_account_id=provider_account_id,
         slug="repaired-service",
         lifecycle=ServiceLifecycle.DRAFT,
     )
-    endpoint_id = await create_endpoint_record(
-        db_session_factory,
-        service_id=service_id,
-    )
+    endpoint_id = await create_endpoint_record(db_session_factory, service_id=service_id)
 
-    async with db_session_factory() as session:
-        with pytest.raises(InvalidInputError):
-            await publish_service(
-                session=session,
-                account_id=provider_account_id,
-                service_id=service_id,
-            )
-
-    await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
-
-    async with db_session_factory() as session:
-        await publish_service(
-            session=session,
+    with pytest.raises(InvalidInputError):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
             account_id=provider_account_id,
             service_id=service_id,
         )
+
+    await create_upstream_record(db_session_factory, endpoint_id=endpoint_id)
+    await _publish(
+        db_session_factory,
+        resolver=dns_resolver,
+        account_id=provider_account_id,
+        service_id=service_id,
+    )
 
     async with db_session_factory() as session:
         service = await session.get(Service, service_id)
@@ -216,3 +314,136 @@ async def test_publish_service_adds_pass_check_beside_earlier_failed_attempt(
         ServiceHealthStatus.PASS,
         ServiceHealthStatus.FAIL,
     ]
+
+
+async def test_publish_without_a_signing_secret_fails_and_stays_draft(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="secretless-service",
+        trusted=False,
+    )
+    # The provider proves its domain with its own record, but has no signing secret.
+    async with db_session_factory() as session:
+        record = await get_verification_record(
+            session=session,
+            account_id=provider_account_id,
+        )
+    resolver = FakeResolver(
+        {TEST_UPSTREAM_HOST: [TEST_UPSTREAM_ADDRESS]},
+        txt_records={TEST_DOMAIN_RECORD_NAME: [record.value]},
+    )
+
+    with pytest.raises(InvalidInputError, match="provider must issue a signing secret"):
+        await _publish(
+            db_session_factory,
+            resolver=resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+    assert service is not None
+    assert service.lifecycle is ServiceLifecycle.DRAFT
+
+
+async def test_publish_fails_when_a_disabled_endpoints_host_is_unproven(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="half-proven-service",
+    )
+    disabled_endpoint_id = await create_endpoint_record(
+        db_session_factory,
+        service_id=service_id,
+        key="later",
+        is_enabled=False,
+    )
+    await create_upstream_record(
+        db_session_factory,
+        endpoint_id=disabled_endpoint_id,
+        base_url=f"https://{OTHER_HOST}/",
+    )
+    dns_resolver.addresses[OTHER_HOST] = [TEST_UPSTREAM_ADDRESS]
+
+    with pytest.raises(InvalidInputError):
+        await _publish(
+            db_session_factory,
+            resolver=dns_resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+        checks = await _health_checks(session, service_id=service_id)
+    assert service is not None
+    assert service.lifecycle is ServiceLifecycle.DRAFT
+    assert [check.summary for check in checks] == [
+        f"{OTHER_HOST} must carry the TXT record {RECORD_LABEL}.{OTHER_HOST}",
+    ]
+
+
+async def test_publish_holds_no_transaction_open_during_the_domain_check(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="watched-service",
+    )
+
+    async with db_session_factory() as session:
+        watching = TransactionWatchingResolver(dns_resolver, session)
+        await publish_service(
+            session=session,
+            resolver=watching,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    assert watching.in_transaction_during_lookups
+    assert not any(watching.in_transaction_during_lookups)
+
+
+async def test_publish_rejects_upstreams_changed_during_the_domain_check(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    dns_resolver: FakeResolver,
+) -> None:
+    provider_account_id = await create_provider_account_record(db_session_factory)
+    service_id = await _seed_publishable_service(
+        db_session_factory,
+        provider_account_id=provider_account_id,
+        slug="moving-service",
+    )
+    async with db_session_factory() as session:
+        endpoint_id = await session.scalar(
+            select(ProviderUpstream.endpoint_id).limit(1),
+        )
+    assert endpoint_id is not None
+    resolver = RepointingResolver(dns_resolver, db_session_factory, endpoint_id=endpoint_id)
+
+    with pytest.raises(ConflictError, match="upstreams changed while publishing"):
+        await _publish(
+            db_session_factory,
+            resolver=resolver,
+            account_id=provider_account_id,
+            service_id=service_id,
+        )
+
+    async with db_session_factory() as session:
+        service = await session.get(Service, service_id)
+        checks = await _health_checks(session, service_id=service_id)
+    assert service is not None
+    assert service.lifecycle is ServiceLifecycle.DRAFT
+    assert checks == []

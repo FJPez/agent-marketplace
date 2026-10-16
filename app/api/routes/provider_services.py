@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, Response, status
 
 from app.api.deps.auth import CurrentActor
 from app.api.deps.database import SessionDep
+from app.api.deps.dns import DnsResolverDep
 from app.api.deps.settings import SettingsDep
 from app.schemas.service import (
     EndpointCreateRequest,
@@ -187,13 +188,12 @@ async def replace_provider_service_tags(
     response_model=ServiceResponse,
     summary="Publish a provider service",
     description=(
-        "Publishes an owned service once its endpoints, pricing, upstreams, and health "
-        "preconditions are satisfied."
+        "Publishes an owned service once it is ready and its provider controls every upstream host."
     ),
     responses={
         200: {"description": "Service published successfully."},
         404: {"description": "The requested service does not exist or is not owned by the actor."},
-        409: {"description": "The requested service is not ready to publish."},
+        409: {"description": "The service is not a draft, or its upstreams changed meanwhile."},
         422: {"description": "The service configuration is not publishable."},
     },
 )
@@ -201,9 +201,11 @@ async def publish_provider_service(
     service_id: int,
     actor: CurrentActor,
     session: SessionDep,
+    resolver: DnsResolverDep,
 ) -> ServiceResponse:
     published = await publishing.publish_service(
         session=session,
+        resolver=resolver,
         account_id=actor.account_id,
         service_id=service_id,
     )
@@ -341,19 +343,12 @@ async def put_provider_endpoint_upstream(
         EndpointUpstreamRequest,
         Body(
             openapi_examples={
-                "mock-upstream": {
-                    "summary": "Point the endpoint at the local mock upstream",
+                "https-upstream": {
+                    "summary": "Point the endpoint at its public https upstream",
                     "value": {
-                        "base_url": "http://127.0.0.1:9000",
+                        "base_url": "https://provider.example.com",
                         "path": "/free-ping",
                         "http_method": "POST",
-                        "config": {
-                            "auth": {
-                                "type": "hmac_sha256",
-                                "key_id": "demo-key",
-                                "secret": "demo-secret",
-                            }
-                        },
                     },
                 }
             }
@@ -361,11 +356,9 @@ async def put_provider_endpoint_upstream(
     ],
     actor: CurrentActor,
     session: SessionDep,
-    settings: SettingsDep,
 ) -> Response:
     await provider_endpoints.upsert_upstream(
         session=session,
-        settings=settings,
         account_id=actor.account_id,
         endpoint_id=endpoint_id,
         request=request,
