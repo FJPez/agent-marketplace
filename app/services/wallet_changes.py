@@ -6,10 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
 from app.core.security import generate_nonce, normalize_wallet_address, verify_siwe_signature
 from app.db.errors import is_unique_violation
 from app.db.models import Account, WalletChangeLog
+from app.services.accounts import get_account_for_update
 from app.services.auth import TokenPair, issue_token_pair
 
 
@@ -31,7 +32,7 @@ async def initiate_wallet_change(
     except ValueError as exc:
         raise InvalidInputError(str(exc)) from exc
     now = datetime.now(UTC)
-    account = await _require_account(session=session, account_id=account_id)
+    account = await get_account_for_update(session=session, account_id=account_id)
     if account.wallet_address == normalized_wallet_address:
         raise InvalidStateError("new wallet must differ from current wallet")
     _ensure_cooldown(account, settings=settings, now=now)
@@ -62,22 +63,18 @@ async def confirm_wallet_change(
     signature: str,
 ) -> tuple[Account, TokenPair]:
     now = datetime.now(UTC)
-    account = await _require_account(session=session, account_id=account_id)
+    account = await get_account_for_update(session=session, account_id=account_id)
     _ensure_cooldown(account, settings=settings, now=now)
     expires_at = account.nonce_issued_at + timedelta(seconds=settings.siwe_nonce_expiry)
     if expires_at < now:
         raise InvalidStateError("SIWE message has expired")
 
     try:
-        parsed = verify_siwe_signature(
-            settings,
-            message=message,
-            signature=signature,
-            expected_nonce=account.nonce,
-            now=now,
-        )
+        parsed = verify_siwe_signature(settings, message=message, signature=signature, now=now)
     except ValueError as exc:
         raise InvalidStateError(str(exc)) from exc
+    if parsed.nonce != account.nonce:
+        raise InvalidStateError("nonce is not valid")
 
     if account.pending_wallet_address is None:
         raise InvalidStateError("no wallet change is pending")
@@ -115,14 +112,6 @@ async def confirm_wallet_change(
     await session.refresh(account)
     tokens = issue_token_pair(settings=settings, account=account)
     return account, tokens
-
-
-async def _require_account(*, session: AsyncSession, account_id: int) -> Account:
-    statement = select(Account).where(Account.id == account_id).with_for_update()
-    account = await session.scalar(statement)
-    if account is None:
-        raise NotFoundError("account not found")
-    return account
 
 
 def _ensure_cooldown(account: Account, *, settings: Settings, now: datetime) -> None:

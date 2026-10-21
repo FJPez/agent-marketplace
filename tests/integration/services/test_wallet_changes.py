@@ -241,6 +241,35 @@ async def test_confirm_bad_signature_raises_invalid_state(
             )
 
 
+async def test_confirm_rejects_a_message_that_carries_another_nonce(
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = _wallet_change_settings()
+    account_id = await create_account(db_session_factory)
+    new_signer = EthAccount.create()
+    await _initiate_and_sign(
+        db_session_factory,
+        settings=settings,
+        account_id=account_id,
+        new_signer=new_signer,
+    )
+    message = _build_siwe_message(
+        address=new_signer.address,
+        nonce="not-the-issued-nonce",
+        issued_at=datetime.now(UTC).replace(microsecond=0),
+    )
+
+    async with db_session_factory() as session:
+        with pytest.raises(InvalidStateError, match="nonce is not valid"):
+            await confirm_wallet_change(
+                session=session,
+                settings=settings,
+                account_id=account_id,
+                message=message,
+                signature=_sign_message(new_signer, message),
+            )
+
+
 async def test_confirm_rejects_signer_that_does_not_match_pending_wallet(
     db_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
