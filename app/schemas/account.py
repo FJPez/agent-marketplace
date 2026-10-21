@@ -2,7 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.common import DisplayName, Id, Timestamp, WalletAddress
+from app.core.evm import WalletAddress
+from app.schemas.common import DisplayName, Id, Timestamp
 
 
 class AccountResponse(BaseModel):

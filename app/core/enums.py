@@ -20,11 +20,6 @@ class AccessMode(StrEnum):
     PAID = "paid"
 
 
-class PricingModelType(StrEnum):
-    FREE = "free"
-    FIXED_PER_CALL = "fixed_per_call"
-
-
 class ServiceHealthStatus(StrEnum):
     PASS = "pass"
     FAIL = "fail"

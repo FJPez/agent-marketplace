@@ -38,7 +38,7 @@ def validate_service_for_publish(service: Service) -> None:
             raise InvalidInputError(
                 f"enabled endpoint '{endpoint.key}' must define hmac auth config before publish",
             )
-        if endpoint.access_mode is AccessMode.PAID and endpoint.price is None:
+        if endpoint.access_mode is AccessMode.PAID and endpoint.current_price is None:
             raise InvalidInputError(
                 f"paid endpoint '{endpoint.key}' must define a price before publish",
             )

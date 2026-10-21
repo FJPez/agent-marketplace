@@ -12,6 +12,7 @@ from pydantic_settings import (
 )
 
 from app.core.enums import AppEnv
+from app.core.evm import PaymentAddress
 
 _LOCAL_DATABASE_HOSTS = {"127.0.0.1", "::1", "localhost"}
 _DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/agent_marketplace"
@@ -59,6 +60,15 @@ class Settings(BaseSettings):
     api_rate_limit: str = "120/minute"
     max_request_body_bytes: int = Field(default=1024 * 1024, gt=0)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Every paid listing's pay_to, read when a payment is requested.
+    treasury_address: PaymentAddress | None = None
+    # CAIP-2 allows a chain reference of at most 32 characters.
+    payment_network: str = Field(default="eip155:84532", pattern=r"^eip155:[1-9][0-9]{0,31}$")
+    # USDC on Base Sepolia: https://developers.circle.com/stablecoins/usdc-contract-addresses
+    payment_asset: PaymentAddress = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    # In atomic units of payment_asset: 10000 is 0.01 USDC.
+    min_price_amount: int = Field(default=10_000, gt=0)
+    platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
@@ -110,6 +120,9 @@ class Settings(BaseSettings):
             raise ValueError(msg)
         if not self.redis_url:
             msg = "redis_url must be set when env is staging or prod"
+            raise ValueError(msg)
+        if self.treasury_address is None:
+            msg = "treasury_address must be set when env is staging or prod"
             raise ValueError(msg)
 
 

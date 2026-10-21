@@ -52,11 +52,16 @@ def test_public_service_detail_filters_disabled_endpoints() -> None:
     assert [endpoint.key for endpoint in result.endpoints] == ["translate"]
 
 
-def test_public_endpoint_pricing_uses_free_fallback_for_free_endpoints() -> None:
+def test_public_endpoint_pricing_shows_the_invoke_url_and_no_price_for_free_endpoints() -> None:
     endpoint = _build_endpoint(key="translate", access_mode=AccessMode.FREE)
+    endpoint.id = 7
 
-    result = PublicEndpointPricing.from_model(endpoint)
+    result = PublicEndpointPricing.from_model(endpoint, service_slug="translation-service")
 
-    assert result.pricing_type == "free"
-    assert result.amount_minor is None
-    assert result.currency is None
+    assert result.model_dump() == {
+        "endpoint_id": 7,
+        "key": "translate",
+        "access_mode": AccessMode.FREE,
+        "invoke_url": "/v1/invoke/translation-service/translate",
+        "price": None,
+    }

@@ -1,8 +1,8 @@
 from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from app.core.enums import AccessMode, PricingModelType
+from app.core.enums import AccessMode
 from app.core.json_types import to_json_object
 from app.db.models.service import Service
 from app.db.models.service_endpoint import ServiceEndpoint
@@ -41,38 +41,37 @@ class PublicEndpointSchema(BaseModel):
         )
 
 
+class PublicListingPrice(BaseModel):
+    """What a paid call to the listing costs."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    version: int
+    amount: int
+    asset: str
+    network: str
+
+
 class PublicEndpointPricing(BaseModel):
+    endpoint_id: int
     key: Slug
     access_mode: AccessMode
-    pricing_type: str | None
-    amount_minor: int | None
-    currency: str | None
+    # The invoke route arrives in phase 1; the URL is stable (spec D13).
+    invoke_url: str
+    price: PublicListingPrice | None
 
     @classmethod
-    def from_model(cls, endpoint: ServiceEndpoint) -> Self:
-        if endpoint.access_mode is AccessMode.FREE:
-            return cls(
-                key=endpoint.key,
-                access_mode=endpoint.access_mode,
-                pricing_type=PricingModelType.FREE.value,
-                amount_minor=None,
-                currency=None,
-            )
-        price = endpoint.price
-        if price is not None:
-            return cls(
-                key=endpoint.key,
-                access_mode=endpoint.access_mode,
-                pricing_type=PricingModelType.FIXED_PER_CALL.value,
-                amount_minor=price.amount_minor,
-                currency=price.currency,
-            )
+    def from_model(cls, endpoint: ServiceEndpoint, *, service_slug: str) -> Self:
         return cls(
+            endpoint_id=endpoint.id,
             key=endpoint.key,
             access_mode=endpoint.access_mode,
-            pricing_type=None,
-            amount_minor=None,
-            currency=None,
+            invoke_url=f"/v1/invoke/{service_slug}/{endpoint.key}",
+            price=(
+                None
+                if endpoint.current_price is None
+                else PublicListingPrice.model_validate(endpoint.current_price)
+            ),
         )
 
 
@@ -133,15 +132,18 @@ class PublicServiceSchemaResponse(BaseModel):
 class PublicServicePricingResponse(BaseModel):
     id: int
     slug: Slug
+    # The treasury every paid call is paid to now; None until one is configured.
+    pay_to: str | None
     endpoints: list[PublicEndpointPricing]
 
     @classmethod
-    def from_model(cls, service: Service) -> Self:
+    def from_model(cls, service: Service, *, pay_to: str | None) -> Self:
         return cls(
             id=service.id,
             slug=service.slug,
+            pay_to=pay_to,
             endpoints=[
-                PublicEndpointPricing.from_model(endpoint)
+                PublicEndpointPricing.from_model(endpoint, service_slug=service.slug)
                 for endpoint in service.endpoints
                 if endpoint.is_enabled
             ],

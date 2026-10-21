@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
+from sqlalchemy import select
+from tests.fixtures.settings import TEST_PRICE_TERMS
 from tests.helpers.auth import create_account
 
 from app.core.enums import (
@@ -11,7 +13,7 @@ from app.core.enums import (
     ServiceLifecycle,
 )
 from app.db.models import (
-    EndpointPrice,
+    ListingPrice,
     ModerationAction,
     ProviderUpstream,
     Service,
@@ -106,16 +108,6 @@ class EndpointFactory(Protocol):
         response_schema: JsonObject | None = ...,
         timeout_seconds: int = ...,
         is_enabled: bool = ...,
-    ) -> Awaitable[int]: ...
-
-
-class EndpointPriceFactory(Protocol):
-    def __call__(
-        self,
-        *,
-        endpoint_id: int,
-        amount_minor: int = ...,
-        currency: str = ...,
     ) -> Awaitable[int]: ...
 
 
@@ -310,22 +302,47 @@ async def create_endpoint_record(
         return endpoint.id
 
 
-async def create_endpoint_price_record(
+async def create_listing_price_record(
     db_session_factory: async_sessionmaker[AsyncSession],
     *,
     endpoint_id: int,
-    amount_minor: int = 500,
-    currency: str = "USD",
+    amount: int = 250_000,
+    version: int = 1,
 ) -> int:
+    """Store a price version with the default test payment terms and make it current."""
     async with db_session_factory.begin() as session:
-        pricing = EndpointPrice(
+        price = ListingPrice(
             endpoint_id=endpoint_id,
-            amount_minor=amount_minor,
-            currency=currency,
+            version=version,
+            amount=amount,
+            **TEST_PRICE_TERMS,
         )
-        session.add(pricing)
-        await session.flush()
-        return endpoint_id
+        session.add(price)
+        # The get autoflushes the pending version, which assigns its id.
+        endpoint = await session.get(ServiceEndpoint, endpoint_id)
+        assert endpoint is not None
+        endpoint.current_price_id = price.id
+        return price.id
+
+
+async def read_price_versions(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    endpoint_id: int,
+) -> tuple[int | None, list[tuple[int, int]]]:
+    """Return the current version (None when unpriced) and every stored (version, amount)."""
+    async with db_session_factory() as session:
+        current_version = await session.scalar(
+            select(ListingPrice.version)
+            .join(ServiceEndpoint, ServiceEndpoint.current_price_id == ListingPrice.id)
+            .where(ServiceEndpoint.id == endpoint_id),
+        )
+        rows = await session.execute(
+            select(ListingPrice.version, ListingPrice.amount)
+            .where(ListingPrice.endpoint_id == endpoint_id)
+            .order_by(ListingPrice.version),
+        )
+        return current_version, [(row.version, row.amount) for row in rows]
 
 
 async def create_upstream_record(
@@ -548,26 +565,6 @@ def endpoint_factory(
         )
 
     return create_endpoint
-
-
-@pytest.fixture
-def endpoint_price_factory(
-    db_session_factory: async_sessionmaker[AsyncSession],
-) -> EndpointPriceFactory:
-    async def create_endpoint_price(
-        *,
-        endpoint_id: int,
-        amount_minor: int = 500,
-        currency: str = "USD",
-    ) -> int:
-        return await create_endpoint_price_record(
-            db_session_factory,
-            endpoint_id=endpoint_id,
-            amount_minor=amount_minor,
-            currency=currency,
-        )
-
-    return create_endpoint_price
 
 
 @pytest.fixture
