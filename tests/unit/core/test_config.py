@@ -121,6 +121,26 @@ def test_settings_require_jwt_secret_key(
         Settings()
 
 
+def test_settings_require_a_provider_secret_encryption_key(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env={"APP_PROVIDER_SECRET_ENCRYPTION_KEY": None})
+
+    with pytest.raises(ValidationError, match="provider_secret_encryption_key is required"):
+        Settings()
+
+
+def test_settings_reject_a_malformed_provider_secret_encryption_key_without_echoing_it(
+    settings_env_factory: SettingsEnvFactory,
+) -> None:
+    settings_env_factory(env={"APP_PROVIDER_SECRET_ENCRYPTION_KEY": "not-a-fernet-key"})
+
+    with pytest.raises(ValidationError, match="Fernet key must be") as error:
+        Settings()
+
+    assert "not-a-fernet-key" not in str(error.value)
+
+
 def test_get_settings_allow_environment_overrides(
     settings_env_factory: SettingsEnvFactory,
 ) -> None:

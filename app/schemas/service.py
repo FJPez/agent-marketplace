@@ -27,6 +27,7 @@ from app.core.service_fields import (
     SLUG_MAX_LENGTH,
     TAG_MAX_LENGTH,
     UPSTREAM_PATH_MAX_LENGTH,
+    check_upstream_base_url,
     normalize_media_type,
     normalize_slug,
     normalize_tag,
@@ -258,29 +259,21 @@ class EndpointUpstreamRequest(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "base_url": "http://127.0.0.1:9000",
+                    "base_url": "https://provider.example.com",
                     "path": "/free-ping",
                     "http_method": "POST",
-                    "config": {
-                        "auth": {
-                            "type": "hmac_sha256",
-                            "key_id": "demo-key",
-                            "secret": "demo-secret",
-                        }
-                    },
                 }
             ]
         },
     )
 
-    base_url: HttpUrl
+    base_url: Annotated[HttpUrl, AfterValidator(check_upstream_base_url)]
     path: Annotated[
         str,
         StringConstraints(strip_whitespace=True, min_length=1, max_length=UPSTREAM_PATH_MAX_LENGTH),
         AfterValidator(normalize_upstream_path),
     ]
     http_method: Literal["POST", "PUT", "PATCH"]
-    config: SchemaObject = Field(default_factory=dict)
 
 
 class EndpointResponse(BaseModel):

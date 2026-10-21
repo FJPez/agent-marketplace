@@ -3,7 +3,8 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, model_validator
+from cryptography.fernet import Fernet
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
@@ -34,6 +35,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="APP_",
         extra="ignore",
+        # A startup error names the setting, never its value: some settings are secrets.
+        hide_input_in_errors=True,
     )
 
     env: AppEnv = AppEnv.DEV
@@ -69,6 +72,8 @@ class Settings(BaseSettings):
     # In atomic units of payment_asset: 10000 is 0.01 USDC.
     min_price_amount: int = Field(default=10_000, gt=0)
     platform_fee_bps: int = Field(default=1_000, ge=0, le=10_000)
+    # The Fernet key that encrypts provider signing secrets at rest.
+    provider_secret_encryption_key: SecretStr = SecretStr("")
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"
@@ -101,6 +106,12 @@ class Settings(BaseSettings):
         if not self.jwt_secret_key:
             msg = "jwt_secret_key is required"
             raise ValueError(msg)
+        encryption_key = self.provider_secret_encryption_key.get_secret_value()
+        if not encryption_key:
+            msg = "provider_secret_encryption_key is required"
+            raise ValueError(msg)
+        # Raises ValueError for a malformed key.
+        Fernet(encryption_key)
         if self.env in {AppEnv.PROD, AppEnv.STAGING}:
             self._validate_deployment_settings()
         return self

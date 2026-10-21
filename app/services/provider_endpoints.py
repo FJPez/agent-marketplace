@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
-from app.core.upstream_targets import validate_upstream_base_url
 from app.db.errors import is_unique_violation, unique_violation_constraint
 from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
@@ -180,18 +179,11 @@ async def update_endpoint(
 async def upsert_upstream(
     *,
     session: AsyncSession,
-    settings: Settings,
     account_id: int,
     endpoint_id: int,
     request: EndpointUpstreamRequest,
 ) -> None:
-    try:
-        # Resolves DNS - must run before the first query so no transaction or row
-        # lock is held across the network I/O.
-        validated_base_url = validate_upstream_base_url(str(request.base_url), settings=settings)
-    except ValueError as exc:
-        raise InvalidInputError(str(exc)) from exc
-
+    base_url = str(request.base_url)
     await lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
@@ -207,10 +199,9 @@ async def upsert_upstream(
     upstream = endpoint.upstream
     if (
         upstream is not None
-        and upstream.base_url == validated_base_url
+        and upstream.base_url == base_url
         and upstream.path == request.path
         and upstream.http_method == request.http_method
-        and upstream.config == request.config
     ):
         return
 
@@ -221,18 +212,16 @@ async def upsert_upstream(
     if upstream is None:
         upstream = ProviderUpstream(
             endpoint_id=endpoint.id,
-            base_url=validated_base_url,
+            base_url=base_url,
             path=request.path,
             http_method=request.http_method,
-            config=request.config,
         )
         session.add(upstream)
         endpoint.upstream = upstream
     else:
-        upstream.base_url = validated_base_url
+        upstream.base_url = base_url
         upstream.path = request.path
         upstream.http_method = request.http_method
-        upstream.config = request.config
         upstream.updated_at = now
 
     await session.commit()

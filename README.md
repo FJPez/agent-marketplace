@@ -17,6 +17,8 @@ Core capabilities:
 
 - wallet-based authentication (SIWE) and API keys
 - provider service authoring and publish control
+- marketplace-issued provider signing secrets
+- DNS proof that a provider controls its upstream hosts, checked at every publish
 - public discovery, schemas, and pricing lookups
 - moderation for administrators
 
@@ -71,6 +73,9 @@ database and bootstraps the admin. Set the `APP_*` variables,
 `RAILWAY_DEPLOYMENT_DRAINING_SECONDS=30`. Railway otherwise sends SIGKILL right
 after SIGTERM, cutting off the requests in flight at every deploy; with 30
 seconds, uvicorn finishes them before it exits.
+
+Generate `APP_PROVIDER_SECRET_ENCRYPTION_KEY` with the command in `.env.example`,
+back it up, and set it on the service: the API does not start without it.
 
 Railway's config as code (`railway.toml`) is deprecated, and Railway stops
 reading it on 2026-12-01. After that the API would deploy without its health
@@ -149,6 +154,13 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   with `413` before it is read into memory.
 - Staging and production require a non-local `APP_DATABASE_URL`,
   `APP_REDIS_URL`, an explicit `APP_SIWE_DOMAIN` and `APP_TREASURY_ADDRESS`.
+- A provider upstream must be an `https://` URL on port 443 naming a DNS host,
+  without credentials, query string or fragment, so a local mock upstream cannot be
+  registered through the API.
+- Publishing checks that every upstream host of the service, at most 10, resolves
+  only to public IPv4 addresses and carries the provider's TXT record at
+  `_agent-marketplace.<host>`, with the value `GET /v1/provider/domain-verification`
+  returns.
 - Each new price version records its asset, `APP_PAYMENT_ASSET` (default Base
   Sepolia USDC, `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), its network,
   `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base Sepolia), and the platform
@@ -160,3 +172,7 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
 - Payments go to the treasury, `APP_TREASURY_ADDRESS`, in force when they are
   requested, so changing it takes effect at once. It has no default, and without
   it no paid price can be set.
+- Provider signing secrets are stored encrypted with the Fernet key
+  `APP_PROVIDER_SECRET_ENCRYPTION_KEY`. Losing the key makes every stored secret
+  unrecoverable, and each provider must then issue a new one. Issuing a new secret
+  replaces the old one at once.
