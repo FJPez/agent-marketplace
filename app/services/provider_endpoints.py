@@ -1,12 +1,14 @@
 from datetime import UTC, datetime
+from typing import Protocol
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.enums import AccessMode, ServiceLifecycle
-from app.core.errors import ConflictError, InvalidInputError, InvalidStateError
+from app.core.errors import ConflictError, InvalidInputError, InvalidStateError, NotFoundError
+from app.core.request_validation import RequestValidationPool, check_request_schema_compiles
 from app.db.errors import is_unique_violation, unique_violation_constraint
 from app.db.models.listing_price import LISTING_PRICE_VERSION_CONSTRAINT, ListingPrice
 from app.db.models.provider_upstream import ProviderUpstream
@@ -31,6 +33,7 @@ async def create_endpoint(
     *,
     session: AsyncSession,
     settings: Settings,
+    validation_pool: RequestValidationPool,
     account_id: int,
     service_id: int,
     request: EndpointCreateRequest,
@@ -40,6 +43,17 @@ async def create_endpoint(
         if request.price is None
         else build_price_version(settings=settings, amount=request.price.amount)
     )
+    # Only the owner's save reaches the workers, and it waits on them with no transaction
+    # open; the lock below checks ownership again.
+    await _ensure_owned(
+        session,
+        select(Service.id).where(
+            Service.id == service_id,
+            Service.provider_account_id == account_id,
+        ),
+        not_found="service not found",
+    )
+    await check_request_schema_compiles(pool=validation_pool, schema=request.request_schema)
     service = await lock_owned_service(
         session=session,
         account_id=account_id,
@@ -82,10 +96,25 @@ async def update_endpoint(
     *,
     session: AsyncSession,
     settings: Settings,
+    validation_pool: RequestValidationPool,
     account_id: int,
     endpoint_id: int,
     changes: EndpointUpdateRequest,
 ) -> ServiceEndpoint:
+    if changes.request_schema is not None:
+        # Only the owner's save reaches the workers, and it waits on them with no
+        # transaction open; the lock below checks ownership again.
+        await _ensure_owned(
+            session,
+            select(ServiceEndpoint.id)
+            .join(Service)
+            .where(
+                ServiceEndpoint.id == endpoint_id,
+                Service.provider_account_id == account_id,
+            ),
+            not_found="endpoint not found",
+        )
+        await check_request_schema_compiles(pool=validation_pool, schema=changes.request_schema)
     await lock_owned_service_by_endpoint(
         session=session,
         account_id=account_id,
@@ -137,6 +166,15 @@ async def update_endpoint(
         service=service,
         impact=impact,
     )
+    if (
+        service.lifecycle is ServiceLifecycle.ACTIVE
+        and column_changes.get("is_enabled") is True
+        and endpoint.upstream is None
+    ):
+        # Discovery lists every enabled endpoint of an active service, which can then only
+        # be invoked with an upstream: publishing requires one for the same reason.
+        msg = "an endpoint of an active service cannot be enabled without an upstream"
+        raise InvalidStateError(msg)
 
     _ensure_active_paid_endpoint_priced(
         lifecycle=service.lifecycle,
@@ -227,23 +265,30 @@ async def upsert_upstream(
     await session.commit()
 
 
+async def _ensure_owned(
+    session: AsyncSession, owned: Select[tuple[int]], *, not_found: str
+) -> None:
+    """Raise NotFoundError unless `owned` finds a row, in a read that ends at once."""
+    try:
+        found = await session.scalar(owned)
+    finally:
+        await session.rollback()
+    if found is None:
+        raise NotFoundError(not_found)
+
+
 async def _ensure_endpoint_update_allowed(
     *,
     session: AsyncSession,
     service: Service,
     impact: UpdateImpact,
 ) -> None:
-    if service.lifecycle is ServiceLifecycle.DRAFT:
+    if service.lifecycle is ServiceLifecycle.DRAFT or impact is not UpdateImpact.MATERIAL:
         return
-    if service.lifecycle is ServiceLifecycle.ACTIVE:
-        if impact is not UpdateImpact.MATERIAL:
-            return
-        try:
-            await ensure_service_publishable(session=session, service_id=service.id)
-        except ServiceUnavailableError as exc:
-            raise InvalidStateError(f"service is {exc.state.value}") from exc
-        return
-    raise InvalidStateError("service is not mutable outside draft")
+    try:
+        await ensure_service_publishable(session=session, service_id=service.id)
+    except ServiceUnavailableError as exc:
+        raise InvalidStateError(f"service is {exc.state.value}") from exc
 
 
 def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
@@ -265,7 +310,14 @@ def build_price_version(*, settings: Settings, amount: int) -> ListingPrice:
     )
 
 
-def is_on_current_terms(price: ListingPrice, *, settings: Settings) -> bool:
+class PriceTerms(Protocol):
+    """What `is_on_current_terms` reads, from a stored `ListingPrice` or a loaded listing."""
+
+    asset: str
+    network: str
+
+
+def is_on_current_terms(price: PriceTerms, *, settings: Settings) -> bool:
     """Whether `price` is in the asset and on the network that payments use now."""
     return price.asset == settings.payment_asset and price.network == settings.payment_network
 

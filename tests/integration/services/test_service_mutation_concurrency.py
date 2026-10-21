@@ -17,6 +17,7 @@ from tests.fixtures.domain import (
 )
 from tests.fixtures.settings import TEST_PRICE_TERMS, build_service_settings
 from tests.helpers.dns import TEST_UPSTREAM_BASE_URL, FakeResolver
+from tests.helpers.request_validation import INLINE_REQUEST_VALIDATION_POOL
 
 from app.core.enums import AccessMode, ServiceLifecycle
 from app.core.errors import ConflictError, InvalidStateError
@@ -153,6 +154,7 @@ async def test_concurrent_active_endpoint_updates_create_distinct_revisions(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=INLINE_REQUEST_VALIDATION_POOL,
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=timeout_seconds),
@@ -362,6 +364,7 @@ async def test_publish_holds_its_lock_until_the_single_commit(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=INLINE_REQUEST_VALIDATION_POOL,
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(timeout_seconds=20),
@@ -533,6 +536,7 @@ async def test_concurrent_price_edits_create_consecutive_versions(
             await update_endpoint(
                 session=session,
                 settings=build_service_settings(),
+                validation_pool=INLINE_REQUEST_VALIDATION_POOL,
                 account_id=provider_account_id,
                 endpoint_id=endpoint_id,
                 changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=amount)),
@@ -592,6 +596,7 @@ async def test_price_version_race_without_the_service_lock_is_a_conflict(
                 await update_endpoint(
                     session=session,
                     settings=build_service_settings(),
+                    validation_pool=INLINE_REQUEST_VALIDATION_POOL,
                     account_id=provider_account_id,
                     endpoint_id=endpoint_id,
                     changes=EndpointUpdateRequest(price=ListingPriceRequest(amount=20_000)),

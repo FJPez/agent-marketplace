@@ -119,7 +119,11 @@ database created before then cannot be upgraded. The migration that replaces the
 USD-cent `endpoint_prices` with `listing_prices` refuses to run while
 `endpoint_prices` still holds rows (for example from an earlier `make seed`),
 because a cent price has no asset, network or treasury to become a price version.
-In either case, drop and recreate the database:
+The migration that starts checking request schemas refuses to run while an
+endpoint stores a request schema the invoke path cannot compile. The migration
+that retires the `suspended` and `delisted` service lifecycle values (moderation
+actions record those states) refuses to run while a service still holds one. In
+any of these cases, drop and recreate the database:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -c "DROP DATABASE IF EXISTS agent_marketplace WITH (FORCE)"
@@ -128,8 +132,9 @@ uv run alembic upgrade head
 ```
 
 To reload the demo data, set `APP_TREASURY_ADDRESS` (where paid demo calls are
-paid to, in `.env` or the environment) and export `PROVIDER_PRIVATE_KEY` (the
-demo provider's wallet key), then run `make seed` again.
+paid to, in `.env` or the environment), export `PROVIDER_PRIVATE_KEY` (the
+demo provider's wallet key), then run `make seed` again. Each run issues the demo
+provider a fresh signing secret and prints it, for local manual testing only.
 
 ## Admin Bootstrap
 
@@ -161,6 +166,46 @@ APP_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/agent_mar
   only to public IPv4 addresses and carries the provider's TXT record at
   `_agent-marketplace.<host>`, with the value `GET /v1/provider/domain-verification`
   returns.
+- An endpoint's `request_schema` is checked when it is saved. It must be a JSON
+  Schema of draft 2020-12 throughout (a `$schema`, in any subschema, must name that
+  draft), nest at most 32 levels, take at most 32768 bytes as compact JSON, and hold
+  only valid Unicode and finite numbers. `$id` may appear only at the root, an anchor
+  may be declared only once, and every `$ref` and `$dynamicRef` must be a `#` fragment
+  naming a subschema of the same schema: the marketplace never fetches a remote
+  schema. A schema has at most 64 patterns, each compiled by a linear-time engine
+  within 10 KiB: a pattern that can apply to a request body must avoid lookaround and
+  backreferences and compile no larger, so `\p{L}+` or `[A-Za-z0-9+/]{0,256}` are
+  refused. `format` is an annotation only, as the draft specifies by default. Once the
+  caller is known to own the service or endpoint, the schema is compiled in a request
+  validation worker (below), because compiling some patterns takes time quadratic in
+  their length. It must compile within `APP_REQUEST_SCHEMA_COMPILE_TIMEOUT_MS` (default
+  100, at most half of `APP_REQUEST_VALIDATION_TIMEOUT_MS`), or it is refused with 422
+  as too expensive to compile, so a worker that must compile a stored schema afresh
+  still has at least half the validation deadline for the body. Saves never hold every
+  worker: at most `APP_REQUEST_VALIDATION_WORKERS` minus one compiles run at once (one,
+  with a single worker). A save can get 503 with `Retry-After: 1` when no worker is
+  free, when workers cannot start, or while the API is shutting down.
+- A request body is validated against its endpoint's `request_schema` in a worker
+  process, because the validator (jsonschema-rs) holds the Python GIL and what a
+  schema costs on a body is not known in advance. `APP_REQUEST_VALIDATION_WORKERS`
+  (default 2, at most 32) workers start on the first compile or validation, each a
+  fresh interpreter with an empty environment. The body is validated as the exact bytes
+  the provider receives: it must be at most 1 MiB of UTF-8 JSON without a byte order
+  mark, with no object holding a key twice, with finite numbers (not `NaN`, `Infinity`
+  or `1e400`), nested at most 128 levels. A refused body names its first error and
+  where it is, each cut to 200 characters. A validation must finish within
+  `APP_REQUEST_VALIDATION_TIMEOUT_MS` (default 250, at most 10000); otherwise its
+  worker is killed and the body is refused with 422 and the problem type
+  `request_validation_timeout`. A body that makes its worker exit (a stack overflow,
+  say) is refused with 422 and `request_validation_failed`. A body waits at most the
+  same deadline for a free worker, then gets 503 with `Retry-After: 1`; 503 also means
+  workers cannot start, or the API is shutting down, and, with the problem type
+  `listing_unavailable` and `Retry-After: 60`, that the endpoint's stored schema no
+  longer compiles. Each worker keeps its 256 most recently used compiled schemas and
+  starts at about 25 MiB; once it passes 384 MiB it exits after answering, and the next
+  call starts a fresh one. On Linux a worker can never pass 512 MiB of address space
+  (macOS does not enforce that limit), so each API process needs room for
+  `APP_REQUEST_VALIDATION_WORKERS` times 512 MiB.
 - Each new price version records its asset, `APP_PAYMENT_ASSET` (default Base
   Sepolia USDC, `0x036CbD53842c5426634e7929541eC2318f3dCF7e`), its network,
   `APP_PAYMENT_NETWORK` (default `eip155:84532`, Base Sepolia), and the platform
