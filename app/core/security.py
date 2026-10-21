@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -10,12 +11,16 @@ from typing import TYPE_CHECKING
 import jwt
 from eth_account import Account
 from eth_account.messages import encode_defunct
+from eth_keys.constants import SECPK1_N
 from jwt import InvalidTokenError
 
-from app.core.evm import normalize_wallet_address
+from app.core.evm import checksum_address
 
 if TYPE_CHECKING:
     from app.core.config import Settings
+
+# A 65-byte secp256k1 signature (r, s, v) in hex, as eth_signTypedData_v4 returns it.
+EVM_SIGNATURE_PATTERN = r"^0x[0-9a-fA-F]{130}$"
 
 
 class AuthTokenType(StrEnum):
@@ -47,6 +52,27 @@ class ApiKeyMaterial:
     plaintext: str
     key_prefix: str
     key_hash: str
+
+
+def canonical_signature(value: str) -> str:
+    """Return a 65-byte secp256k1 signature in its one canonical form.
+
+    The value must match `EVM_SIGNATURE_PATTERN` and have a low s, at most half the
+    curve order: its high-s twin, with v flipped, recovers the same signer. v must be
+    27 or 28, or 0 or 1 as some hardware wallets return it, which becomes 27 or 28; a
+    larger (EIP-155 style) v would imply a chain id. The result is lowercase hex, so
+    one signature has one stored form.
+    """
+    if not re.fullmatch(EVM_SIGNATURE_PATTERN, value):
+        msg = "signature is not valid"
+        raise ValueError(msg)
+    raw = bytes.fromhex(value.removeprefix("0x"))
+    s = int.from_bytes(raw[32:64])
+    v = raw[64] + 27 if raw[64] in (0, 1) else raw[64]
+    if s > SECPK1_N // 2 or v not in (27, 28):
+        msg = "signature is not valid"
+        raise ValueError(msg)
+    return "0x" + (raw[:64] + bytes([v])).hex()
 
 
 def create_jwt(
@@ -128,7 +154,7 @@ def parse_siwe_message(message: str) -> ParsedSiweMessage:
         raise ValueError(msg)
 
     domain = first_line[: -len(suffix)]
-    address = normalize_wallet_address(lines[1].strip())
+    address = checksum_address(lines[1].strip())
     fields: dict[str, str] = {}
     for line in lines[3:]:
         if not line:
@@ -186,7 +212,7 @@ def verify_siwe_signature(
         msg = "signature is not valid"
         raise ValueError(msg) from exc
 
-    if normalize_wallet_address(recovered_address) != parsed.address:
+    if checksum_address(recovered_address) != parsed.address:
         msg = "signature is not valid"
         raise ValueError(msg)
 
