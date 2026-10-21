@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 import pytest
@@ -9,11 +10,16 @@ from app.core.config import get_settings
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Mapping
-    from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TEST_ENV_FILE = ".env.test"
 TEST_JWT_SECRET_KEY = "test-secret-key-with-32-bytes-123"
 TEST_SIWE_DOMAIN = "testserver"
+# coredis rejects this URL as soon as a client is built from it (the port is out of range).
+MALFORMED_REDIS_URL = "redis://localhost:99999/0"
+# Nothing listens on port 1, so connecting fails at once.
+UNREACHABLE_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@127.0.0.1:1/agent_marketplace"
+UNREACHABLE_REDIS_URL = "redis://127.0.0.1:1/0"
 
 
 class SettingsEnvFactory(Protocol):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 
 from asyncpg import LockNotAvailableError, QueryCanceledError
@@ -13,10 +14,9 @@ from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException
 
 from app.core.errors import ApplicationError
-from app.core.logging import ERROR_CODE_FIELD, get_logger
 from app.core.problems import ProblemResponse
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 async def handle_application_error(request: Request, exc: ApplicationError) -> Response:
@@ -62,7 +62,7 @@ async def handle_database_error(request: Request, exc: DBAPIError) -> Response:
     if not isinstance(driver_error, QueryCanceledError | LockNotAvailableError):
         # Not a statement or lock timeout, so it is left to the catch-all 500.
         raise exc
-    logger.warning("database timeout", extra={ERROR_CODE_FIELD: driver_error.sqlstate})
+    logger.warning("database timeout", extra={"error_code": driver_error.sqlstate})
     return ProblemResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         problem_type="unavailable",

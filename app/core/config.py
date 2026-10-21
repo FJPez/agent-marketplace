@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, model_validator
@@ -56,6 +57,7 @@ class Settings(BaseSettings):
     db_application_name: str = "agent-marketplace-api"
     redis_url: str | None = None
     api_rate_limit: str = "120/minute"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     demo_upstream_base_url: str = "https://provider.example.com"
     demo_free_upstream_path: str = "/demo/free-ping"
     demo_paid_upstream_path: str = "/demo/paid-summary"

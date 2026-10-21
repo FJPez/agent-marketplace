@@ -1,31 +1,35 @@
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.config import AppEnv, Settings
-from app.core.lifespan import AppState, create_lifespan, get_app_state
+from app.core.rate_limits_backend import MemoryRateLimitsBackend, RedisRateLimitsBackend
+from app.core.resources import Resources
 from app.main import create_app
 
 
-def test_create_app_starts_with_lifespan_state() -> None:
+def _resources(client: TestClient) -> Resources:
+    # The lifespan state the client copies into each request it sends.
+    resources = client.app_state["resources"]
+    assert isinstance(resources, Resources)
+    return resources
+
+
+def test_create_app_opens_resources_for_its_lifespan() -> None:
     app = create_app()
 
-    with TestClient(app):
+    with TestClient(app) as client:
         assert app.title == "Agent Marketplace Backend"
         assert app.debug is False
-        state = get_app_state(app)
+        resources = _resources(client)
 
-        assert state.settings.env is AppEnv.DEV
-        assert state.settings.title == "Agent Marketplace Backend"
-        assert state.settings.debug is False
-        assert state.db_engine is not None
-        assert state.db_session_factory is not None
-        assert state.redis_client is None
-        assert state.rate_limits_backend is not None
-
-    assert not hasattr(app.state, "app_state")
+        assert resources.settings.env is AppEnv.DEV
+        assert resources.settings.title == "Agent Marketplace Backend"
+        assert resources.settings.debug is False
+        assert resources.db_session_factory().bind is resources.db_engine
+        assert resources.redis_client is None
+        assert isinstance(resources.rate_limits_backend, MemoryRateLimitsBackend)
 
 
 @pytest.mark.parametrize(
@@ -48,21 +52,6 @@ def test_retired_execution_routes_are_not_served(method: str, path: str) -> None
     assert response.status_code == 404
 
 
-def test_create_lifespan_cleans_up_state_on_startup_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def fail_init(state: AppState) -> None:
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr("app.core.lifespan._init_app_state", fail_init, raising=False)
-    app = FastAPI(lifespan=create_lifespan(Settings()))
-
-    with pytest.raises(RuntimeError, match="boom"), TestClient(app):
-        pass
-
-    assert not hasattr(app.state, "app_state")
-
-
 def test_create_app_applies_runtime_resource_settings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -80,11 +69,8 @@ def test_create_app_applies_runtime_resource_settings(
     )
     app = create_app()
 
-    with TestClient(app):
-        state = get_app_state(app)
-        assert state.db_engine is not None
-
-        pool = state.db_engine.sync_engine.pool
+    with TestClient(app) as client:
+        pool = _resources(client).db_engine.sync_engine.pool
         pool_size = getattr(pool, "size", None)
         assert callable(pool_size)
         assert pool_size() == 7
@@ -93,7 +79,7 @@ def test_create_app_applies_runtime_resource_settings(
         assert getattr(pool, "_recycle", None) == 333
 
 
-def test_create_app_initializes_redis_client_and_rate_limit_backend_when_configured(
+def test_create_app_opens_redis_client_and_rate_limit_backend_when_configured(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -107,25 +93,7 @@ def test_create_app_initializes_redis_client_and_rate_limit_backend_when_configu
     )
     app = create_app()
 
-    with TestClient(app):
-        state = get_app_state(app)
-        assert state.redis_client is not None
-        assert state.rate_limits_backend is not None
-
-
-def test_health_ready_returns_service_unavailable_without_db_session_factory() -> None:
-    app = create_app()
-
     with TestClient(app) as client:
-        state = get_app_state(app)
-        state.db_session_factory = None
-
-        response = client.get("/health/ready")
-
-    assert response.status_code == 503
-    assert response.headers["content-type"] == "application/problem+json"
-    assert response.json() == {
-        "type": "/problems/unavailable",
-        "status": 503,
-        "detail": "database unavailable",
-    }
+        resources = _resources(client)
+        assert resources.redis_client is not None
+        assert isinstance(resources.rate_limits_backend, RedisRateLimitsBackend)
