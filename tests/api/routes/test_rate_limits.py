@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 
 from app.core.config import get_settings
 from app.main import create_app
@@ -13,8 +13,6 @@ async def rate_limited_client(
     clean_database: None,
 ) -> AsyncIterator[AsyncClient]:
     monkeypatch.setenv("APP_API_RATE_LIMIT", "1/minute")
-    monkeypatch.setenv("APP_INVOKE_RATE_LIMIT", "10/minute")
-    monkeypatch.setenv("APP_QUOTE_RATE_LIMIT", "10/minute")
     get_settings.cache_clear()
 
     app = create_app()

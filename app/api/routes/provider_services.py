@@ -46,9 +46,7 @@ async def create_provider_service(
                         "slug": "demo-agent-service",
                         "name": "Demo Agent Service",
                         "summary": "A provider-owned service for demo purposes.",
-                        "description": (
-                            "Used for discovery, quote, free invoke, and paid invoke walkthroughs."
-                        ),
+                        "description": "Used for discovery walkthroughs.",
                     },
                 }
             }

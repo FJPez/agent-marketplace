@@ -5,7 +5,7 @@ import pytest
 from starlette.requests import Request
 
 from app.core.config import Settings
-from app.core.rate_limits_backend import build_actor_rate_limit_key, build_client_rate_limit_key
+from app.core.rate_limits_backend import build_client_rate_limit_key
 
 
 def _build_request(
@@ -31,19 +31,6 @@ def test_build_client_rate_limit_key_uses_client_host() -> None:
     request = _build_request(client_host="10.0.0.1")
 
     assert build_client_rate_limit_key(request) == "client:10.0.0.1"
-
-
-def test_build_actor_rate_limit_key_prefers_cached_owner_key() -> None:
-    request = _build_request()
-    request.state.rate_limit_owner_key = "account:42"
-
-    assert build_actor_rate_limit_key(request) == "account:42"
-
-
-def test_build_actor_rate_limit_key_falls_back_to_client_key_without_cached_owner() -> None:
-    request = _build_request(authorization="Bearer amp_example")
-
-    assert build_actor_rate_limit_key(request) == "client:127.0.0.1"
 
 
 @pytest.mark.asyncio
