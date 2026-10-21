@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from tests.fixtures.logs import LoggedEntries
 from tests.fixtures.settings import SettingsEnvFactory
 
+from app.api.deps.rate_limit import get_rate_limits_backend
 from app.core.logging import configure_logging
 from app.core.request_id import REQUEST_ID_HEADER
 from app.main import create_app
@@ -104,10 +105,10 @@ def test_rate_limited_request_carries_request_id_and_is_logged(
     app = create_app()
 
     with TestClient(app) as client:
-        # The global rate limit applies to any /v1 path before routing, so an unknown
-        # route still exhausts it without touching the database.
-        client.get("/v1/unknown-route")
-        response = client.get("/v1/unknown-route", headers={REQUEST_ID_HEADER: "request-429"})
+        # Without its query parameter the first request is counted, then refused as
+        # invalid before it touches the database.
+        client.get("/v1/auth/nonce")
+        response = client.get("/v1/auth/nonce", headers={REQUEST_ID_HEADER: "request-429"})
 
     assert response.status_code == 429
     assert response.headers["content-type"] == "application/problem+json"
@@ -116,7 +117,7 @@ def test_rate_limited_request_carries_request_id_and_is_logged(
     (entry,) = [entry for entry in logged_entries() if entry.get("request_id") == "request-429"]
     assert {
         "message": "request completed",
-        "path": "/v1/unknown-route",
+        "path": "/v1/auth/nonce",
         "status_code": 429,
     }.items() <= entry.items()
 
@@ -128,14 +129,10 @@ class _UnavailableRateLimitsBackend:
 
 
 def test_rate_limit_store_outage_renders_internal_error_problem(
-    monkeypatch: pytest.MonkeyPatch,
     logged_entries: LoggedEntries,
 ) -> None:
-    monkeypatch.setattr(
-        "app.core.resources.create_rate_limits_backend",
-        lambda settings: _UnavailableRateLimitsBackend(),
-    )
     app = create_app()
+    app.dependency_overrides[get_rate_limits_backend] = _UnavailableRateLimitsBackend
 
     with TestClient(app) as client:
         response = client.get("/v1/services", headers={REQUEST_ID_HEADER: "request-500"})

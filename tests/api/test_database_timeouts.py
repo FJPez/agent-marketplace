@@ -1,15 +1,18 @@
 import logging
 
 import pytest
+from asgi_lifespan import LifespanManager
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from httpx2 import AsyncClient
+from httpx2 import ASGITransport, AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from tests.helpers.auth import create_account
+from tests.helpers.auth import api_key_headers_for_account, create_account
 
 from app.api.deps.database import SessionDep
-from app.db.models import Account
+from app.core.config import get_settings
+from app.db.models import Account, ApiKey
+from app.main import create_app
 
 UNAVAILABLE_PROBLEM = {
     "type": "/problems/unavailable",
@@ -57,6 +60,35 @@ async def test_a_lock_timeout_answers_503_with_retry_after(
         await lock_holder.execute(lock_account)
         response = await async_client.get("/probe/locked-row")
 
+    assert response.status_code == 503
+    assert response.headers["retry-after"] == "1"
+    assert response.json() == UNAVAILABLE_PROBLEM
+
+
+async def test_a_lock_timeout_while_authenticating_answers_503(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_database: None,
+    db_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    monkeypatch.setenv("APP_DB_LOCK_TIMEOUT_MS", "50")
+    get_settings.cache_clear()
+    account_id = await create_account(db_session_factory)
+    headers = await api_key_headers_for_account(db_session_factory, account_id=account_id)
+    lock_api_key = select(ApiKey.id).where(ApiKey.account_id == account_id).with_for_update()
+    app = create_app()
+
+    async with (
+        LifespanManager(app) as manager,
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://testserver"
+        ) as client,
+        db_session_factory() as lock_holder,
+    ):
+        # Recording the key's first use needs this row, so authentication waits on the lock.
+        await lock_holder.execute(lock_api_key)
+        response = await client.get("/v1/provider/services", headers=headers)
+
+    get_settings.cache_clear()
     assert response.status_code == 503
     assert response.headers["retry-after"] == "1"
     assert response.json() == UNAVAILABLE_PROBLEM
