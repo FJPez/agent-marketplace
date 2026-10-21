@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from app.core.config import get_settings
 from app.core.security import AuthTokenType, create_jwt
 from app.db.models import Account
+from app.services.api_keys import create_api_key
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -54,6 +55,22 @@ async def auth_headers_for_account(
         expires_in_seconds=get_settings().jwt_access_token_expiry,
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+async def api_key_headers_for_account(
+    db_session_factory: async_sessionmaker[AsyncSession],
+    *,
+    account_id: int,
+) -> dict[str, str]:
+    async with db_session_factory() as session:
+        _, plaintext = await create_api_key(
+            session=session,
+            settings=get_settings(),
+            account_id=account_id,
+            name=None,
+            expires_at=None,
+        )
+    return {"Authorization": f"Bearer {plaintext}"}
 
 
 def auth_headers_for_account_id(
